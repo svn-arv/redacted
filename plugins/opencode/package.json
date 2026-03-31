@@ -1,0 +1,20 @@
+{
+  "name": "opencode-redacted",
+  "version": "1.2.1",
+  "description": "OpenCode plugin that redacts secrets from bash tool output",
+  "main": "index.ts",
+  "dependencies": {
+    "yaml": "^2.8.3"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "files": [
+    "index.ts",
+    "patterns.ts",
+    "scrub.ts",
+    "config.ts",
+    "../../internal/patterns/patterns.yaml"
+  ],
+  "license": "MIT"
+}

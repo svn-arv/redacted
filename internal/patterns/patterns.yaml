@@ -1,0 +1,93 @@
+# patterns.yaml — single source of truth for secret detection.
+# Consumed by Go (embedded at compile time) and TypeScript (read at runtime).
+#
+# Order matters: specific patterns run first, catch-alls last.
+# If a specific pattern redacts a value, the catch-all won't re-match it.
+
+# Keywords used to build the env_secret and yaml_secret catch-all patterns.
+# Any env variable whose name contains one of these words gets its value redacted.
+keywords:
+  - SECRET
+  - TOKEN
+  - PASSWORD
+  - API_KEY
+  - APIKEY
+  - CREDENTIAL
+  - PRIVATE_KEY
+  - ACCESS_KEY
+  - ENCRYPTION_KEY
+  - SIGNING_KEY
+  - LICENSE_KEY
+  - CLIENT_ID
+  - DB_PASS
+  - DB_URL
+  - DATABASE_URL
+  - REDIS_URL
+  - _DSN
+  - _SID
+  - ACCOUNT_ID
+  - AUTH_KEY
+  - MASTER_KEY
+  - SERVICE_KEY
+
+patterns:
+  # === Specific patterns (value only) ===
+
+  - name: aws_access_key
+    regex: 'AKIA[0-9A-Z]{16}'
+
+  - name: aws_secret_key
+    regex: '(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[=:]\s*[A-Za-z0-9/+=]{40}'
+    includes_key: true
+
+  - name: github_fine_grained
+    regex: 'github_pat_[A-Za-z0-9_]{22,}'
+
+  - name: github_token
+    regex: 'gh[ps]_[A-Za-z0-9_]{36,}'
+
+  - name: github_oauth
+    regex: 'gho_[A-Za-z0-9_]{36,}'
+
+  - name: github_refresh
+    regex: 'ghr_[A-Za-z0-9_]{36,}'
+
+  - name: stripe_live
+    regex: '[srp]k_live_[A-Za-z0-9]{24,}'
+
+  - name: stripe_test
+    regex: '[srp]k_test_[A-Za-z0-9]{24,}'
+
+  - name: twilio_api_key
+    regex: '\bSK[0-9a-fA-F]{32}\b'
+
+  - name: twilio_account_sid
+    regex: '\bAC[0-9a-fA-F]{32}\b'
+
+  - name: digitalocean_token
+    regex: 'dop_v1_[a-f0-9]{64}'
+
+  - name: digitalocean_spaces
+    regex: '(?i)SPACES_(ACCESS_KEY|SECRET_KEY)\s*[=:]\s*\S{8,}'
+    includes_key: true
+
+  - name: sentry_dsn
+    regex: 'https://[a-f0-9]{32}@[a-z0-9.\-]+\.ingest\.[a-z.]*sentry\.io/[0-9]+'
+
+  - name: slack_token
+    regex: 'xox[bpars]-[A-Za-z0-9\-]{10,}'
+
+  - name: sendgrid_key
+    regex: 'SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}'
+
+  - name: hubspot_key
+    regex: '(?i)pat-[a-z0-9]{2,3}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+  - name: private_key
+    regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+
+  - name: jwt
+    regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+
+  - name: database_url
+    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`]+'
