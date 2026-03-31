@@ -34,6 +34,7 @@ Built-in detection for:
   and any env variable containing SECRET, TOKEN, PASSWORD, etc.`,
 	Example: `  redacted init               Install the hook (this project)
   redacted init --global      Install the hook (all projects)
+  redacted verify             Check installation health
   redacted scrub              Run manually (reads stdin, used by the hook)`,
 }
 
