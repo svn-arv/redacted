@@ -1,0 +1,60 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - main: .
+    binary: redacted
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/svn-arv/redacted/cmd.Version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "redacted_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: svn-arv
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/svn-arv/redacted"
+    description: "Hook that redacts secrets from Bash tool output"
+    license: "MIT"
+    install: |
+      bin.install "redacted"
+    test: |
+      system "#{bin}/redacted", "--help"
+
+release:
+  github:
+    owner: svn-arv
+    name: redacted
+  replace_existing_artifacts: true

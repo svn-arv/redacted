@@ -1,0 +1,34 @@
+# Binary
+redacted
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+coverage.*
+*.coverprofile
+go.work
+go.work.sum
+
+# GoReleaser
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
