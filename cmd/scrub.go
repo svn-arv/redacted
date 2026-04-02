@@ -17,7 +17,10 @@ var scrubCmd = &cobra.Command{
 	Use:   "scrub",
 	Short: "Scrub secrets from a hook payload (stdin -> stdout)",
 	Long: `Reads a Claude Code PostToolUse hook JSON payload from stdin, scans the
-Bash tool output for secrets, and writes a response to stdout.
+tool output for secrets, and writes a response to stdout.
+
+Supports all Claude Code tools: Bash (structured stdout/stderr handling),
+and internal tools like Read, Grep, WebFetch (raw response scrubbing).
 
 If secrets are found:
   Outputs a JSON response with decision "block" and the redacted output
@@ -31,13 +34,15 @@ Configuration is loaded from:
   ~/.config/redacted/config.yaml   (global)
   <project>/.redacted.yaml         (project, merged with global)
 
-This command is called automatically by the Claude Code hook. You don't
-normally need to run it by hand.`,
+Set ignore_internal_tools: true in config to only scrub Bash output.`,
 	Example: `  # Pipe a hook payload manually
   cat testdata/hook_payload.json | redacted scrub
 
-  # Test with inline JSON
-  echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=hunter2"}}' | redacted scrub`,
+  # Test with inline JSON (Bash)
+  echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=super_secret_password"}}' | redacted scrub
+
+  # Test with inline JSON (Read)
+  echo '{"tool_name":"Read","tool_response":"SECRET_KEY=super_secret_value"}' | redacted scrub`,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := io.ReadAll(os.Stdin)
@@ -45,7 +50,17 @@ normally need to run it by hand.`,
 			return fmt.Errorf("scrub: read stdin: %w", err)
 		}
 
-		scrubber := buildScrubber(extractCwd(data))
+		cwd := extractCwd(data)
+		cfg, _ := config.Load(cwd)
+
+		// If config says ignore internal tools, only scrub Bash
+		if cfg != nil && cfg.IgnoreInternalTools {
+			if extractToolName(data) != "Bash" {
+				return nil
+			}
+		}
+
+		scrubber := buildScrubberFromConfig(cfg)
 
 		if err := hook.Process(bytes.NewReader(data), os.Stdout, scrubber); err != nil {
 			return fmt.Errorf("scrub: %w", err)
@@ -58,11 +73,10 @@ func init() {
 	rootCmd.AddCommand(scrubCmd)
 }
 
-// buildScrubber loads config and creates a configured Scrubber.
-// Returns nil if no config found (hook.Process falls back to default).
-func buildScrubber(cwd string) *patterns.Scrubber {
-	cfg, err := config.Load(cwd)
-	if err != nil || cfg.IsEmpty() {
+// buildScrubberFromConfig creates a configured Scrubber from loaded config.
+// Returns nil if no customization needed (hook.Process falls back to default).
+func buildScrubberFromConfig(cfg *config.Config) *patterns.Scrubber {
+	if cfg == nil || cfg.IsEmpty() {
 		return nil
 	}
 
@@ -93,4 +107,12 @@ func extractCwd(data []byte) string {
 	}
 	json.Unmarshal(data, &partial)
 	return partial.Cwd
+}
+
+func extractToolName(data []byte) string {
+	var partial struct {
+		ToolName string `json:"tool_name"`
+	}
+	json.Unmarshal(data, &partial)
+	return partial.ToolName
 }

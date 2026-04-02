@@ -40,8 +40,8 @@ func TestInstallHook_CreatesNewFile(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 PostToolUse entry, got %d", len(entries))
 	}
-	if entries[0].Matcher != "Bash" {
-		t.Errorf("expected matcher=Bash, got %q", entries[0].Matcher)
+	if entries[0].Matcher != "" {
+		t.Errorf("expected no matcher (all tools), got %q", entries[0].Matcher)
 	}
 	if len(entries[0].Hooks) != 1 {
 		t.Fatalf("expected 1 hook, got %d", len(entries[0].Hooks))

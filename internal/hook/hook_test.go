@@ -153,32 +153,92 @@ func TestProcess_BothStdoutAndStderrSecrets(t *testing.T) {
 	}
 }
 
-func TestProcess_IgnoresNonBash(t *testing.T) {
-	tools := []string{"Read", "Write", "Edit", "Glob", "Grep", "Agent"}
+func TestProcess_ScrubsNonBashTools(t *testing.T) {
+	tools := []string{"Read", "Grep", "WebFetch"}
 
 	for _, tool := range tools {
 		t.Run(tool, func(t *testing.T) {
 			stripe := testutil.StripeKey("sk_live_")
-			input := Input{
-				HookEventName: "PostToolUse",
-				ToolName:      tool,
-				ToolResponse: ToolResponse{
-					Stdout: "SECRET_KEY=" + stripe.Value,
-				},
-			}
+			// Non-Bash tools have a generic tool_response (JSON string)
+			resp, _ := json.Marshal("SECRET_KEY=" + stripe.Value)
+			payload, _ := json.Marshal(map[string]any{
+				"hook_event_name": "PostToolUse",
+				"tool_name":      tool,
+				"tool_response":  json.RawMessage(resp),
+			})
 
-			payload, _ := json.Marshal(input)
 			var out bytes.Buffer
-
 			err := Process(bytes.NewReader(payload), &out, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if out.Len() != 0 {
-				t.Errorf("expected pass-through for %s tool, got: %s", tool, out.String())
+			if out.Len() == 0 {
+				t.Fatalf("expected redacted response for %s tool, got empty output", tool)
+			}
+
+			var response Output
+			json.Unmarshal(out.Bytes(), &response)
+
+			if response.Decision != "block" {
+				t.Errorf("expected decision=block, got %q", response.Decision)
+			}
+			if !strings.Contains(response.Reason, "[REDACTED:") {
+				t.Errorf("expected redaction markers in reason, got: %s", response.Reason)
+			}
+			if strings.Contains(response.Reason, stripe.Value) {
+				t.Error("secret leaked through redaction")
 			}
 		})
+	}
+}
+
+func TestProcess_NonBashCleanOutput(t *testing.T) {
+	resp, _ := json.Marshal("just normal file content, nothing secret here")
+	payload, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"tool_name":      "Read",
+		"tool_response":  json.RawMessage(resp),
+	})
+
+	var out bytes.Buffer
+	err := Process(bytes.NewReader(payload), &out, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if out.Len() != 0 {
+		t.Errorf("expected pass-through for clean Read output, got: %s", out.String())
+	}
+}
+
+func TestProcess_NonBashObjectResponse(t *testing.T) {
+	// Some tools return JSON objects, not strings
+	stripe := testutil.StripeKey("sk_live_")
+	resp, _ := json.Marshal(map[string]string{
+		"content": "KEY=" + stripe.Value,
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PostToolUse",
+		"tool_name":      "WebFetch",
+		"tool_response":  json.RawMessage(resp),
+	})
+
+	var out bytes.Buffer
+	err := Process(bytes.NewReader(payload), &out, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if out.Len() == 0 {
+		t.Fatal("expected redacted response for object with secret")
+	}
+
+	var response Output
+	json.Unmarshal(out.Bytes(), &response)
+
+	if strings.Contains(response.Reason, stripe.Value) {
+		t.Error("secret leaked through redaction")
 	}
 }
 

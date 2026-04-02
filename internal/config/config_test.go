@@ -7,6 +7,9 @@ import (
 )
 
 func TestLoad_NoFiles(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
 	cfg, err := Load("/nonexistent/path")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

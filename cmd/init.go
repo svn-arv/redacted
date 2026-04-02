@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagGlobal bool
+var flagLocal bool
 
 // HookCommand is a single hook action in Claude Code settings.
 type HookCommand struct {
@@ -21,7 +21,7 @@ type HookCommand struct {
 
 // HookEntry is a PostToolUse hook entry in Claude Code settings.
 type HookEntry struct {
-	Matcher string        `json:"matcher"`
+	Matcher string        `json:"matcher,omitempty"`
 	Hooks   []HookCommand `json:"hooks"`
 }
 
@@ -30,30 +30,33 @@ var initCmd = &cobra.Command{
 	Short: "Install redacted as a hook",
 	Long: `Registers redacted as a PostToolUse hook in your settings.
 
-By default, installs to .claude/settings.local.json (this project only).
-Use --global to install to ~/.claude/settings.json (all projects).
+By default, installs to ~/.claude/settings.json (all projects).
+Use --local to install to .claude/settings.local.json (this project only).
 
-After running this command, every Bash tool invocation will have its output
+After running this command, every tool invocation will have its output
 piped through "redacted scrub" before your AI assistant sees it.
+
+To only scrub Bash output (legacy behavior), set ignore_internal_tools: true
+in your config file (~/.config/redacted/config.yaml or .redacted.yaml).
 
 Safe to run multiple times. Existing redacted entries are replaced, and
 other hooks are left untouched.`,
-	Example: `  # Install for this project (default)
+	Example: `  # Install globally (default)
   redacted init
 
-  # Install globally (all projects)
-  redacted init --global
+  # Install for this project only
+  redacted init --local
 
   # Verify
   cat ~/.claude/settings.json | jq '.hooks.PostToolUse'`,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return installHook(flagGlobal)
+		return installHook(!flagLocal)
 	},
 }
 
 func init() {
-	initCmd.Flags().BoolVar(&flagGlobal, "global", false, "install to ~/.claude/settings.json (all projects)")
+	initCmd.Flags().BoolVar(&flagLocal, "local", false, "install to .claude/settings.local.json (this project only)")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -76,9 +79,9 @@ func installHook(global bool) error {
 		return err
 	}
 
-	scope := "local"
-	if global {
-		scope = "global"
+	scope := "global"
+	if !global {
+		scope = "local"
 	}
 	fmt.Printf("Installed redacted hook (%s) in %s\n", scope, settingsPath)
 	fmt.Printf("Binary: %s scrub\n", binPath)
@@ -116,9 +119,8 @@ func installHookToPath(settingsPath, binPath string) error {
 		}
 	}
 
-	// Add new redacted entry
+	// Add new redacted entry (no matcher = scrub all tools)
 	filtered = append(filtered, HookEntry{
-		Matcher: "Bash",
 		Hooks: []HookCommand{
 			{Type: "command", Command: binPath + " scrub"},
 		},

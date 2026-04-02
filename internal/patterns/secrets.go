@@ -224,6 +224,11 @@ func builtins() []*pattern {
 		{"hubspot_key", `(?i)pat-[a-z0-9]{2,3}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, false},
 		{"private_key", `-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`, false},
 		{"jwt", `eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`, false},
+		{"anthropic_key", `sk-ant-[A-Za-z0-9_-]{20,}`, false},
+		{"circleci_token", `CCIPAT_[A-Za-z0-9]{20,}`, false},
+		{"sentry_user_token", `sntryu_[A-Za-z0-9]{20,}`, false},
+		{"rubygems_key", `rubygems_[A-Za-z0-9]{20,}`, false},
+		{"newrelic_key", `NRAK-[A-Za-z0-9]{20,}`, false},
 		{"database_url", `(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"'` + "`" + `]+`, false},
 
 		// === Generic catch-alls (run last) — include key name ===

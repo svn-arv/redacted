@@ -4,27 +4,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
 
 var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Remove redacted hooks from settings",
-	Long: `Removes redacted hook entries from Claude Code settings files.
+	Short: "Remove redacted hooks and binary",
+	Long: `Removes redacted hook entries from Claude Code settings files and
+deletes the redacted binary.
 
 By default removes from both global and local settings. Use --global
-or --local to target a specific one.
+or --local to target a specific scope.
 
-This only removes the hook registration. To also remove the binary:
-  rm $(which redacted)`,
-	Example: `  redacted uninstall            Remove from all settings
-  redacted uninstall --global   Remove from global only
-  redacted uninstall --local    Remove from local only`,
+Use --keep-binary to only remove hooks without deleting the binary.`,
+	Example: `  redacted uninstall                Remove hooks and binary
+  redacted uninstall --global       Remove global hooks and binary
+  redacted uninstall --keep-binary  Remove hooks only`,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		global, _ := cmd.Flags().GetBool("global")
 		local, _ := cmd.Flags().GetBool("local")
+		keepBinary, _ := cmd.Flags().GetBool("keep-binary")
 
 		if global && local {
 			return fmt.Errorf("cannot use --global and --local together")
@@ -56,6 +59,11 @@ This only removes the hook registration. To also remove the binary:
 		if removed == 0 {
 			fmt.Println("No redacted hooks found.")
 		}
+
+		if !keepBinary {
+			removeBinary()
+		}
+
 		return nil
 	},
 }
@@ -63,7 +71,42 @@ This only removes the hook registration. To also remove the binary:
 func init() {
 	uninstallCmd.Flags().Bool("global", false, "remove from ~/.claude/settings.json only")
 	uninstallCmd.Flags().Bool("local", false, "remove from .claude/settings.local.json only")
+	uninstallCmd.Flags().Bool("keep-binary", false, "only remove hooks, keep the binary installed")
 	rootCmd.AddCommand(uninstallCmd)
+}
+
+// removeBinary finds and deletes the redacted binary.
+// If the PATH entry is a symlink to a different location (e.g. Homebrew),
+// both the symlink and the resolved binary are removed.
+func removeBinary() {
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Could not determine binary path, remove manually")
+		return
+	}
+	exePath, _ = filepath.Abs(exePath)
+
+	// Also find the PATH entry — may be a symlink pointing elsewhere
+	var linkPath string
+	if looked, err := exec.LookPath("redacted"); err == nil {
+		looked, _ = filepath.Abs(looked)
+		if looked != exePath {
+			linkPath = looked
+		}
+	}
+
+	if linkPath != "" {
+		if err := os.Remove(linkPath); err == nil {
+			fmt.Printf("Removed %s\n", linkPath)
+		}
+	}
+
+	if err := os.Remove(exePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not remove %s: %v\n", exePath, err)
+		fmt.Fprintf(os.Stderr, "Remove manually: rm %s\n", exePath)
+		return
+	}
+	fmt.Printf("Removed %s\n", exePath)
 }
 
 // removeHookFromPath removes redacted entries from a settings file.

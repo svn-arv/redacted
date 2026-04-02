@@ -25,6 +25,11 @@ type Config struct {
 	// Matches are case-insensitive and check if the variable name
 	// appears in the matched text.
 	Allow []string `yaml:"allow"`
+
+	// IgnoreInternalTools, when true, skips scrubbing for Claude Code's
+	// internal tools (Read, Grep, WebFetch, etc.) and only scrubs Bash output.
+	// Default is false, meaning all tools are scrubbed.
+	IgnoreInternalTools bool `yaml:"ignore_internal_tools"`
 }
 
 // CustomPattern is a user-defined regex pattern.
@@ -103,4 +108,5 @@ func merge(dst, src *Config) {
 	dst.Patterns = append(dst.Patterns, src.Patterns...)
 	dst.Keywords = append(dst.Keywords, src.Keywords...)
 	dst.Allow = append(dst.Allow, src.Allow...)
+	dst.IgnoreInternalTools = dst.IgnoreInternalTools || src.IgnoreInternalTools
 }

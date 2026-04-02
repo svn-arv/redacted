@@ -192,6 +192,31 @@ func EnvSecretSpaced(key, value string) Secret {
 	return Secret{Value: v, Hint: hint(value)}
 }
 
+// AnthropicKey returns sk-ant- + 90 alphanumeric/dash chars.
+func AnthropicKey() Secret {
+	return secret("sk-ant-" + RandAlphaNum(90))
+}
+
+// CircleCIToken returns CCIPAT_ + 30 alphanumeric chars.
+func CircleCIToken() Secret {
+	return secret("CCIPAT_" + RandAlphaNum(30))
+}
+
+// SentryUserToken returns sntryu_ + 40 alphanumeric chars.
+func SentryUserToken() Secret {
+	return secret("sntryu_" + RandAlphaNum(40))
+}
+
+// RubyGemsKey returns rubygems_ + 30 alphanumeric chars.
+func RubyGemsKey() Secret {
+	return secret("rubygems_" + RandAlphaNum(30))
+}
+
+// NewRelicKey returns NRAK- + 27 alphanumeric chars.
+func NewRelicKey() Secret {
+	return secret("NRAK-" + RandAlphaNum(27))
+}
+
 // PrivateKey returns a fake PEM block.
 func PrivateKey(kind string) Secret {
 	body := RandAlphaNum(14)

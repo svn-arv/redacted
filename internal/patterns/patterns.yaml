@@ -89,5 +89,20 @@ patterns:
   - name: jwt
     regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
 
+  - name: anthropic_key
+    regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
+
+  - name: circleci_token
+    regex: 'CCIPAT_[A-Za-z0-9]{20,}'
+
+  - name: sentry_user_token
+    regex: 'sntryu_[A-Za-z0-9]{20,}'
+
+  - name: rubygems_key
+    regex: 'rubygems_[A-Za-z0-9]{20,}'
+
+  - name: newrelic_key
+    regex: 'NRAK-[A-Za-z0-9]{20,}'
+
   - name: database_url
     regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`]+'

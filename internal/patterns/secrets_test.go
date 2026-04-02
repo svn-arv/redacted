@@ -136,6 +136,21 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"jwt", jwt.Value, false, "[REDACTED:jwt", jwt.Hint},
 		{"jwt in header", "Authorization: Bearer " + jwt.Value, false, "[REDACTED:jwt", jwt.Hint},
 
+		// === Anthropic ===
+		{"anthropic key", testutil.AnthropicKey().Value, false, "[REDACTED:anthropic_key", ""},
+
+		// === CircleCI ===
+		{"circleci token", testutil.CircleCIToken().Value, false, "[REDACTED:circleci_token", ""},
+
+		// === Sentry user token ===
+		{"sentry user token", testutil.SentryUserToken().Value, false, "[REDACTED:sentry_user_token", ""},
+
+		// === RubyGems ===
+		{"rubygems key", testutil.RubyGemsKey().Value, false, "[REDACTED:rubygems_key", ""},
+
+		// === New Relic ===
+		{"newrelic key", testutil.NewRelicKey().Value, false, "[REDACTED:newrelic_key", ""},
+
 		// === Database URLs ===
 		{"postgres url", postgresURL.Value, false, "[REDACTED:database_url", postgresURL.Hint},
 		{"postgres with params", postgresParams.Value, false, "[REDACTED:database_url", postgresParams.Hint},
