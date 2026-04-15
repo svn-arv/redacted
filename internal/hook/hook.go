@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/svn-arv/redacted/internal/patterns"
@@ -97,7 +98,9 @@ func processBash(data []byte, scrub func(string) patterns.Result, w io.Writer) e
 	return writeBlock(w, total, "command", redactedOutput)
 }
 
-// processGeneric handles non-Bash tools by scrubbing the raw tool_response.
+// processGeneric scrubs non-Bash tool responses. Structured responses are
+// summarized to only the redacted lines so JSON keys and unrelated fields
+// do not leak into the block reason Claude reads as the replacement result.
 func processGeneric(data []byte, toolName string, scrub func(string) patterns.Result, w io.Writer) error {
 	var raw struct {
 		ToolResponse json.RawMessage `json:"tool_response"`
@@ -106,33 +109,18 @@ func processGeneric(data []byte, toolName string, scrub func(string) patterns.Re
 		return fmt.Errorf("parse tool_response: %w", err)
 	}
 
-	// Extract text content from the tool response.
-	// Strategy 1: plain JSON string (e.g. some simple tools)
-	// Strategy 2: object with a nested content/output string (e.g. Read, Grep)
-	// Strategy 3: fall back to raw JSON
-	text := extractText(raw.ToolResponse)
-
-	result := scrub(text)
+	ex := extractText(raw.ToolResponse)
+	result := scrub(ex.Text)
 	if !result.Redacted {
 		return nil
 	}
 
-	// For file-modifying tools, the operation already completed on disk.
-	// Show a clean summary with what was scrubbed instead of the full raw JSON.
 	content := result.Text
-	switch toolName {
-	case "Edit", "Write", "NotebookEdit":
-		content = summarizeScrubbed(text, result.Text)
+	if ex.Structured {
+		content = summarizeScrubbed(result.Text)
 	}
 
 	return writeBlock(w, result.Count, toolName, content)
-}
-
-// toolResponse is the typed envelope for Claude Code tool responses.
-type toolResponse struct {
-	Type string          `json:"type"`
-	File *fileResponse   `json:"file,omitempty"`
-	Raw  json.RawMessage `json:"-"` // preserved for fallback
 }
 
 type fileResponse struct {
@@ -142,45 +130,77 @@ type fileResponse struct {
 	StartLine int    `json:"startLine"`
 }
 
-// extractText pulls readable text from a tool_response JSON value.
-func extractText(raw json.RawMessage) string {
-	// Try plain JSON string first
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-
-	// Try typed response envelope
-	var resp toolResponse
-	if err := json.Unmarshal(raw, &resp); err == nil {
-		switch resp.Type {
-		case "text":
-			if resp.File != nil {
-				return resp.File.Content
-			}
-		}
-	}
-
-	// Fallback: raw JSON as string
-	return string(raw)
+type readEnvelope struct {
+	Type string        `json:"type"`
+	File *fileResponse `json:"file,omitempty"`
 }
 
-// summarizeScrubbed compares original and scrubbed text to extract only
-// the lines that contain [REDACTED markers. This avoids dumping entire
-// file contents (e.g. Edit's originalFile field) into the output.
-func summarizeScrubbed(original, scrubbed string) string {
-	scrubbedLines := strings.Split(scrubbed, "\n")
-	originalLines := strings.Split(original, "\n")
+// extractedText carries scrubber input plus whether the source was a
+// structured JSON value, which decides summarize vs. full-content output.
+type extractedText struct {
+	Text       string
+	Structured bool
+}
 
+func extractText(raw json.RawMessage) extractedText {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return extractedText{Text: s, Structured: false}
+	}
+
+	var env readEnvelope
+	if err := json.Unmarshal(raw, &env); err == nil && env.Type == "text" && env.File != nil {
+		return extractedText{Text: env.File.Content, Structured: false}
+	}
+
+	var parts []string
+	walkStrings(raw, &parts)
+	if len(parts) > 0 {
+		return extractedText{Text: strings.Join(parts, "\n"), Structured: true}
+	}
+
+	return extractedText{Text: string(raw), Structured: true}
+}
+
+// walkStrings recursively collects every string leaf from a JSON value.
+// Object keys are visited in sorted order so leaf order is deterministic.
+func walkStrings(raw json.RawMessage, dst *[]string) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s != "" {
+			*dst = append(*dst, s)
+		}
+		return
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil && obj != nil {
+		keys := make([]string, 0, len(obj))
+		for k := range obj {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			walkStrings(obj[k], dst)
+		}
+		return
+	}
+
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		for _, v := range arr {
+			walkStrings(v, dst)
+		}
+	}
+}
+
+// summarizeScrubbed returns only the scrubbed lines that contain a
+// [REDACTED marker, each prefixed with "- ".
+func summarizeScrubbed(scrubbed string) string {
 	var hits []string
-	for i, line := range scrubbedLines {
+	for _, line := range strings.Split(scrubbed, "\n") {
 		if strings.Contains(line, "[REDACTED") {
-			// Include the original line for context if available
-			if i < len(originalLines) && originalLines[i] != line {
-				hits = append(hits, "- "+line)
-			} else {
-				hits = append(hits, "- "+line)
-			}
+			hits = append(hits, "- "+line)
 		}
 	}
 
