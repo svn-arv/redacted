@@ -9,6 +9,7 @@ export interface CompiledPattern {
 }
 
 interface PatternFile {
+  value_safe_char: string
   keywords: string[]
   patterns: { name: string; regex: string; includes_key?: boolean }[]
 }
@@ -46,11 +47,12 @@ export function compilePatterns(): CompiledPattern[] {
   })
 
   const kw = file.keywords.join("|")
+  const valc = file.value_safe_char
 
   patterns.push({
     name: "env_secret",
     regex: new RegExp(
-      `\\b[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*[=:]\\s*[^\\s\\[][^\\s]{7,}`,
+      `\\b[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*[=:]\\s*${valc}{8,}`,
       "gi",
     ),
     includesKey: true,
@@ -59,7 +61,7 @@ export function compilePatterns(): CompiledPattern[] {
   patterns.push({
     name: "yaml_secret",
     regex: new RegExp(
-      `key:\\s*[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*\\n\\s*value:\\s*[^\\s\\[][^\\s]{7,}`,
+      `key:\\s*[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*\\n\\s*value:\\s*${valc}{8,}`,
       "gi",
     ),
     includesKey: true,

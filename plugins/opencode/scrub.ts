@@ -23,6 +23,33 @@ function redact(name: string, match: string, includesKey: boolean): string {
   return `[REDACTED:${name} ...${tail(match, 4)}]`
 }
 
+// valueOf returns the right-hand side of a KEY=value or KEY: value match,
+// using whichever of `=` or `:` appears first (matching the Go side).
+function valueOf(match: string): string {
+  for (let i = 0; i < match.length; i++) {
+    const ch = match[i]
+    if (ch === "=" || ch === ":") {
+      return match.slice(i + 1).trimStart()
+    }
+  }
+  return ""
+}
+
+// looksLikeIdentifier reports whether v is a plain snake_case or CONSTANT_CASE
+// identifier — variable references in source code rather than actual secrets.
+function looksLikeIdentifier(v: string): boolean {
+  if (!v.includes("_")) return false
+  let hasLower = false
+  let hasUpper = false
+  for (const ch of v) {
+    const code = ch.charCodeAt(0)
+    if (code >= 97 && code <= 122) hasLower = true
+    else if (code >= 65 && code <= 90) hasUpper = true
+    else if (ch !== "_") return false
+  }
+  return (hasLower && !hasUpper) || (hasUpper && !hasLower)
+}
+
 export function scrub(
   text: string,
   patterns: CompiledPattern[],
@@ -39,6 +66,9 @@ export function scrub(
         for (const name of allowed) {
           if (upper.includes(name)) return match
         }
+      }
+      if (p.includesKey && looksLikeIdentifier(valueOf(match))) {
+        return match
       }
       count++
       return redact(p.name, match, p.includesKey)

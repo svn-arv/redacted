@@ -206,6 +206,19 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"safe order id", "ORDER_ID=12345", true, "", ""},
 		{"safe base url", "BASE_URL=https://example.com", true, "", ""},
 		{"safe app url", "APP_URL=https://myapp.com", true, "", ""},
+
+		// === Identifier-like values in source code (should NOT redact) ===
+		{"ruby assignment", "token = not_token", true, "", ""},
+		{"ruby colon", "token: other_token", true, "", ""},
+		{"ruby const assign", "TOKEN = OTHER_TOKEN_CONST", true, "", ""},
+		{"python snake case", "secret_key = secret_key_var", true, "", ""},
+		{"ruby hash access", "token = params[:token]", true, "", ""},
+		{"ruby instance var", "token = @other_token", true, "", ""},
+		{"cross string boundary", `{"SECRET_KEY=[REDACTED", more},`, true, "", ""},
+
+		// === Real-looking values still redact ===
+		{"value with digits", "TOKEN=my_token_123", false, "TOKEN=[REDACTED", "_123"},
+		{"mixed case value", "TOKEN=MyRealSecretToken", false, "TOKEN=[REDACTED", ""},
 	}
 
 	for _, tt := range tests {

@@ -1,9 +1,41 @@
 package patterns
 
 import (
+	_ "embed"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
+
+//go:embed patterns.yaml
+var patternsYAML []byte
+
+// patternDef mirrors a patterns.yaml entry.
+type patternDef struct {
+	Name        string `yaml:"name"`
+	Regex       string `yaml:"regex"`
+	IncludesKey bool   `yaml:"includes_key"`
+}
+
+// patternFile is the parsed shape of patterns.yaml.
+type patternFile struct {
+	ValueSafeChar string       `yaml:"value_safe_char"`
+	Keywords      []string     `yaml:"keywords"`
+	Patterns      []patternDef `yaml:"patterns"`
+}
+
+// config is the parsed patterns.yaml, loaded once at package init.
+var config = func() patternFile {
+	var pf patternFile
+	if err := yaml.Unmarshal(patternsYAML, &pf); err != nil {
+		panic("patterns.yaml: " + err.Error())
+	}
+	if pf.ValueSafeChar == "" {
+		panic("patterns.yaml: value_safe_char is required")
+	}
+	return pf
+}()
 
 // pattern pairs a name with a compiled regex.
 type pattern struct {
@@ -45,7 +77,7 @@ func New(opts ...Option) *Scrubber {
 func WithExtra(name, expr string) Option {
 	return func(s *Scrubber) {
 		compiled := regexp.MustCompile(expr)
-		// Insert before the last 2 patterns (env_secret + yaml_secret catch-alls)
+		// Insert before the env_secret + yaml_secret catch-alls.
 		insertIdx := len(s.patterns) - 2
 		if insertIdx < 0 {
 			insertIdx = 0
@@ -90,12 +122,10 @@ func WithKeywords(keywords ...string) Option {
 		if len(keywords) == 0 {
 			return
 		}
-		joined := strings.Join(keywords, "|")
-		expr := `(?i)\b[A-Z0-9_]*(` + joined + `)[A-Z0-9_]*\s*[=:]\s*[^\s\[][^\s]{7,}`
-		compiled := regexp.MustCompile(expr)
+		expr := envSecretRegex(strings.Join(keywords, "|"))
 		s.patterns = append(s.patterns, &pattern{
 			Name:        "custom_keyword",
-			Regex:       compiled,
+			Regex:       regexp.MustCompile(expr),
 			includesKey: true,
 		})
 	}
@@ -121,7 +151,6 @@ type Result struct {
 // This preserves the variable name so devs know which key was hit.
 func redact(name, match string, includesKey bool) string {
 	if includesKey {
-		// Find the assignment operator (= or :) and split there
 		for i, ch := range match {
 			if ch == '=' || ch == ':' {
 				key := strings.TrimRight(match[:i], " \t")
@@ -157,6 +186,9 @@ func (s *Scrubber) Scrub(text string) Result {
 			if s.isAllowed(match) {
 				return match
 			}
+			if p.includesKey && looksLikeIdentifier(valueOf(match)) {
+				return match
+			}
 			count++
 			return redact(p.Name, match, p.includesKey)
 		})
@@ -168,6 +200,42 @@ func (s *Scrubber) Scrub(text string) Result {
 		Text:     out,
 		Count:    count,
 	}
+}
+
+// valueOf returns the right-hand side of a KEY=value or KEY: value match,
+// mirroring how redact splits the key and value.
+func valueOf(match string) string {
+	for i, ch := range match {
+		if ch == '=' || ch == ':' {
+			return strings.TrimLeft(match[i+1:], " \t")
+		}
+	}
+	return ""
+}
+
+// looksLikeIdentifier reports whether v is a plain snake_case or CONSTANT_CASE
+// identifier — at least one underscore, only letters and underscores, and
+// consistent casing (all lower or all upper). Values like `not_token`,
+// `OTHER_TOKEN_CONST`, or `secret_key_var` match this shape; they're typically
+// variable references in Ruby/Python/JS source code, not actual secrets, so
+// skip redaction to avoid false positives in code.
+func looksLikeIdentifier(v string) bool {
+	if !strings.Contains(v, "_") {
+		return false
+	}
+	hasLower, hasUpper := false, false
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r == '_':
+		default:
+			return false
+		}
+	}
+	return (hasLower && !hasUpper) || (hasUpper && !hasLower)
 }
 
 // isAllowed checks if the matched text contains any allowed variable name.
@@ -184,67 +252,36 @@ func (s *Scrubber) isAllowed(match string) bool {
 	return false
 }
 
-// sensitiveKeywords is the shared list of words that indicate a variable holds a secret.
-// Matches variable names containing any of these words (case insensitive).
-const sensitiveKeywords = `SECRET|TOKEN|PASSWORD|` +
-	`API_KEY|APIKEY|CREDENTIAL|` +
-	`PRIVATE_KEY|ACCESS_KEY|ENCRYPTION_KEY|SIGNING_KEY|LICENSE_KEY|` +
-	`CLIENT_ID|` +
-	`DB_PASS|DB_URL|DATABASE_URL|REDIS_URL|` +
-	`_DSN|_SID|` +
-	`ACCOUNT_ID|AUTH_KEY|MASTER_KEY|SERVICE_KEY`
+// envSecretRegex builds the env_secret catch-all for a custom keyword alternation.
+func envSecretRegex(keywords string) string {
+	return `(?i)\b[A-Z0-9_]*(` + keywords + `)[A-Z0-9_]*\s*[=:]\s*` + config.ValueSafeChar + `{8,}`
+}
 
-// builtins returns the default pattern set.
-// ORDER MATTERS: specific patterns first, generic catch-alls last.
+// yamlSecretRegex builds the yaml_secret catch-all for a keyword alternation.
+func yamlSecretRegex(keywords string) string {
+	return `(?i)key:\s*[A-Z0-9_]*(` + keywords + `)[A-Z0-9_]*\s*\n\s*value:\s*` + config.ValueSafeChar + `{8,}`
+}
+
+// builtins returns the default pattern set loaded from patterns.yaml plus
+// the dynamic env_secret and yaml_secret catch-alls derived from
+// config.Keywords. ORDER MATTERS: specific patterns first, catch-alls last —
+// if a specific pattern redacts a value, the catch-all won't re-match it.
 func builtins() []*pattern {
-	type def struct {
-		name        string
-		expr        string
-		includesKey bool
-	}
+	patterns := make([]*pattern, 0, len(config.Patterns)+2)
 
-	raw := []def{
-		// === Specific patterns (run first) — value only ===
-
-		{"aws_access_key", `AKIA[0-9A-Z]{16}`, false},
-		{"aws_secret_key", `(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[=:]\s*[A-Za-z0-9/+=]{40}`, true},
-		{"github_fine_grained", `github_pat_[A-Za-z0-9_]{22,}`, false},
-		{"github_token", `gh[ps]_[A-Za-z0-9_]{36,}`, false},
-		{"github_oauth", `gho_[A-Za-z0-9_]{36,}`, false},
-		{"github_refresh", `ghr_[A-Za-z0-9_]{36,}`, false},
-		{"stripe_live", `[srp]k_live_[A-Za-z0-9]{24,}`, false},
-		{"stripe_test", `[srp]k_test_[A-Za-z0-9]{24,}`, false},
-		{"twilio_api_key", `\bSK[0-9a-fA-F]{32}\b`, false},
-		{"twilio_account_sid", `\bAC[0-9a-fA-F]{32}\b`, false},
-		{"digitalocean_token", `dop_v1_[a-f0-9]{64}`, false},
-		{"digitalocean_spaces", `(?i)SPACES_(ACCESS_KEY|SECRET_KEY)\s*[=:]\s*\S{8,}`, true},
-		{"sentry_dsn", `https://[a-f0-9]{32}@[a-z0-9.\-]+\.ingest\.[a-z.]*sentry\.io/[0-9]+`, false},
-		{"slack_token", `xox[bpars]-[A-Za-z0-9\-]{10,}`, false},
-		{"sendgrid_key", `SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}`, false},
-		{"hubspot_key", `(?i)pat-[a-z0-9]{2,3}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, false},
-		{"private_key", `-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`, false},
-		{"jwt", `eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`, false},
-		{"anthropic_key", `sk-ant-[A-Za-z0-9_-]{20,}`, false},
-		{"circleci_token", `CCIPAT_[A-Za-z0-9]{20,}`, false},
-		{"sentry_user_token", `sntryu_[A-Za-z0-9]{20,}`, false},
-		{"rubygems_key", `rubygems_[A-Za-z0-9]{20,}`, false},
-		{"newrelic_key", `NRAK-[A-Za-z0-9]{20,}`, false},
-		{"database_url", `(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"'` + "`" + `]+`, false},
-
-		// === Generic catch-alls (run last) — include key name ===
-
-		{"env_secret", `(?i)\b[A-Z0-9_]*(` + sensitiveKeywords + `)[A-Z0-9_]*\s*[=:]\s*[^\s\[][^\s]{7,}`, true},
-		{"yaml_secret", `(?i)key:\s*[A-Z0-9_]*(` + sensitiveKeywords + `)[A-Z0-9_]*\s*\n\s*value:\s*[^\s\[][^\s]{7,}`, true},
-	}
-
-	patterns := make([]*pattern, 0, len(raw))
-	for _, r := range raw {
+	for _, p := range config.Patterns {
 		patterns = append(patterns, &pattern{
-			Name:        r.name,
-			Regex:       regexp.MustCompile(r.expr),
-			includesKey: r.includesKey,
+			Name:        p.Name,
+			Regex:       regexp.MustCompile(p.Regex),
+			includesKey: p.IncludesKey,
 		})
 	}
+
+	kw := strings.Join(config.Keywords, "|")
+	patterns = append(patterns,
+		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw)), includesKey: true},
+		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw)), includesKey: true},
+	)
 	return patterns
 }
 

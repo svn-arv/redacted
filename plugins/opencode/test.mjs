@@ -68,5 +68,32 @@ for (const [text, shouldExist] of checks) {
   }
 }
 
+// Identifier-like values in source code should NOT be scrubbed.
+// Real secrets with digits or mixed case SHOULD be scrubbed.
+const fpCases = [
+  { input: "token = not_token", clean: true },
+  { input: "token: other_token", clean: true },
+  { input: "TOKEN = OTHER_TOKEN_CONST", clean: true },
+  { input: "secret_key = secret_key_var", clean: true },
+  { input: "token = params[:token]", clean: true },
+  { input: "token = @other_token", clean: true },
+  { input: `{"SECRET_KEY=[REDACTED", more},`, clean: true },
+  { input: "TOKEN=my_token_123", clean: false },
+  { input: "TOKEN=MyRealSecretToken", clean: false },
+]
+
+for (const { input, clean } of fpCases) {
+  const r = scrub(input, compiled, new Set())
+  const wasScrubbed = r.count > 0
+  if (clean === !wasScrubbed) {
+    passed++
+  } else {
+    failed++
+    console.log(
+      `FAIL: ${JSON.stringify(input)} should ${clean ? "NOT redact" : "redact"}, got: ${JSON.stringify(r.text)}`,
+    )
+  }
+}
+
 console.log(`${passed} passed, ${failed} failed`)
 process.exit(failed > 0 ? 1 : 0)

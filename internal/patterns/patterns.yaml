@@ -1,8 +1,15 @@
 # patterns.yaml — single source of truth for secret detection.
-# Consumed by Go (embedded at compile time) and TypeScript (read at runtime).
+# Consumed by Go (//go:embed at compile time) and TypeScript (read at runtime).
 #
 # Order matters: specific patterns run first, catch-alls last.
 # If a specific pattern redacts a value, the catch-all won't re-match it.
+
+# Character class for catch-all values. Excludes whitespace, code syntax
+# (brackets, parens, braces, angle brackets), quotes (single, double, backtick),
+# separators (comma, semicolon), Ruby instance-var marker (@), and backslash —
+# so matches stay inside a single token and can't leak past a string literal
+# or expression boundary in source code.
+value_safe_char: '[^\s\[\]()@,;"''`{}<>\\]'
 
 # Keywords used to build the env_secret and yaml_secret catch-all patterns.
 # Any env variable whose name contains one of these words gets its value redacted.
@@ -68,7 +75,7 @@ patterns:
     regex: 'dop_v1_[a-f0-9]{64}'
 
   - name: digitalocean_spaces
-    regex: '(?i)SPACES_(ACCESS_KEY|SECRET_KEY)\s*[=:]\s*\S{8,}'
+    regex: '(?i)SPACES_(ACCESS_KEY|SECRET_KEY)\s*[=:]\s*[A-Za-z0-9/+=_\-]{8,}'
     includes_key: true
 
   - name: sentry_dsn
@@ -105,4 +112,4 @@ patterns:
     regex: 'NRAK-[A-Za-z0-9]{20,}'
 
   - name: database_url
-    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`]+'
+    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\]+'
