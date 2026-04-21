@@ -58,7 +58,7 @@ This registers `redacted scrub` as a PostToolUse hook. All tool output (Bash, Re
 `redacted scrub` reads a JSON payload from stdin and writes to stdout. Pipe any tool output through it:
 
 ```bash
-echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=super_secret_password"}}' | redacted scrub
+echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=SUPER-SECRETPASSWORD"}}' | redacted scrub
 ```
 
 If secrets are found, it outputs a JSON response with `decision: "block"` and the redacted text. If no secrets are found, it outputs nothing (pass-through).
