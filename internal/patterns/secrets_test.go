@@ -174,6 +174,16 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"env with colon", "SECRET_KEY: " + envSecretVal, false, "SECRET_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
 		{"env with spaces", "SECRET_KEY = " + envSecretVal, false, "SECRET_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
 
+		// === Hyphen-separated keys (HTTP headers, YAML, CLI flags) ===
+		{"hyphen api-key", "api-key=" + testutil.RandAlphaNum(24), false, "api-key=[REDACTED", ""},
+		{"hyphen x-api-key header", "x-api-key: " + testutil.RandAlphaNum(20), false, "x-api-key=[REDACTED", ""},
+		{"hyphen private-key", "private-key=" + testutil.RandAlphaNum(30), false, "private-key=[REDACTED", ""},
+		{"hyphen access-key", "AWS-ACCESS-KEY=" + testutil.RandAlphaNum(20), false, "AWS-ACCESS-KEY=[REDACTED", ""},
+		{"hyphen database-url", "database-url=postgresql://host/db?a=bcdefghi", false, "database-url=[REDACTED", ""},
+		{"hyphen db-pass", "db-pass=" + testutil.RandAlphaNum(16), false, "db-pass=[REDACTED", ""},
+		{"hyphen dsn suffix", "sentry-dsn=https://abc.example.com/path/val", false, "sentry-dsn=[REDACTED", ""},
+		{"hyphen sid suffix", "twilio-workspace-sid=WS" + testutil.RandAlphaNum(16), false, "twilio-workspace-sid=[REDACTED", ""},
+
 		// === YAML catch-all ===
 		{"yaml secret", "  - key: SECRET_KEY_BASE\n    value: " + yamlSecretBase, false, "key=[REDACTED", yamlSecretBase[len(yamlSecretBase)-4:]},
 		{"yaml token", "  - key: AUTH_TOKEN\n    value: " + yamlTokenVal, false, "key=[REDACTED", yamlTokenVal[len(yamlTokenVal)-4:]},

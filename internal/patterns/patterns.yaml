@@ -75,7 +75,7 @@ patterns:
     regex: 'dop_v1_[a-f0-9]{64}'
 
   - name: digitalocean_spaces
-    regex: '(?i)SPACES_(ACCESS_KEY|SECRET_KEY)\s*[=:]\s*[A-Za-z0-9/+=_\-]{8,}'
+    regex: '(?i)SPACES[_\-](ACCESS[_\-]KEY|SECRET[_\-]KEY)\s*[=:]\s*[A-Za-z0-9/+=_\-]{8,}'
     includes_key: true
 
   - name: sentry_dsn
@@ -100,7 +100,7 @@ patterns:
     regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
 
   - name: circleci_token
-    regex: 'CCIPAT_[A-Za-z0-9]{20,}'
+    regex: 'CCIPAT_[A-Za-z0-9_]{20,}'
 
   - name: sentry_user_token
     regex: 'sntryu_[A-Za-z0-9]{20,}'

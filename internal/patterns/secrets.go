@@ -253,13 +253,17 @@ func (s *Scrubber) isAllowed(match string) bool {
 }
 
 // envSecretRegex builds the env_secret catch-all for a custom keyword alternation.
+// Hyphens are treated as equivalent to underscores so http-style keys like
+// `api-key=...` or `x-api-key: ...` are caught alongside `API_KEY=...`.
 func envSecretRegex(keywords string) string {
-	return `(?i)\b[A-Z0-9_]*(` + keywords + `)[A-Z0-9_]*\s*[=:]\s*` + config.ValueSafeChar + `{8,}`
+	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
+	return `(?i)\b[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*[=:]\s*` + config.ValueSafeChar + `{8,}`
 }
 
 // yamlSecretRegex builds the yaml_secret catch-all for a keyword alternation.
 func yamlSecretRegex(keywords string) string {
-	return `(?i)key:\s*[A-Z0-9_]*(` + keywords + `)[A-Z0-9_]*\s*\n\s*value:\s*` + config.ValueSafeChar + `{8,}`
+	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
+	return `(?i)key:\s*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:\s*` + config.ValueSafeChar + `{8,}`
 }
 
 // builtins returns the default pattern set loaded from patterns.yaml plus
