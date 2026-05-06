@@ -35,18 +35,22 @@ function valueOf(match: string): string {
   return ""
 }
 
-// looksLikeIdentifier reports whether v is a plain snake_case or CONSTANT_CASE
-// identifier — variable references in source code rather than actual secrets.
+// looksLikeIdentifier reports whether v looks like a source-code identifier
+// or method/attribute path: only letters with `_` and/or `.` as separators,
+// at least one separator present, and consistent casing (all lower or all
+// upper). Skips redaction for variable references and method calls in code.
 function looksLikeIdentifier(v: string): boolean {
-  if (!v.includes("_")) return false
   let hasLower = false
   let hasUpper = false
+  let hasSeparator = false
   for (const ch of v) {
     const code = ch.charCodeAt(0)
     if (code >= 97 && code <= 122) hasLower = true
     else if (code >= 65 && code <= 90) hasUpper = true
-    else if (ch !== "_") return false
+    else if (ch === "_" || ch === ".") hasSeparator = true
+    else return false
   }
+  if (!hasSeparator) return false
   return (hasLower && !hasUpper) || (hasUpper && !hasLower)
 }
 

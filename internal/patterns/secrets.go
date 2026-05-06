@@ -148,15 +148,24 @@ type Result struct {
 //
 //	TWILIO_AUTH_TOKEN=[REDACTED ...0152]
 //
-// This preserves the variable name so devs know which key was hit.
+// The original separator (`=` or `:`) is preserved so Ruby hash literals,
+// YAML, and other key:value syntaxes don't get corrupted by the rewrite.
 func redact(name, match string, includesKey bool) string {
 	if includesKey {
 		for i, ch := range match {
 			if ch == '=' || ch == ':' {
-				key := strings.TrimRight(match[:i], " \t")
+				key := match[:i]
+				sep := string(ch)
 				value := strings.TrimLeft(match[i+1:], " \t")
+				// Preserve any whitespace that sat between the key and sep
+				// so `KEY = value` and `KEY: value` round-trip cleanly.
+				trailingWS := ""
+				trimmedKey := strings.TrimRight(key, " \t")
+				if len(trimmedKey) < len(key) {
+					trailingWS = key[len(trimmedKey):]
+				}
 				hint := tail(value, 4)
-				return key + "=[REDACTED ..." + hint + "]"
+				return trimmedKey + trailingWS + sep + " [REDACTED ..." + hint + "]"
 			}
 		}
 	}
@@ -213,27 +222,29 @@ func valueOf(match string) string {
 	return ""
 }
 
-// looksLikeIdentifier reports whether v is a plain snake_case or CONSTANT_CASE
-// identifier — at least one underscore, only letters and underscores, and
-// consistent casing (all lower or all upper). Values like `not_token`,
-// `OTHER_TOKEN_CONST`, or `secret_key_var` match this shape; they're typically
-// variable references in Ruby/Python/JS source code, not actual secrets, so
-// skip redaction to avoid false positives in code.
+// looksLikeIdentifier reports whether v looks like a source-code identifier
+// or method/attribute access path: only letters with `_` and/or `.` as
+// separators, at least one separator present, and consistent casing (all
+// lower or all upper). Values like `not_token`, `OTHER_TOKEN_CONST`,
+// `credit_account.id`, or `obj.attr` match this shape; they're typically
+// variable references or method calls in Ruby/Python/JS source code, not
+// actual secrets, so skip redaction to avoid false positives in code.
 func looksLikeIdentifier(v string) bool {
-	if !strings.Contains(v, "_") {
-		return false
-	}
-	hasLower, hasUpper := false, false
+	hasLower, hasUpper, hasSeparator := false, false, false
 	for _, r := range v {
 		switch {
 		case r >= 'a' && r <= 'z':
 			hasLower = true
 		case r >= 'A' && r <= 'Z':
 			hasUpper = true
-		case r == '_':
+		case r == '_' || r == '.':
+			hasSeparator = true
 		default:
 			return false
 		}
+	}
+	if !hasSeparator {
+		return false
 	}
 	return (hasLower && !hasUpper) || (hasUpper && !hasLower)
 }
@@ -255,15 +266,22 @@ func (s *Scrubber) isAllowed(match string) bool {
 // envSecretRegex builds the env_secret catch-all for a custom keyword alternation.
 // Hyphens are treated as equivalent to underscores so http-style keys like
 // `api-key=...` or `x-api-key: ...` are caught alongside `API_KEY=...`.
+//
+// Whitespace around `[=:]` is restricted to spaces and tabs, never newlines.
+// Otherwise an empty `KEY=\nNEXT_KEY=...` would match across the line break and
+// redact the next line's key as if it were the value.
 func envSecretRegex(keywords string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
-	return `(?i)\b[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*[=:]\s*` + config.ValueSafeChar + `{8,}`
+	return `(?i)\b[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*[ \t]*[=:][ \t]*` + config.ValueSafeChar + `{8,}`
 }
 
 // yamlSecretRegex builds the yaml_secret catch-all for a keyword alternation.
+// The middle `\s*\n\s*` is intentional — it spans the key line to the value
+// line. The leading and trailing whitespace are space/tab only so the keyword
+// stays on the `key:` line and the value stays on the `value:` line.
 func yamlSecretRegex(keywords string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
-	return `(?i)key:\s*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:\s*` + config.ValueSafeChar + `{8,}`
+	return `(?i)key:[ \t]*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:[ \t]*` + config.ValueSafeChar + `{8,}`
 }
 
 // builtins returns the default pattern set loaded from patterns.yaml plus

@@ -52,7 +52,7 @@ export function compilePatterns(): CompiledPattern[] {
   patterns.push({
     name: "env_secret",
     regex: new RegExp(
-      `\\b[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*[=:]\\s*${valc}{8,}`,
+      `\\b[A-Z0-9_]*(${kw})[A-Z0-9_]*[ \\t]*[=:][ \\t]*${valc}{8,}`,
       "gi",
     ),
     includesKey: true,
@@ -61,7 +61,7 @@ export function compilePatterns(): CompiledPattern[] {
   patterns.push({
     name: "yaml_secret",
     regex: new RegExp(
-      `key:\\s*[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*\\n\\s*value:\\s*${valc}{8,}`,
+      `key:[ \\t]*[A-Z0-9_]*(${kw})[A-Z0-9_]*\\s*\\n\\s*value:[ \\t]*${valc}{8,}`,
       "gi",
     ),
     includesKey: true,

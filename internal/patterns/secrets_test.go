@@ -84,8 +84,8 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		// === AWS ===
 		{"aws access key", "key: " + awsKey.Value, false, "[REDACTED:aws_access_key", awsKey.Hint},
 		{"aws access key in url", "https://s3.amazonaws.com/?AWSAccessKeyId=" + awsKey.Value, false, "[REDACTED:aws_access_key", awsKey.Hint},
-		{"aws secret key", awsSecret.Value, false, "aws_secret_access_key=[REDACTED", awsSecretRaw.Hint},
-		{"aws secret key colon", awsSecretColon.Value, false, "aws_secret_access_key=[REDACTED", awsSecretRaw.Hint},
+		{"aws secret key", awsSecret.Value, false, "aws_secret_access_key= [REDACTED", awsSecretRaw.Hint},
+		{"aws secret key colon", awsSecretColon.Value, false, "aws_secret_access_key: [REDACTED", awsSecretRaw.Hint},
 
 		// === GitHub ===
 		{"github pat", "token=" + ghpToken.Value, false, "[REDACTED:github_token", ghpToken.Hint},
@@ -107,8 +107,8 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 
 		// === DigitalOcean ===
 		{"do token", doToken.Value, false, "[REDACTED:digitalocean_token", doToken.Hint},
-		{"do spaces access", doSpacesAccess.Value, false, "SPACES_ACCESS_KEY=[REDACTED", doSpacesAccess.Hint},
-		{"do spaces secret", doSpacesSecret.Value, false, "SPACES_SECRET_KEY=[REDACTED", doSpacesSecret.Hint},
+		{"do spaces access", doSpacesAccess.Value, false, "SPACES_ACCESS_KEY= [REDACTED", doSpacesAccess.Hint},
+		{"do spaces secret", doSpacesSecret.Value, false, "SPACES_SECRET_KEY= [REDACTED", doSpacesSecret.Hint},
 
 		// === Sentry ===
 		{"sentry dsn", sentryDSN.Value, false, "[REDACTED:sentry_dsn", sentryDSN.Hint},
@@ -163,39 +163,39 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"amqps url", amqpsURL.Value, false, "[REDACTED:database_url", amqpsURL.Hint},
 
 		// === Env-style catch-all ===
-		{"env secret key", "SECRET_KEY=" + envSecretVal, false, "SECRET_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
-		{"env password", "DB_PASSWORD=" + envPassVal, false, "DB_PASSWORD=[REDACTED", envPassVal[len(envPassVal)-4:]},
-		{"env auth token", "AUTH_TOKEN=" + envTokenVal, false, "AUTH_TOKEN=[REDACTED", envTokenVal[len(envTokenVal)-4:]},
-		{"env generic secret", "MY_SECRET_VALUE=" + envGenericVal, false, "MY_SECRET_VALUE=[REDACTED", envGenericVal[len(envGenericVal)-4:]},
-		{"env access key", "ACCESS_KEY_ID=" + envAccessVal, false, "ACCESS_KEY_ID=[REDACTED", envAccessVal[len(envAccessVal)-4:]},
-		{"env credential", "DB_CREDENTIAL=" + envCredVal, false, "DB_CREDENTIAL=[REDACTED", envCredVal[len(envCredVal)-4:]},
-		{"env encryption key", "ENCRYPTION_KEY=" + envEncVal, false, "ENCRYPTION_KEY=[REDACTED", envEncVal[len(envEncVal)-4:]},
-		{"env signing key", "SIGNING_KEY=" + envSignVal, false, "SIGNING_KEY=[REDACTED", envSignVal[len(envSignVal)-4:]},
-		{"env with colon", "SECRET_KEY: " + envSecretVal, false, "SECRET_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
-		{"env with spaces", "SECRET_KEY = " + envSecretVal, false, "SECRET_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
+		{"env secret key", "SECRET_KEY=" + envSecretVal, false, "SECRET_KEY= [REDACTED", envSecretVal[len(envSecretVal)-4:]},
+		{"env password", "DB_PASSWORD=" + envPassVal, false, "DB_PASSWORD= [REDACTED", envPassVal[len(envPassVal)-4:]},
+		{"env auth token", "AUTH_TOKEN=" + envTokenVal, false, "AUTH_TOKEN= [REDACTED", envTokenVal[len(envTokenVal)-4:]},
+		{"env generic secret", "MY_SECRET_VALUE=" + envGenericVal, false, "MY_SECRET_VALUE= [REDACTED", envGenericVal[len(envGenericVal)-4:]},
+		{"env access key", "ACCESS_KEY_ID=" + envAccessVal, false, "ACCESS_KEY_ID= [REDACTED", envAccessVal[len(envAccessVal)-4:]},
+		{"env credential", "DB_CREDENTIAL=" + envCredVal, false, "DB_CREDENTIAL= [REDACTED", envCredVal[len(envCredVal)-4:]},
+		{"env encryption key", "ENCRYPTION_KEY=" + envEncVal, false, "ENCRYPTION_KEY= [REDACTED", envEncVal[len(envEncVal)-4:]},
+		{"env signing key", "SIGNING_KEY=" + envSignVal, false, "SIGNING_KEY= [REDACTED", envSignVal[len(envSignVal)-4:]},
+		{"env with colon", "SECRET_KEY: " + envSecretVal, false, "SECRET_KEY: [REDACTED", envSecretVal[len(envSecretVal)-4:]},
+		{"env with spaces", "SECRET_KEY = " + envSecretVal, false, "SECRET_KEY = [REDACTED", envSecretVal[len(envSecretVal)-4:]},
 
 		// === Hyphen-separated keys (HTTP headers, YAML, CLI flags) ===
-		{"hyphen api-key", "api-key=" + testutil.RandAlphaNum(24), false, "api-key=[REDACTED", ""},
-		{"hyphen x-api-key header", "x-api-key: " + testutil.RandAlphaNum(20), false, "x-api-key=[REDACTED", ""},
-		{"hyphen private-key", "private-key=" + testutil.RandAlphaNum(30), false, "private-key=[REDACTED", ""},
-		{"hyphen access-key", "AWS-ACCESS-KEY=" + testutil.RandAlphaNum(20), false, "AWS-ACCESS-KEY=[REDACTED", ""},
+		{"hyphen api-key", "api-key=" + testutil.RandAlphaNum(24), false, "api-key= [REDACTED", ""},
+		{"hyphen x-api-key header", "x-api-key: " + testutil.RandAlphaNum(20), false, "x-api-key: [REDACTED", ""},
+		{"hyphen private-key", "private-key=" + testutil.RandAlphaNum(30), false, "private-key= [REDACTED", ""},
+		{"hyphen access-key", "AWS-ACCESS-KEY=" + testutil.RandAlphaNum(20), false, "AWS-ACCESS-KEY= [REDACTED", ""},
 		{"hyphen database-url", "database-url=postgresql://host/db?a=bcdefghi", false, "database-url=[REDACTED", ""},
-		{"hyphen db-pass", "db-pass=" + testutil.RandAlphaNum(16), false, "db-pass=[REDACTED", ""},
-		{"hyphen dsn suffix", "sentry-dsn=https://abc.example.com/path/val", false, "sentry-dsn=[REDACTED", ""},
-		{"hyphen sid suffix", "twilio-workspace-sid=WS" + testutil.RandAlphaNum(16), false, "twilio-workspace-sid=[REDACTED", ""},
+		{"hyphen db-pass", "db-pass=" + testutil.RandAlphaNum(16), false, "db-pass= [REDACTED", ""},
+		{"hyphen dsn suffix", "sentry-dsn=https://abc.example.com/path/val", false, "sentry-dsn= [REDACTED", ""},
+		{"hyphen sid suffix", "twilio-workspace-sid=WS" + testutil.RandAlphaNum(16), false, "twilio-workspace-sid= [REDACTED", ""},
 
 		// === YAML catch-all ===
-		{"yaml secret", "  - key: SECRET_KEY_BASE\n    value: " + yamlSecretBase, false, "key=[REDACTED", yamlSecretBase[len(yamlSecretBase)-4:]},
-		{"yaml token", "  - key: AUTH_TOKEN\n    value: " + yamlTokenVal, false, "key=[REDACTED", yamlTokenVal[len(yamlTokenVal)-4:]},
-		{"yaml password", "  - key: DB_PASSWORD\n    value: " + yamlPassVal, false, "key=[REDACTED", yamlPassVal[len(yamlPassVal)-4:]},
+		{"yaml secret", "  - key: SECRET_KEY_BASE\n    value: " + yamlSecretBase, false, "key: [REDACTED", yamlSecretBase[len(yamlSecretBase)-4:]},
+		{"yaml token", "  - key: AUTH_TOKEN\n    value: " + yamlTokenVal, false, "key: [REDACTED", yamlTokenVal[len(yamlTokenVal)-4:]},
+		{"yaml password", "  - key: DB_PASSWORD\n    value: " + yamlPassVal, false, "key: [REDACTED", yamlPassVal[len(yamlPassVal)-4:]},
 
 		// === New keyword coverage ===
-		{"client id", "VOLTADE_CLIENT_ID=" + testutil.RandAlphaNum(20), false, "VOLTADE_CLIENT_ID=[REDACTED", ""},
-		{"license key", "NEW_RELIC_LICENSE_KEY=" + envSecretVal, false, "NEW_RELIC_LICENSE_KEY=[REDACTED", envSecretVal[len(envSecretVal)-4:]},
-		{"dsn var", "SENTRY_DSN=https://example.com/something/long", false, "SENTRY_DSN=[REDACTED", "long"},
-		{"sid var", "TWILIO_WORKSPACE_SID=WS" + testutil.RandAlphaNum(16), false, "TWILIO_WORKSPACE_SID=[REDACTED", ""},
-		{"account id", "AWS_ACCOUNT_ID=" + testutil.RandDigits(12), false, "AWS_ACCOUNT_ID=[REDACTED", ""},
-		{"service key", "GCP_SERVICE_KEY=" + testutil.RandAlphaNum(22), false, "GCP_SERVICE_KEY=[REDACTED", ""},
+		{"client id", "VOLTADE_CLIENT_ID=" + testutil.RandAlphaNum(20), false, "VOLTADE_CLIENT_ID= [REDACTED", ""},
+		{"license key", "NEW_RELIC_LICENSE_KEY=" + envSecretVal, false, "NEW_RELIC_LICENSE_KEY= [REDACTED", envSecretVal[len(envSecretVal)-4:]},
+		{"dsn var", "SENTRY_DSN=https://example.com/something/long", false, "SENTRY_DSN= [REDACTED", "long"},
+		{"sid var", "TWILIO_WORKSPACE_SID=WS" + testutil.RandAlphaNum(16), false, "TWILIO_WORKSPACE_SID= [REDACTED", ""},
+		{"account id", "AWS_ACCOUNT_ID=" + testutil.RandDigits(12), false, "AWS_ACCOUNT_ID= [REDACTED", ""},
+		{"service key", "GCP_SERVICE_KEY=" + testutil.RandAlphaNum(22), false, "GCP_SERVICE_KEY= [REDACTED", ""},
 		{"postgresql url", testutil.DatabaseURL("postgresql", "user", "pass", "host", "5432", "db").Value, false, "[REDACTED:database_url", ""},
 
 		// === Multi-secret in one string ===
@@ -225,10 +225,12 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"ruby hash access", "token = params[:token]", true, "", ""},
 		{"ruby instance var", "token = @other_token", true, "", ""},
 		{"cross string boundary", `{"SECRET_KEY=[REDACTED", more},`, true, "", ""},
+		{"ruby method call value", "context_object: { credit_account_id: credit_account.id },", true, "", ""},
+		{"dotted accessor", "client_id: user.account_id", true, "", ""},
 
 		// === Real-looking values still redact ===
-		{"value with digits", "TOKEN=my_token_123", false, "TOKEN=[REDACTED", "_123"},
-		{"mixed case value", "TOKEN=MyRealSecretToken", false, "TOKEN=[REDACTED", ""},
+		{"value with digits", "TOKEN=my_token_123", false, "TOKEN= [REDACTED", "_123"},
+		{"mixed case value", "TOKEN=MyRealSecretToken", false, "TOKEN= [REDACTED", ""},
 	}
 
 	for _, tt := range tests {
@@ -270,7 +272,7 @@ func TestRedact_ValueOnly(t *testing.T) {
 
 func TestRedact_KeyValue(t *testing.T) {
 	got := redact("env_secret", "SECRET_KEY=abcdef123456789", true)
-	want := "SECRET_KEY=[REDACTED ...6789]"
+	want := "SECRET_KEY= [REDACTED ...6789]"
 	if got != want {
 		t.Errorf("key=value redact = %q, want %q", got, want)
 	}
@@ -278,7 +280,7 @@ func TestRedact_KeyValue(t *testing.T) {
 
 func TestRedact_KeyColon(t *testing.T) {
 	got := redact("env_secret", "SECRET_KEY: abcdef123456789", true)
-	want := "SECRET_KEY=[REDACTED ...6789]"
+	want := "SECRET_KEY: [REDACTED ...6789]"
 	if got != want {
 		t.Errorf("key:value redact = %q, want %q", got, want)
 	}
@@ -528,5 +530,35 @@ func TestNew_DefaultScrubberMatchesPackageLevel(t *testing.T) {
 	}
 	if pkgResult.Count != instanceResult.Count {
 		t.Errorf("count differs: pkg=%d inst=%d", pkgResult.Count, instanceResult.Count)
+	}
+}
+
+// TestScrub_DottedIdentifierGuardrail verifies that values with dots and
+// digits (e.g. version strings, real-looking tokens with mixed content) are
+// still redacted, even though plain dotted identifier paths are now skipped.
+func TestScrub_DottedIdentifierGuardrail(t *testing.T) {
+	result := Scrub("TOKEN=abc.def.ghi123")
+	if !result.Redacted {
+		t.Errorf("dotted value with digits should still redact, got: %s", result.Text)
+	}
+}
+
+// TestScrub_EmptyValueDoesNotConsumeNextLine verifies that an empty
+// `KEY=` (or `KEY:`) does not pull the following line's `NEXT_KEY=` into
+// the match. Previously `\s*` after the separator could swallow the newline,
+// causing the next line to be redacted as if it were the value.
+func TestScrub_EmptyValueDoesNotConsumeNextLine(t *testing.T) {
+	cases := []string{
+		"AI_API_KEY=\nAI_BACKEND_URL=\n",
+		"AI_API_KEY=\nAI_BACKEND_URL=",
+		"# AI Setup\nAI_API_KEY=\nAI_BACKEND_URL=\n",
+		"SECRET_KEY:\nSOME_OTHER_VAR=\n",
+		"API_KEY = \nNEXT_VAR=\n",
+	}
+	for _, in := range cases {
+		result := Scrub(in)
+		if result.Redacted {
+			t.Errorf("expected no redaction for empty-value input %q, got: %q", in, result.Text)
+		}
 	}
 }

@@ -42,7 +42,10 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
   echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=super_secret_password"}}' | redacted scrub
 
   # Test with inline JSON (Read)
-  echo '{"tool_name":"Read","tool_response":"SECRET_KEY=super_secret_value"}' | redacted scrub`,
+  echo '{"tool_name":"Read","tool_response":"SECRET_KEY=super_secret_value"}' | redacted scrub
+
+  # Test mode: any non-JSON stdin is scrubbed as raw text and printed
+  echo 'TOKEN=mysecretvalue123' | redacted scrub`,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := io.ReadAll(os.Stdin)
@@ -52,6 +55,23 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
 
 		cwd := extractCwd(data)
 		cfg, _ := config.Load(cwd)
+		scrubber := buildScrubberFromConfig(cfg)
+
+		// Test mode: if stdin isn't a JSON object, scrub as raw text and
+		// print to stdout. Hook payloads always start with `{`, so a
+		// first-non-space character of anything else means manual testing.
+		if !looksLikeHookPayload(data) {
+			scrub := patterns.Scrub
+			if scrubber != nil {
+				scrub = scrubber.Scrub
+			}
+			result := scrub(string(data))
+			fmt.Fprint(os.Stdout, result.Text)
+			if result.Redacted {
+				fmt.Fprintf(os.Stderr, "[redacted] %d secret(s) scrubbed\n", result.Count)
+			}
+			return nil
+		}
 
 		// If config says ignore internal tools, only scrub Bash
 		if cfg != nil && cfg.IgnoreInternalTools {
@@ -60,13 +80,27 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
 			}
 		}
 
-		scrubber := buildScrubberFromConfig(cfg)
-
 		if err := hook.Process(bytes.NewReader(data), os.Stdout, scrubber); err != nil {
 			return fmt.Errorf("scrub: %w", err)
 		}
 		return nil
 	},
+}
+
+// looksLikeHookPayload reports whether data begins with `{` after optional
+// leading whitespace, the shape of every Claude Code hook payload.
+func looksLikeHookPayload(data []byte) bool {
+	for _, b := range data {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func init() {
