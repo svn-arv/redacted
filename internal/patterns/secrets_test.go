@@ -543,6 +543,73 @@ func TestScrub_DottedIdentifierGuardrail(t *testing.T) {
 	}
 }
 
+// Connection-string templates that use ${VAR} placeholders carry no literal
+// credentials, so database_url must not match across the ${...}. A URL with
+// real credentials must still redact even when a component is templated —
+// the match simply stops at the ${, it is never exempted away.
+//
+// Operator forms like ${VAR:-default} are intentionally not covered: they can
+// carry a value, so they stay subject to the normal patterns.
+func TestScrub_DatabaseURLTemplate(t *testing.T) {
+	passthrough := []string{
+		"postgresql://${POSTGRES_HOST}/mydb",
+		"redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB}",
+		"mongodb://${USER}:${PASS}@${HOST}",
+		"const url = `postgresql://${HOST}/db`",
+	}
+	for _, in := range passthrough {
+		if result := Scrub(in); result.Redacted {
+			t.Errorf("expected no redaction for template %q, got: %q", in, result.Text)
+		}
+	}
+
+	// Real credentials redact even though the host is a ${...} placeholder.
+	withCreds := "postgres://user:realpass@${HOST}/db"
+	result := Scrub(withCreds)
+	if !result.Redacted {
+		t.Errorf("expected redaction for credentialed URL %q, got: %q", withCreds, result.Text)
+	}
+	if strings.Contains(result.Text, "realpass") {
+		t.Errorf("real password leaked through templated URL: %q", result.Text)
+	}
+}
+
+// Guardrail: value_safe_char excludes (, `, {, <, so these shapes don't form
+// a matchable value. Test ensures a future loosening of that char class
+// doesn't silently regress them.
+func TestScrub_StructurallySafeBashConstructs(t *testing.T) {
+	cases := []string{
+		"PASSWORD=$(vault read secret/db_password)",
+		"API_KEY=`get-key-from-secret-manager`",
+		"TOKEN=$((1 + computed_value))",
+		"SECRET=<(curl -s https://vault/secret)",
+		"PASSWORD: ${{ secrets.DB_PASSWORD }}",
+		"API_KEY: ${{ steps.auth.outputs.token }}",
+		"SECRET={{ .Values.password }}",
+	}
+	for _, in := range cases {
+		result := Scrub(in)
+		if result.Redacted {
+			t.Errorf("expected no redaction for %q, got: %q", in, result.Text)
+		}
+	}
+}
+
+func TestScrub_BashExpansionAdjacentRealSecret(t *testing.T) {
+	aws := testutil.AWSAccessKey()
+	input := "TEMPLATE=postgresql://${HOST}/db\nREAL=" + aws.Value
+	result := Scrub(input)
+	if !result.Redacted {
+		t.Errorf("expected real secret to be redacted, got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "[REDACTED:aws_access_key") {
+		t.Errorf("expected aws_access_key redaction, got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "postgresql://${HOST}/db") {
+		t.Errorf("template should pass through unchanged, got: %q", result.Text)
+	}
+}
+
 // TestScrub_EmptyValueDoesNotConsumeNextLine verifies that an empty
 // `KEY=` (or `KEY:`) does not pull the following line's `NEXT_KEY=` into
 // the match. Previously `\s*` after the separator could swallow the newline,

@@ -111,5 +111,7 @@ patterns:
   - name: newrelic_key
     regex: 'NRAK-[A-Za-z0-9]{20,}'
 
+  # The char class excludes ${ } so ${VAR} placeholders in connection-string
+  # templates don't match (issue #1); real credentialed URLs contain none.
   - name: database_url
-    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\]+'
+    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\${}]+'
