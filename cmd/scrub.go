@@ -39,10 +39,10 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
   cat testdata/hook_payload.json | redacted scrub
 
   # Test with inline JSON (Bash)
-  echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=super_secret_password"}}' | redacted scrub
+  echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=Xk7Pq9mW2vB8nZ4cA1fH"}}' | redacted scrub
 
   # Test with inline JSON (Read)
-  echo '{"tool_name":"Read","tool_response":"SECRET_KEY=super_secret_value"}' | redacted scrub
+  echo '{"tool_name":"Read","tool_response":"SECRET_KEY=Xk7Pq9mW2vB8nZ4cA1fH"}' | redacted scrub
 
   # Test mode: any non-JSON stdin is scrubbed as raw text and printed
   echo 'TOKEN=mysecretvalue123' | redacted scrub`,
@@ -87,20 +87,17 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
 	},
 }
 
-// looksLikeHookPayload reports whether data begins with `{` after optional
-// leading whitespace, the shape of every Claude Code hook payload.
+// looksLikeHookPayload reports whether data is a JSON object — the shape of
+// every Claude Code hook payload. A leading `{` is necessary but not
+// sufficient: Ruby/PHP hash literals like `{"SID"=>"..."}` also start with
+// `{` but aren't valid JSON, so they should fall through to test mode where
+// the env_secret regex can do its job.
 func looksLikeHookPayload(data []byte) bool {
-	for _, b := range data {
-		switch b {
-		case ' ', '\t', '\r', '\n':
-			continue
-		case '{':
-			return true
-		default:
-			return false
-		}
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
 	}
-	return false
+	return json.Valid(trimmed)
 }
 
 func init() {
