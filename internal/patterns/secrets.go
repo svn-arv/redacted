@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -263,16 +264,54 @@ func (s *Scrubber) isAllowed(match string) bool {
 	return false
 }
 
-// envSecretRegex builds the env_secret catch-all for a custom keyword alternation.
-// Hyphens are treated as equivalent to underscores so http-style keys like
-// `api-key=...` or `x-api-key: ...` are caught alongside `API_KEY=...`.
+// envSecretRegex builds the env_secret catch-all. Two arms enforce a real
+// word boundary on the keyword:
 //
-// Whitespace around `[=:]` is restricted to spaces and tabs, never newlines.
-// Otherwise an empty `KEY=\nNEXT_KEY=...` would match across the line break and
-// redact the next line's key as if it were the value.
+//  1. snake/kebab: prefix/suffix must touch `_` or `-` (case-insensitive).
+//  2. PascalCase: prefix ends in lowercase, keyword is matched case-sensitive
+//     so the uppercase transition (e.g. `Account|Sid`) is what proves the
+//     boundary — keeps `Tasid`/`Presidential` out.
+//
+// Separator is `=`, `:`, or Ruby/PHP/Perl `=>`. Optional `"`/`'` on either
+// side accommodates quoted keys/values in Ruby/JSON/Python/PHP.
+//
+// Whitespace around the separator is space/tab only — otherwise an empty
+// `KEY=\nNEXT_KEY=...` would match across the newline.
 func envSecretRegex(keywords string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
-	return `(?i)\b[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*[ \t]*[=:][ \t]*` + config.ValueSafeChar + `{8,}`
+	cap := capitalizeAll(keywords)
+	snakeOrKebab := `(?:[A-Z0-9_\-]*[_\-])?(?:` + flex + `)(?:[_\-][A-Z0-9_\-]*)?`
+	camelOrPascal := `(?-i:[a-zA-Z0-9]*[a-z])?(?-i:` + cap + `)(?-i:[A-Z][a-zA-Z0-9]*)?`
+	return `(?i)\b(?:` + snakeOrKebab + `|` + camelOrPascal + `)` +
+		`["']?[ \t]*(?:=>?|:)[ \t]*["']?` + config.ValueSafeChar + `{8,}`
+}
+
+func capitalizeAll(keywords string) string {
+	parts := strings.Split(keywords, "|")
+	for i, p := range parts {
+		parts[i] = capitalizeKeyword(p)
+	}
+	return strings.Join(parts, "|")
+}
+
+// capitalizeKeyword: `_SID` -> `Sid`, `API_KEY` -> `ApiKey`.
+func capitalizeKeyword(kw string) string {
+	kw = strings.TrimLeft(kw, "_-")
+	var b strings.Builder
+	upperNext := true
+	for _, r := range kw {
+		if r == '_' || r == '-' {
+			upperNext = true
+			continue
+		}
+		if upperNext {
+			b.WriteRune(unicode.ToUpper(r))
+			upperNext = false
+		} else {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 // yamlSecretRegex builds the yaml_secret catch-all for a keyword alternation.

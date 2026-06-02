@@ -30,8 +30,8 @@ keywords:
   - DB_URL
   - DATABASE_URL
   - REDIS_URL
-  - _DSN
-  - _SID
+  - DSN
+  - SID
   - ACCOUNT_ID
   - AUTH_KEY
   - MASTER_KEY
