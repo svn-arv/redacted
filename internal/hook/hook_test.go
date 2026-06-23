@@ -163,8 +163,8 @@ func TestProcess_ScrubsNonBashTools(t *testing.T) {
 			resp, _ := json.Marshal("SECRET_KEY=" + stripe.Value)
 			payload, _ := json.Marshal(map[string]any{
 				"hook_event_name": "PostToolUse",
-				"tool_name":      tool,
-				"tool_response":  json.RawMessage(resp),
+				"tool_name":       tool,
+				"tool_response":   json.RawMessage(resp),
 			})
 
 			var out bytes.Buffer
@@ -197,8 +197,8 @@ func TestProcess_NonBashCleanOutput(t *testing.T) {
 	resp, _ := json.Marshal("just normal file content, nothing secret here")
 	payload, _ := json.Marshal(map[string]any{
 		"hook_event_name": "PostToolUse",
-		"tool_name":      "Read",
-		"tool_response":  json.RawMessage(resp),
+		"tool_name":       "Read",
+		"tool_response":   json.RawMessage(resp),
 	})
 
 	var out bytes.Buffer
@@ -220,8 +220,8 @@ func TestProcess_NonBashObjectResponse(t *testing.T) {
 	})
 	payload, _ := json.Marshal(map[string]any{
 		"hook_event_name": "PostToolUse",
-		"tool_name":      "WebFetch",
-		"tool_response":  json.RawMessage(resp),
+		"tool_name":       "WebFetch",
+		"tool_response":   json.RawMessage(resp),
 	})
 
 	var out bytes.Buffer
@@ -453,8 +453,8 @@ func TestProcess_StructuredResponsesDoNotLeak(t *testing.T) {
 			name:     "NotebookEdit",
 			toolName: "NotebookEdit",
 			response: map[string]any{
-				"filePath": "/tmp/notebook.ipynb",
-				"cellId":   "cell-0",
+				"filePath":  "/tmp/notebook.ipynb",
+				"cellId":    "cell-0",
 				"oldString": "STRIPE_KEY=" + secret,
 				"newString": "STRIPE_KEY=placeholder",
 			},

@@ -1,0 +1,21 @@
+version: "2"
+
+# Report every finding; the default caps silently truncate duplicates.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  exclusions:
+    presets:
+      # Don't flag unchecked writes to stdout/stderr and similar stdlib output.
+      - std-error-handling
+    rules:
+      # Unchecked errors in tests (WriteFile, Unmarshal, and the like) are fine.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

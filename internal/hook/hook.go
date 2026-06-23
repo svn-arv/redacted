@@ -94,7 +94,7 @@ func ProcessSafely(stdin io.Reader, stdout io.Writer, scrubber *patterns.Scrubbe
 		writeWithheld(stdout)
 		return
 	}
-	buf.WriteTo(stdout)
+	_, _ = buf.WriteTo(stdout)
 }
 
 // recoverToError runs fn, turning any panic into an error so callers can fail
@@ -113,7 +113,7 @@ func recoverToError(fn func() error) (err error) {
 func writeWithheld(w io.Writer) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	enc.Encode(Output{
+	_ = enc.Encode(Output{
 		Decision:           "block",
 		Reason:             "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.",
 		HookSpecificOutput: &HookSpecificOutput{HookEventName: "PostToolUse"},

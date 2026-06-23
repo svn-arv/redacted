@@ -150,7 +150,7 @@ func extractCwd(data []byte) string {
 	var partial struct {
 		Cwd string `json:"cwd"`
 	}
-	json.Unmarshal(data, &partial)
+	_ = json.Unmarshal(data, &partial)
 	return partial.Cwd
 }
 
@@ -158,6 +158,6 @@ func extractToolName(data []byte) string {
 	var partial struct {
 		ToolName string `json:"tool_name"`
 	}
-	json.Unmarshal(data, &partial)
+	_ = json.Unmarshal(data, &partial)
 	return partial.ToolName
 }

@@ -108,7 +108,7 @@ func installHookToPath(settingsPath, binPath string) error {
 	var existing []HookEntry
 	if raw, ok := hooks["PostToolUse"]; ok {
 		b, _ := json.Marshal(raw)
-		json.Unmarshal(b, &existing)
+		_ = json.Unmarshal(b, &existing)
 	}
 
 	// Filter out old redacted entries, keep everything else
