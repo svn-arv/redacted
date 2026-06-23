@@ -1,0 +1,9 @@
+token = not_token
+token: other_token
+TOKEN = OTHER_TOKEN_CONST
+secret_key = secret_key_var
+token = params[:token]
+api_key = ENV.fetch("API_KEY")
+client_id: user.account_id
+context_object: { credit_account_id: credit_account.id }
+const apiUrl = `https://api.example.com/${version}/users`

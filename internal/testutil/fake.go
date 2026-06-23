@@ -1,5 +1,5 @@
 // Package testutil generates fake secrets at runtime for testing.
-// Values match the regex patterns in patterns.yaml but never appear in source
+// Values match the regex patterns in engine.yml but never appear in source
 // code, avoiding GitHub push protection false positives.
 package testutil
 
@@ -215,6 +215,41 @@ func RubyGemsKey() Secret {
 // NewRelicKey returns NRAK- + 27 alphanumeric chars.
 func NewRelicKey() Secret {
 	return secret("NRAK-" + RandAlphaNum(27))
+}
+
+// OpenAIKey returns a modern OpenAI project key (sk-proj-...).
+func OpenAIKey() Secret {
+	return secret("sk-proj-" + RandAlphaNum(48))
+}
+
+// OpenAIClassicKey returns a classic OpenAI key (sk- + 48 chars).
+func OpenAIClassicKey() Secret {
+	return secret("sk-" + RandAlphaNum(48))
+}
+
+// GoogleAPIKey returns an AIza-prefixed Google API key.
+func GoogleAPIKey() Secret {
+	return secret("AIza" + randBase64URL(35))
+}
+
+// GitLabPAT returns a glpat- personal access token.
+func GitLabPAT() Secret {
+	return secret("glpat-" + RandAlphaNum(20))
+}
+
+// NPMToken returns an npm_ automation token.
+func NPMToken() Secret {
+	return secret("npm_" + RandAlphaNum(36))
+}
+
+// SlackWebhook returns a Slack incoming-webhook URL.
+func SlackWebhook() Secret {
+	return secret("https://hooks.slack.com/services/T" + randUpperAlphaNum(8) + "/B" + randUpperAlphaNum(8) + "/" + RandAlphaNum(24))
+}
+
+// PyPIToken returns a pypi- API token.
+func PyPIToken() Secret {
+	return secret("pypi-" + RandAlphaNum(60))
 }
 
 // PrivateKey returns a fake PEM block.

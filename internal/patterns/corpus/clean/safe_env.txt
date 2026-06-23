@@ -1,0 +1,8 @@
+PORT=3000
+LOG_LEVEL=debug
+RAILS_ENV=production
+APP_NAME=myapp
+NODE_ENV=development
+BASE_URL=https://example.com
+APP_URL=https://myapp.example.com
+TZ=UTC
