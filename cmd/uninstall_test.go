@@ -146,6 +146,27 @@ func TestRemoveHookFromPath_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestRemoveHookFromPath_ReturnsFalseOnWriteFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses file permission checks")
+	}
+	path := writeSettings(t, map[string]any{
+		"hooks": map[string]any{
+			"PostToolUse": []HookEntry{
+				{Matcher: "Bash", Hooks: []HookCommand{{Type: "command", Command: "/usr/local/bin/redacted scrub"}}},
+			},
+		},
+	})
+	// Read-only file: the read still succeeds but the rewrite cannot.
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	if removeHookFromPath(path) {
+		t.Error("expected false when the settings file cannot be rewritten")
+	}
+}
+
 // --- helpers ---
 
 func writeSettings(t *testing.T, settings map[string]any) string {

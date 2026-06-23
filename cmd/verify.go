@@ -206,14 +206,17 @@ func checkConfig() check {
 	return check{"config files", statusPass, detail}
 }
 
-func checkPatterns() check {
+// patternsNew is patterns.New, indirected so tests can force a panic.
+var patternsNew = patterns.New
+
+func checkPatterns() (c check) {
 	defer func() {
 		if r := recover(); r != nil {
-			// handled by the caller getting the zero-value check
+			c = check{"patterns load", statusFail, fmt.Sprintf("panic loading patterns: %v", r)}
 		}
 	}()
 
-	patterns.New()
+	patternsNew()
 	return check{"patterns load", statusPass, "all patterns compiled"}
 }
 

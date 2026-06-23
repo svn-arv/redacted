@@ -130,7 +130,7 @@ func removeHookFromPath(path string) bool {
 	var existing []HookEntry
 	if raw, ok := hooks["PostToolUse"]; ok {
 		b, _ := json.Marshal(raw)
-		json.Unmarshal(b, &existing)
+		_ = json.Unmarshal(b, &existing)
 	}
 
 	var filtered []HookEntry
@@ -157,7 +157,12 @@ func removeHookFromPath(path string) bool {
 		delete(settings, "hooks")
 	}
 
-	out, _ := json.MarshalIndent(settings, "", "  ")
-	os.WriteFile(path, out, 0o644)
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return false
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return false
+	}
 	return true
 }
