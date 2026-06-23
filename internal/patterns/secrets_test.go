@@ -217,6 +217,14 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"safe base url", "BASE_URL=https://example.com", true, "", ""},
 		{"safe app url", "APP_URL=https://myapp.com", true, "", ""},
 
+		// === Bare URLs: a scheme colon (https://) is not a KEY:value separator ===
+		{"bare github issue url", "https://github.com/Luce-MG/luce-product-design/issues/123", true, "", ""},
+		{"bare github pull url in text", "See https://github.com/Luce-MG/luce-product-design/pull/4567 for details", true, "", ""},
+		{"bare url mixed-case path", "https://docs.example.com/d/abcDEF123ghiJKL/edit", true, "", ""},
+		// Known residual: a port colon is a second host:port separator, so an
+		// uppercase path segment after :PORT can still redact (port-less URLs are clean).
+		{"port url uppercase path (known residual)", "https://example.com:8080/FooBar/Baz123", false, "", ""},
+
 		// === Identifier-like values in source code (should NOT redact) ===
 		{"ruby assignment", "token = not_token", true, "", ""},
 		{"ruby colon", "token: other_token", true, "", ""},
@@ -627,5 +635,137 @@ func TestScrub_EmptyValueDoesNotConsumeNextLine(t *testing.T) {
 		if result.Redacted {
 			t.Errorf("expected no redaction for empty-value input %q, got: %q", in, result.Text)
 		}
+	}
+}
+
+// TestScrub_HeuristicValues covers the secret_value catch-all: an assignment is
+// redacted when the VALUE is statistically secret-like, regardless of whether
+// the key contains a known keyword. This is the generalization past the fixed
+// keyword list. Precision-first, so structured high-entropy shapes (UUIDs, git
+// SHAs, hex digests) must pass through untouched.
+func TestScrub_HeuristicValues(t *testing.T) {
+	redact := []struct {
+		name, input, wantSubstr string
+	}{
+		// Non-keyword keys whose values look like random credentials.
+		{"non-keyword mixed token =", "WIDGET=aB3xK9pLq2mNz7rT4vWy", "WIDGET= [REDACTED"},
+		{"non-keyword mixed token :", "thing: aB3xK9pLq2mNz7rT4vWy", "thing: [REDACTED"},
+		{"unknown vendor key", "DECK_HANDLE=Zx9Kq2Lm8Pn4Rt6Vw1Yb3Hc", "DECK_HANDLE= [REDACTED"},
+	}
+	for _, tt := range redact {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Scrub(tt.input)
+			if !result.Redacted {
+				t.Fatalf("expected redaction, got unchanged: %q", result.Text)
+			}
+			if !strings.Contains(result.Text, tt.wantSubstr) {
+				t.Errorf("expected %q in output, got: %q", tt.wantSubstr, result.Text)
+			}
+		})
+	}
+
+	clean := []struct {
+		name, input string
+	}{
+		{"git sha lowercase hex", "GIT_COMMIT=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"},
+		{"uuid", "BUILD_ID=550e8400-e29b-41d4-a716-446655440000"},
+		{"sha256 hex digest", "CHECKSUM=ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"},
+		{"semver", "RELEASE=v1.2.3-rc.1"},
+		{"iso timestamp", "STAMP=2026-06-17T12:00:00Z"},
+		{"single-case alnum value", "API_HASH=abcdef1234567890abcdef12"},
+		{"low-entropy repetitive 3-class", "CODE=Aa1Aa1Aa1Aa1Aa1Aa1Aa1Aa1"},
+		{"over max length", "BLOB=" + testutil.RandAlphaNum(140)},
+		{"short mixed value", "NONCE=aB3xK9"},
+		{"url without credentials", "ENDPOINT=https://api.example.com/v2/resources"},
+		{"file path", "OUTPUT=/var/log/app/output/file.log"},
+	}
+	for _, tt := range clean {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Scrub(tt.input)
+			if result.Redacted {
+				t.Errorf("expected no redaction, got: %q", result.Text)
+			}
+		})
+	}
+}
+
+// TestScrub_CodeReferenceValues covers the main source-code false positive:
+// when a keyword-named variable is assigned from an environment lookup, the
+// captured value is the code reference (a constant path or method chain), not a
+// literal secret, so it must pass through unredacted.
+func TestScrub_CodeReferenceValues(t *testing.T) {
+	clean := []string{
+		// Dotted constant paths and method chains.
+		"secret_key = ENV.fetch('SECRET_KEY')",
+		"api_key: ENV.fetch('SECRET_KEY')",
+		"SECRET_KEY = ENV.fetch('SECRET_KEY')",
+		"config.secret_token = Rails.application.secrets.secret_key_base",
+		"twilio_auth_token = Rails.application.credentials.dig(:twilio, :auth_token)",
+		"password = ENV['DB_PASSWORD']",
+		// Method calls and index access with no dot (trailing `(` or `[`).
+		"queue_sid: GetTwilioSid(proxy_address, 'TWILIO_QUEUE_SID')",
+		"auth_token: fetchToken(client)",
+		"secret = configuration[:database]",
+		// Ruby `::` namespace constant.
+		"secret_key: MyApp::Config::TOKEN_V2",
+	}
+	for _, in := range clean {
+		if result := Scrub(in); result.Redacted {
+			t.Errorf("expected no redaction for code reference %q, got: %q", in, result.Text)
+		}
+	}
+
+	// Guardrails: a real literal assigned in source must still be redacted, and a
+	// single-case value (no uppercase code segment) is not exempted by a separator.
+	redactGuards := []string{
+		"secret_key = Xk7Pq9mW2vB8nZ4cA1fH",
+		"TOKEN=abc.def.ghi123",
+		"SECRET=abcdefgh::ijklmnopqr",
+	}
+	for _, in := range redactGuards {
+		if result := Scrub(in); !result.Redacted {
+			t.Errorf("expected redaction for %q, got: %q", in, result.Text)
+		}
+	}
+}
+
+// TestSecretLike checks each gate of the value scorer in isolation, so a change
+// to one threshold can't silently weaken the others.
+func TestSecretLike(t *testing.T) {
+	cases := []struct {
+		name string
+		v    string
+		want bool
+	}{
+		{"random mixed-case alphanumeric", "aB3xK9pLq2mNz7rT", true},
+		{"too short", "aB3xK9pL", false},
+		{"too long", strings.Repeat("aB3xK9pLq2mNz7rT", 9), false}, // 144 chars
+		{"lowercase hex only (2 classes)", "a1b2c3d4e5f6a7b8c9d0", false},
+		{"uppercase letters only (1 class)", "ABCDEFGHIJKLMNOP", false},
+		{"mixed classes but repetitive (low entropy)", "Aa1Aa1Aa1Aa1Aa1Aa1", false},
+		{"empty", "", false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultScrubber.secretLike(tt.v); got != tt.want {
+				t.Errorf("secretLike(%q) = %v, want %v", tt.v, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestShannonEntropy checks the ordering the scorer relies on: a varied string
+// is less predictable (higher entropy) than a repetitive one of the same length.
+func TestShannonEntropy(t *testing.T) {
+	if h := shannonEntropy(""); h != 0 {
+		t.Errorf("entropy of empty string = %v, want 0", h)
+	}
+	if h := shannonEntropy("aaaaaaaa"); h != 0 {
+		t.Errorf("entropy of a single repeated rune = %v, want 0", h)
+	}
+	varied := shannonEntropy("abcdefgh")
+	repetitive := shannonEntropy("aabbaabb")
+	if varied <= repetitive {
+		t.Errorf("expected varied (%v) > repetitive (%v)", varied, repetitive)
 	}
 }

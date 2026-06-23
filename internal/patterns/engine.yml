@@ -1,4 +1,4 @@
-# patterns.yaml — single source of truth for secret detection.
+# engine.yml — single source of truth for secret detection.
 # Consumed by Go (//go:embed at compile time) and TypeScript (read at runtime).
 #
 # Order matters: specific patterns run first, catch-alls last.
@@ -10,6 +10,14 @@
 # so matches stay inside a single token and can't leak past a string literal
 # or expression boundary in source code.
 value_safe_char: '[^\s\[\]()@,;"''`{}<>\\]'
+
+# Thresholds for the secret_value catch-all: redact a KEY=value whose value looks
+# like a random credential, even when the key is not a known keyword below.
+heuristic:
+  min_length: 16 # ignore values shorter than this
+  max_length: 128 # ignore values longer than this (likely a blob, not a key)
+  min_char_classes: 3 # require lower + upper + digit together (excludes UUIDs, hashes)
+  min_entropy: 3.5 # minimum Shannon entropy, bits per character
 
 # Keywords used to build the env_secret and yaml_secret catch-all patterns.
 # Any env variable whose name contains one of these words gets its value redacted.
@@ -111,7 +119,33 @@ patterns:
   - name: newrelic_key
     regex: 'NRAK-[A-Za-z0-9]{20,}'
 
+  - name: openai_key
+    regex: 'sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'
+
+  # Classic OpenAI key: sk- + exactly 48 chars. \b stops it matching sk-ant- (Anthropic).
+  - name: openai_classic_key
+    regex: '\bsk-[A-Za-z0-9]{48}\b'
+
+  - name: google_api_key
+    regex: 'AIza[A-Za-z0-9_-]{35}'
+
+  - name: gitlab_pat
+    regex: 'glpat-[A-Za-z0-9_-]{20,}'
+
+  - name: npm_token
+    regex: 'npm_[A-Za-z0-9]{36}'
+
+  - name: slack_webhook
+    regex: 'https://hooks\.slack\.com/services/[A-Za-z0-9/]+'
+
+  - name: pypi_token
+    regex: 'pypi-[A-Za-z0-9_-]{50,}'
+
   # The char class excludes ${ } so ${VAR} placeholders in connection-string
   # templates don't match (issue #1); real credentialed URLs contain none.
   - name: database_url
     regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\${}]+'
+
+  # scheme://user:pass@host for any scheme (e.g. postgis), catching passworded URLs database_url doesn't list. Runs after it so known schemes keep their label.
+  - name: credentialed_url
+    regex: '(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]*:[^\s:/@]+@[^\s"''`\\${}]+'

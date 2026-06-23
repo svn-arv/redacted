@@ -1,0 +1,8 @@
+On branch main
+Your branch is up to date with 'origin/main'.
+total 8
+-rw-r--r-- 1 user staff 1234 Jan  1 00:00 main.go
+added 150 packages in 3s
+ok   github.com/example/pkg   0.003s
+Compiled successfully in 1200ms
+src/components/Button.test.tsx (5 tests) 42ms
