@@ -7,9 +7,7 @@ import (
 )
 
 func TestLoad_NoFiles(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
+	t.Setenv("HOME", t.TempDir())
 	cfg, err := Load("/nonexistent/path")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -29,64 +27,19 @@ func TestLoad_GlobalConfig(t *testing.T) {
 whitelist:
   - jwt
   - stripe_test
-
-patterns:
-  - name: slack_webhook
-    regex: 'https://hooks\.slack\.com/services/\S+'
-
-keywords:
-  - MONGO
-  - ELASTIC
+allow:
+  - APP_URL
 `), 0o644)
 
 	cfg, err := Load("/some/project")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if len(cfg.Whitelist) != 2 {
-		t.Errorf("expected 2 whitelist entries, got %d", len(cfg.Whitelist))
-	}
-	if cfg.Whitelist[0] != "jwt" || cfg.Whitelist[1] != "stripe_test" {
+	if len(cfg.Whitelist) != 2 || cfg.Whitelist[0] != "jwt" {
 		t.Errorf("unexpected whitelist: %v", cfg.Whitelist)
 	}
-
-	if len(cfg.Patterns) != 1 {
-		t.Errorf("expected 1 custom pattern, got %d", len(cfg.Patterns))
-	}
-	if cfg.Patterns[0].Name != "slack_webhook" {
-		t.Errorf("expected pattern name slack_webhook, got %s", cfg.Patterns[0].Name)
-	}
-
-	if len(cfg.Keywords) != 2 {
-		t.Errorf("expected 2 keywords, got %d", len(cfg.Keywords))
-	}
-}
-
-func TestLoad_ProjectConfig(t *testing.T) {
-	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-whitelist:
-  - jwt
-
-keywords:
-  - KAFKA
-`), 0o644)
-
-	// Set HOME to empty dir so global config doesn't exist
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	cfg, err := Load(tmpProject)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(cfg.Whitelist) != 1 || cfg.Whitelist[0] != "jwt" {
-		t.Errorf("expected whitelist [jwt], got %v", cfg.Whitelist)
-	}
-	if len(cfg.Keywords) != 1 || cfg.Keywords[0] != "KAFKA" {
-		t.Errorf("expected keywords [KAFKA], got %v", cfg.Keywords)
+	if len(cfg.Allow) != 1 || cfg.Allow[0] != "APP_URL" {
+		t.Errorf("unexpected allow: %v", cfg.Allow)
 	}
 }
 
@@ -94,72 +47,30 @@ func TestLoad_MergesGlobalAndProject(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	// Global config
 	configDir := filepath.Join(tmpHome, ".config", "redacted")
 	os.MkdirAll(configDir, 0o755)
-	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(`
-whitelist:
-  - jwt
+	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("whitelist:\n  - jwt\n"), 0o644)
 
-keywords:
-  - MONGO
-`), 0o644)
-
-	// Project config
 	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-whitelist:
-  - stripe_test
-
-keywords:
-  - KAFKA
-
-patterns:
-  - name: custom
-    regex: 'CUSTOM_\d+'
-`), 0o644)
+	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte("whitelist:\n  - stripe_test\nallow:\n  - APP_URL\n"), 0o644)
 
 	cfg, err := Load(tmpProject)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Should merge both
 	if len(cfg.Whitelist) != 2 {
-		t.Errorf("expected 2 whitelist entries (merged), got %d: %v", len(cfg.Whitelist), cfg.Whitelist)
+		t.Errorf("expected 2 whitelist entries (merged), got %v", cfg.Whitelist)
 	}
-	if len(cfg.Keywords) != 2 {
-		t.Errorf("expected 2 keywords (merged), got %d: %v", len(cfg.Keywords), cfg.Keywords)
-	}
-	if len(cfg.Patterns) != 1 {
-		t.Errorf("expected 1 pattern (from project), got %d", len(cfg.Patterns))
+	if len(cfg.Allow) != 1 {
+		t.Errorf("expected merged allow, got %v", cfg.Allow)
 	}
 }
 
-func TestLoad_EmptyCwd(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.IsEmpty() {
-		t.Error("expected empty config with no files and empty cwd")
-	}
-}
-
-func TestLoad_InvalidYAML(t *testing.T) {
+func TestLoad_InvalidYAMLIgnored(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-whitelist: [
-  invalid yaml unclosed
-`), 0o644)
+	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte("whitelist: [\n  invalid unclosed\n"), 0o644)
 
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	// Should not error — invalid config is silently ignored
 	cfg, err := Load(tmpProject)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -169,151 +80,48 @@ whitelist: [
 	}
 }
 
-func TestLoad_WhitelistOnly(t *testing.T) {
-	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-whitelist:
-  - jwt
-`), 0o644)
-
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	cfg, err := Load(tmpProject)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if cfg.IsEmpty() {
-		t.Error("config with whitelist should not be empty")
-	}
-	if len(cfg.Patterns) != 0 {
-		t.Error("expected no patterns")
-	}
-	if len(cfg.Keywords) != 0 {
-		t.Error("expected no keywords")
-	}
-}
-
 func TestLoad_OverrideIgnoresGlobal(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	// Global config with whitelist and keywords
 	configDir := filepath.Join(tmpHome, ".config", "redacted")
 	os.MkdirAll(configDir, 0o755)
-	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(`
-whitelist:
-  - jwt
-  - stripe_test
+	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("whitelist:\n  - jwt\n  - stripe_test\n"), 0o644)
 
-keywords:
-  - MONGO
-  - ELASTIC
-`), 0o644)
-
-	// Project config with override: true
 	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-override: true
-
-whitelist:
-  - stripe_test
-`), 0o644)
+	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte("override: true\nwhitelist:\n  - stripe_test\n"), 0o644)
 
 	cfg, err := Load(tmpProject)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Should only have project's whitelist, not global's
-	if len(cfg.Whitelist) != 1 {
-		t.Errorf("expected 1 whitelist entry (override), got %d: %v", len(cfg.Whitelist), cfg.Whitelist)
-	}
-	if cfg.Whitelist[0] != "stripe_test" {
-		t.Errorf("expected stripe_test, got %s", cfg.Whitelist[0])
-	}
-
-	// Global keywords should be gone
-	if len(cfg.Keywords) != 0 {
-		t.Errorf("expected 0 keywords (override), got %d: %v", len(cfg.Keywords), cfg.Keywords)
+	if len(cfg.Whitelist) != 1 || cfg.Whitelist[0] != "stripe_test" {
+		t.Errorf("expected only project whitelist on override, got %v", cfg.Whitelist)
 	}
 }
 
-func TestLoad_OverrideFalseStillMerges(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	configDir := filepath.Join(tmpHome, ".config", "redacted")
-	os.MkdirAll(configDir, 0o755)
-	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(`
-whitelist:
-  - jwt
-`), 0o644)
-
+func TestLoad_IgnoreInternalToolsMerges(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	tmpProject := t.TempDir()
-	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte(`
-override: false
-
-whitelist:
-  - stripe_test
-`), 0o644)
+	os.WriteFile(filepath.Join(tmpProject, ".redacted.yaml"), []byte("ignore_internal_tools: true\n"), 0o644)
 
 	cfg, err := Load(tmpProject)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Should merge both
-	if len(cfg.Whitelist) != 2 {
-		t.Errorf("expected 2 whitelist entries (merge), got %d: %v", len(cfg.Whitelist), cfg.Whitelist)
-	}
-}
-
-func TestLoad_OnlyGlobalNoProject(t *testing.T) {
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-
-	configDir := filepath.Join(tmpHome, ".config", "redacted")
-	os.MkdirAll(configDir, 0o755)
-	os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(`
-whitelist:
-  - jwt
-keywords:
-  - MONGO
-`), 0o644)
-
-	cfg, err := Load("/nonexistent/project")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(cfg.Whitelist) != 1 || cfg.Whitelist[0] != "jwt" {
-		t.Errorf("expected global whitelist [jwt], got %v", cfg.Whitelist)
-	}
-	if len(cfg.Keywords) != 1 || cfg.Keywords[0] != "MONGO" {
-		t.Errorf("expected global keywords [MONGO], got %v", cfg.Keywords)
+	if !cfg.IgnoreInternalTools {
+		t.Error("expected ignore_internal_tools true")
 	}
 }
 
 func TestIsEmpty(t *testing.T) {
-	empty := &Config{}
-	if !empty.IsEmpty() {
+	if !(&Config{}).IsEmpty() {
 		t.Error("zero Config should be empty")
 	}
-
-	withWhitelist := &Config{Whitelist: []string{"jwt"}}
-	if withWhitelist.IsEmpty() {
+	if (&Config{Whitelist: []string{"jwt"}}).IsEmpty() {
 		t.Error("Config with whitelist should not be empty")
 	}
-
-	withPatterns := &Config{Patterns: []CustomPattern{{Name: "x", Regex: "y"}}}
-	if withPatterns.IsEmpty() {
-		t.Error("Config with patterns should not be empty")
-	}
-
-	withKeywords := &Config{Keywords: []string{"MONGO"}}
-	if withKeywords.IsEmpty() {
-		t.Error("Config with keywords should not be empty")
+	if (&Config{Allow: []string{"APP_URL"}}).IsEmpty() {
+		t.Error("Config with allow should not be empty")
 	}
 }

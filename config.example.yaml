@@ -1,0 +1,19 @@
+# config.example.yaml — app/operational policy. Copy to
+# ~/.config/redacted/config.yaml (global) or .redacted.yaml (project root).
+# Detection rules (heuristic, patterns, keywords) live in engine.yml instead.
+
+# Turn off built-in patterns by name (run `redacted stats` to see the names).
+whitelist:
+  - jwt
+  - stripe_test
+
+# Variable names that must never be redacted, even when they match a rule.
+allow:
+  - APP_URL
+  - TWILIO_WORKFLOW_SID
+
+# Only scrub Bash output, skip Read/Grep/WebFetch.
+ignore_internal_tools: false
+
+# In a project file, ignore the global config entirely instead of merging.
+override: false
