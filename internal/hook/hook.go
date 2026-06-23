@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,24 +70,93 @@ func Process(stdin io.Reader, stdout io.Writer, scrubber *patterns.Scrubber) err
 		scrub = scrubber.Scrub
 	}
 
+	var (
+		byPattern map[string]int
+		perr      error
+	)
 	if header.ToolName == "Bash" {
-		return processBash(data, scrub, stdout)
+		byPattern, perr = processBash(data, scrub, stdout)
+	} else {
+		byPattern, perr = processGeneric(data, header.ToolName, scrub, stdout)
 	}
-	return processGeneric(data, header.ToolName, scrub, stdout)
+	if perr != nil {
+		return perr
+	}
+	record(header.ToolName, byPattern)
+	return nil
+}
+
+// ProcessSafely wraps Process so a scrub error or panic withholds the tool
+// output (fail closed) rather than letting the raw, unscrubbed output through.
+func ProcessSafely(stdin io.Reader, stdout io.Writer, scrubber *patterns.Scrubber) {
+	var buf bytes.Buffer
+	if err := recoverToError(func() error { return Process(stdin, &buf, scrubber) }); err != nil {
+		writeWithheld(stdout)
+		return
+	}
+	buf.WriteTo(stdout)
+}
+
+// recoverToError runs fn, turning any panic into an error so callers can fail
+// closed instead of crashing and leaking output.
+func recoverToError(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("scrub panicked: %v", r)
+		}
+	}()
+	return fn()
+}
+
+// writeWithheld emits a block telling the model the output was suppressed
+// because the scrubber failed.
+func writeWithheld(w io.Writer) {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.Encode(Output{
+		Decision:           "block",
+		Reason:             "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.",
+		HookSpecificOutput: &HookSpecificOutput{HookEventName: "PostToolUse"},
+	})
+}
+
+// Recorder, if set, receives each run's per-pattern redaction counts for stats.
+// Default nil (no-op); the CLI wires it to the stats package.
+var Recorder func(tool string, byPattern map[string]int)
+
+func record(tool string, byPattern map[string]int) {
+	if Recorder != nil && len(byPattern) > 0 {
+		Recorder(tool, byPattern)
+	}
+}
+
+// mergeCounts adds b into a and returns the result, reusing a when possible.
+func mergeCounts(a, b map[string]int) map[string]int {
+	if len(b) == 0 {
+		return a
+	}
+	if a == nil {
+		a = make(map[string]int, len(b))
+	}
+	for k, v := range b {
+		a[k] += v
+	}
+	return a
 }
 
 // processBash handles Bash tool output with structured stdout/stderr scrubbing.
-func processBash(data []byte, scrub func(string) patterns.Result, w io.Writer) error {
+// It returns the combined per-pattern redaction counts.
+func processBash(data []byte, scrub func(string) patterns.Result, w io.Writer) (map[string]int, error) {
 	var input Input
 	if err := json.Unmarshal(data, &input); err != nil {
-		return fmt.Errorf("parse hook payload: %w", err)
+		return nil, fmt.Errorf("parse hook payload: %w", err)
 	}
 
 	stdoutResult := scrub(input.ToolResponse.Stdout)
 	stderrResult := scrub(input.ToolResponse.Stderr)
 
 	if !stdoutResult.Redacted && !stderrResult.Redacted {
-		return nil
+		return nil, nil
 	}
 
 	total := stdoutResult.Count + stderrResult.Count
@@ -95,24 +165,27 @@ func processBash(data []byte, scrub func(string) patterns.Result, w io.Writer) e
 		redactedOutput += "\n[stderr]\n" + stderrResult.Text
 	}
 
-	return writeBlock(w, total, "command", redactedOutput)
+	if err := writeBlock(w, total, "command", redactedOutput); err != nil {
+		return nil, err
+	}
+	return mergeCounts(stdoutResult.ByPattern, stderrResult.ByPattern), nil
 }
 
 // processGeneric scrubs non-Bash tool responses. Structured responses are
 // summarized to only the redacted lines so JSON keys and unrelated fields
 // do not leak into the block reason Claude reads as the replacement result.
-func processGeneric(data []byte, toolName string, scrub func(string) patterns.Result, w io.Writer) error {
+func processGeneric(data []byte, toolName string, scrub func(string) patterns.Result, w io.Writer) (map[string]int, error) {
 	var raw struct {
 		ToolResponse json.RawMessage `json:"tool_response"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parse tool_response: %w", err)
+		return nil, fmt.Errorf("parse tool_response: %w", err)
 	}
 
 	ex := extractText(raw.ToolResponse)
 	result := scrub(ex.Text)
 	if !result.Redacted {
-		return nil
+		return nil, nil
 	}
 
 	content := result.Text
@@ -120,7 +193,10 @@ func processGeneric(data []byte, toolName string, scrub func(string) patterns.Re
 		content = summarizeScrubbed(result.Text)
 	}
 
-	return writeBlock(w, result.Count, toolName, content)
+	if err := writeBlock(w, result.Count, toolName, content); err != nil {
+		return nil, err
+	}
+	return result.ByPattern, nil
 }
 
 type fileResponse struct {

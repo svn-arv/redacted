@@ -11,6 +11,7 @@ import (
 	"github.com/svn-arv/redacted/internal/config"
 	"github.com/svn-arv/redacted/internal/hook"
 	"github.com/svn-arv/redacted/internal/patterns"
+	"github.com/svn-arv/redacted/internal/stats"
 )
 
 var scrubCmd = &cobra.Command{
@@ -55,7 +56,8 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
 
 		cwd := extractCwd(data)
 		cfg, _ := config.Load(cwd)
-		scrubber := buildScrubberFromConfig(cfg)
+		eng, _ := config.LoadEngine(cwd)
+		scrubber := buildScrubberFromConfig(cfg, eng)
 
 		// Test mode: if stdin isn't a JSON object, scrub as raw text and
 		// print to stdout. Hook payloads always start with `{`, so a
@@ -80,9 +82,8 @@ Set ignore_internal_tools: true in config to only scrub Bash output.`,
 			}
 		}
 
-		if err := hook.Process(bytes.NewReader(data), os.Stdout, scrubber); err != nil {
-			return fmt.Errorf("scrub: %w", err)
-		}
+		hook.Recorder = stats.Record
+		hook.ProcessSafely(bytes.NewReader(data), os.Stdout, scrubber)
 		return nil
 	},
 }
@@ -104,29 +105,42 @@ func init() {
 	rootCmd.AddCommand(scrubCmd)
 }
 
-// buildScrubberFromConfig creates a configured Scrubber from loaded config.
-// Returns nil if no customization needed (hook.Process falls back to default).
-func buildScrubberFromConfig(cfg *config.Config) *patterns.Scrubber {
-	if cfg == nil || cfg.IsEmpty() {
+// buildScrubberFromConfig builds a Scrubber from app config (whitelist, allow)
+// and engine config (heuristic, keywords, patterns). Returns nil when neither
+// customizes anything, so hook.Process falls back to the default scrubber.
+func buildScrubberFromConfig(cfg *config.Config, eng *config.EngineConfig) *patterns.Scrubber {
+	appEmpty := cfg == nil || cfg.IsEmpty()
+	engEmpty := eng == nil || eng.IsEmpty()
+	if appEmpty && engEmpty {
 		return nil
 	}
 
 	var opts []patterns.Option
 
-	if len(cfg.Whitelist) > 0 {
-		opts = append(opts, patterns.WithWhitelist(cfg.Whitelist...))
+	if cfg != nil {
+		if len(cfg.Whitelist) > 0 {
+			opts = append(opts, patterns.WithWhitelist(cfg.Whitelist...))
+		}
+		if len(cfg.Allow) > 0 {
+			opts = append(opts, patterns.WithAllow(cfg.Allow...))
+		}
 	}
 
-	for _, p := range cfg.Patterns {
-		opts = append(opts, patterns.WithExtra(p.Name, p.Regex))
-	}
-
-	if len(cfg.Keywords) > 0 {
-		opts = append(opts, patterns.WithKeywords(cfg.Keywords...))
-	}
-
-	if len(cfg.Allow) > 0 {
-		opts = append(opts, patterns.WithAllow(cfg.Allow...))
+	if eng != nil {
+		if eng.Heuristic != (config.HeuristicConfig{}) {
+			opts = append(opts, patterns.WithHeuristic(patterns.HeuristicConfig{
+				MinLength:      eng.Heuristic.MinLength,
+				MaxLength:      eng.Heuristic.MaxLength,
+				MinCharClasses: eng.Heuristic.MinCharClasses,
+				MinEntropy:     eng.Heuristic.MinEntropy,
+			}))
+		}
+		for _, p := range eng.Patterns {
+			opts = append(opts, patterns.WithExtra(p.Name, p.Regex))
+		}
+		if len(eng.Keywords) > 0 {
+			opts = append(opts, patterns.WithKeywords(eng.Keywords...))
+		}
 	}
 
 	return patterns.New(opts...)

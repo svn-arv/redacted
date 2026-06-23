@@ -165,39 +165,41 @@ func checkConfig() check {
 	}
 
 	homeDir, _ := os.UserHomeDir()
-	globalPath := filepath.Join(homeDir, ".config", "redacted", "config.yaml")
-	projectPath := filepath.Join(cwd, ".redacted.yaml")
-
-	_, globalErr := os.Stat(globalPath)
-	_, projectErr := os.Stat(projectPath)
-
-	if globalErr != nil && projectErr != nil {
+	files := []struct{ label, path string }{
+		{"global config", filepath.Join(homeDir, ".config", "redacted", "config.yaml")},
+		{"project config", filepath.Join(cwd, ".redacted.yaml")},
+		{"global engine", filepath.Join(homeDir, ".config", "redacted", "engine.yml")},
+		{"project engine", filepath.Join(cwd, ".redacted.engine.yml")},
+	}
+	var sources []string
+	for _, f := range files {
+		if _, err := os.Stat(f.path); err == nil {
+			sources = append(sources, f.label)
+		}
+	}
+	if len(sources) == 0 {
 		return check{"config files", statusPass, "none found (using built-in defaults)"}
 	}
+	detail := strings.Join(sources, ", ") + " loaded"
 
-	var sources []string
-	if globalErr == nil {
-		sources = append(sources, "global")
+	eng, _ := config.LoadEngine(cwd)
+	var extras []string
+	if n := len(cfg.Whitelist); n > 0 {
+		extras = append(extras, fmt.Sprintf("%d whitelisted", n))
 	}
-	if projectErr == nil {
-		sources = append(sources, "project")
+	if n := len(cfg.Allow); n > 0 {
+		extras = append(extras, fmt.Sprintf("%d allowed vars", n))
 	}
-	detail := strings.Join(sources, " + ") + " loaded"
-
-	if !cfg.IsEmpty() {
-		var extras []string
-		if n := len(cfg.Whitelist); n > 0 {
-			extras = append(extras, fmt.Sprintf("%d whitelisted", n))
-		}
-		if n := len(cfg.Patterns); n > 0 {
-			extras = append(extras, fmt.Sprintf("%d custom patterns", n))
-		}
-		if n := len(cfg.Keywords); n > 0 {
-			extras = append(extras, fmt.Sprintf("%d extra keywords", n))
-		}
-		if n := len(cfg.Allow); n > 0 {
-			extras = append(extras, fmt.Sprintf("%d allowed vars", n))
-		}
+	if n := len(eng.Patterns); n > 0 {
+		extras = append(extras, fmt.Sprintf("%d custom patterns", n))
+	}
+	if n := len(eng.Keywords); n > 0 {
+		extras = append(extras, fmt.Sprintf("%d extra keywords", n))
+	}
+	if eng.Heuristic != (config.HeuristicConfig{}) {
+		extras = append(extras, "heuristic tuned")
+	}
+	if len(extras) > 0 {
 		detail += " (" + strings.Join(extras, ", ") + ")"
 	}
 

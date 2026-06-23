@@ -1,0 +1,23 @@
+# engine.example.yml — detection rules. Copy to ~/.config/redacted/engine.yml
+# (global) or .redacted.engine.yml (project root). Anything you omit keeps the
+# built-in default. This file tunes WHAT counts as a secret; operational policy
+# (whitelist, allow, etc.) lives in config.yaml instead.
+
+# Heuristic scorer thresholds for the secret_value catch-all. Raising these
+# reduces false positives. Lowering min_length below the built-in 16 needs a
+# rebuild, since the candidate regex floor is compiled in.
+heuristic:
+  min_length: 16 # ignore values shorter than this
+  max_length: 128 # ignore values longer than this
+  min_char_classes: 3 # require lower + upper + digit together
+  min_entropy: 3.5 # minimum Shannon entropy, bits per character
+
+# Extra env-name keywords: any KEY containing one gets its value redacted.
+keywords:
+  - MONGO
+  - ELASTIC
+
+# Extra vendor patterns. These run before the catch-alls.
+patterns:
+  - name: openai_key
+    regex: 'sk-proj-[A-Za-z0-9_-]{20,}'

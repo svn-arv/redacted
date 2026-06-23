@@ -15,20 +15,12 @@ type Config struct {
 	// Whitelist skips built-in patterns by name.
 	Whitelist []string `yaml:"whitelist"`
 
-	// Patterns adds custom regex patterns.
-	Patterns []CustomPattern `yaml:"patterns"`
-
-	// Keywords adds custom env variable name keywords to the catch-all.
-	Keywords []string `yaml:"keywords"`
-
-	// Allow lists variable names that should never be redacted.
-	// Matches are case-insensitive and check if the variable name
-	// appears in the matched text.
+	// Allow lists variable names that should never be redacted (case-insensitive,
+	// substring match on the matched text).
 	Allow []string `yaml:"allow"`
 
-	// IgnoreInternalTools, when true, skips scrubbing for Claude Code's
-	// internal tools (Read, Grep, WebFetch, etc.) and only scrubs Bash output.
-	// Default is false, meaning all tools are scrubbed.
+	// IgnoreInternalTools, when true, only scrubs Bash output and skips Claude
+	// Code's internal tools (Read, Grep, WebFetch, etc.).
 	IgnoreInternalTools bool `yaml:"ignore_internal_tools"`
 }
 
@@ -42,9 +34,8 @@ type CustomPattern struct {
 //   - ~/.config/redacted/config.yaml  (global)
 //   - <cwd>/.redacted.yaml            (project)
 //
-// By default, project config merges with global (whitelists, patterns,
-// keywords combine). If the project config sets override: true, global
-// config is ignored entirely.
+// By default, project config merges with global (whitelist and allow combine).
+// If the project config sets override: true, global config is ignored entirely.
 //
 // Missing files are silently ignored.
 func Load(cwd string) (*Config, error) {
@@ -87,7 +78,7 @@ func Load(cwd string) (*Config, error) {
 
 // IsEmpty returns true if no config was loaded.
 func (c *Config) IsEmpty() bool {
-	return len(c.Whitelist) == 0 && len(c.Patterns) == 0 && len(c.Keywords) == 0 && len(c.Allow) == 0
+	return len(c.Whitelist) == 0 && len(c.Allow) == 0
 }
 
 func loadFile(path string) (*Config, error) {
@@ -105,8 +96,84 @@ func loadFile(path string) (*Config, error) {
 
 func merge(dst, src *Config) {
 	dst.Whitelist = append(dst.Whitelist, src.Whitelist...)
-	dst.Patterns = append(dst.Patterns, src.Patterns...)
-	dst.Keywords = append(dst.Keywords, src.Keywords...)
 	dst.Allow = append(dst.Allow, src.Allow...)
 	dst.IgnoreInternalTools = dst.IgnoreInternalTools || src.IgnoreInternalTools
+}
+
+// EngineConfig overrides detection rules, loaded from engine.yml (global) and
+// .redacted.engine.yml (project). config.yaml stays app/operational policy.
+type EngineConfig struct {
+	Override  bool            `yaml:"override"`
+	Heuristic HeuristicConfig `yaml:"heuristic"`
+	Keywords  []string        `yaml:"keywords"`
+	Patterns  []CustomPattern `yaml:"patterns"`
+}
+
+// HeuristicConfig overrides secret_value scorer thresholds; a zero field keeps the default.
+type HeuristicConfig struct {
+	MinLength      int     `yaml:"min_length"`
+	MaxLength      int     `yaml:"max_length"`
+	MinCharClasses int     `yaml:"min_char_classes"`
+	MinEntropy     float64 `yaml:"min_entropy"`
+}
+
+// LoadEngine reads engine.yml (global) and .redacted.engine.yml (project),
+// merging project over global (or replacing it when project sets override).
+func LoadEngine(cwd string) (*EngineConfig, error) {
+	var global *EngineConfig
+	if home, err := os.UserHomeDir(); err == nil {
+		global = loadEngineFile(filepath.Join(home, ".config", "redacted", "engine.yml"))
+	}
+	var project *EngineConfig
+	if cwd != "" {
+		project = loadEngineFile(filepath.Join(cwd, ".redacted.engine.yml"))
+	}
+
+	switch {
+	case global == nil && project == nil:
+		return &EngineConfig{}, nil
+	case project == nil:
+		return global, nil
+	case project.Override || global == nil:
+		return project, nil
+	}
+
+	merged := *global
+	merged.Keywords = append(append([]string{}, global.Keywords...), project.Keywords...)
+	merged.Patterns = append(append([]CustomPattern{}, global.Patterns...), project.Patterns...)
+	overlayHeuristic(&merged.Heuristic, project.Heuristic)
+	return &merged, nil
+}
+
+// IsEmpty reports whether the engine config overrides nothing.
+func (e *EngineConfig) IsEmpty() bool {
+	return e.Heuristic == (HeuristicConfig{}) && len(e.Keywords) == 0 && len(e.Patterns) == 0
+}
+
+func loadEngineFile(path string) *EngineConfig {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var ec EngineConfig
+	if yaml.Unmarshal(data, &ec) != nil {
+		return nil
+	}
+	return &ec
+}
+
+// overlayHeuristic copies the non-zero fields of src over dst.
+func overlayHeuristic(dst *HeuristicConfig, src HeuristicConfig) {
+	if src.MinLength != 0 {
+		dst.MinLength = src.MinLength
+	}
+	if src.MaxLength != 0 {
+		dst.MaxLength = src.MaxLength
+	}
+	if src.MinCharClasses != 0 {
+		dst.MinCharClasses = src.MinCharClasses
+	}
+	if src.MinEntropy != 0 {
+		dst.MinEntropy = src.MinEntropy
+	}
 }
