@@ -1,3 +1,10 @@
+## Related issue
+
+<!-- Required: link the issue this PR addresses. Use a closing keyword
+     (Closes / Fixes / Resolves #123) so merging auto-resolves it. -->
+
+Closes #
+
 ## What
 
 <!-- One or two sentences on the change. -->
