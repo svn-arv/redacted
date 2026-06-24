@@ -57,7 +57,7 @@ func Record(tool string, byPattern map[string]int) {
 	if err != nil {
 		return
 	}
-	f.Write(append(line, '\n'))
+	_, _ = f.Write(append(line, '\n'))
 }
 
 // Summary is the aggregated view across all recorded events.

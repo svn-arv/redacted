@@ -288,17 +288,17 @@ func HookPayload() string {
   },
   "tool_use_id": "toolu_01ABC123DEF456"
 }`,
-		RandAlphaNum(12),       // db password
-		RandAlphaNum(10),       // redis password
-		RandHex(64),            // SECRET_KEY_BASE
-		stripe.Value,           // STRIPE_SECRET_KEY
-		stripePub.Value,        // STRIPE_PUBLISHABLE_KEY
-		twilio.Value,           // TWILIO_ACCOUNT_SID
-		twilioAuth,             // TWILIO_AUTH_TOKEN
-		sendgrid.Value,         // SENDGRID_API_KEY
-		sentry.Value,           // SENTRY_DSN
-		aws.Value,              // AWS_ACCESS_KEY_ID
-		awsSecret.Value,        // AWS_SECRET_ACCESS_KEY
-		RandAlphaNum(30),       // ENCRYPTION_KEY
+		RandAlphaNum(12), // db password
+		RandAlphaNum(10), // redis password
+		RandHex(64),      // SECRET_KEY_BASE
+		stripe.Value,     // STRIPE_SECRET_KEY
+		stripePub.Value,  // STRIPE_PUBLISHABLE_KEY
+		twilio.Value,     // TWILIO_ACCOUNT_SID
+		twilioAuth,       // TWILIO_AUTH_TOKEN
+		sendgrid.Value,   // SENDGRID_API_KEY
+		sentry.Value,     // SENTRY_DSN
+		aws.Value,        // AWS_ACCESS_KEY_ID
+		awsSecret.Value,  // AWS_SECRET_ACCESS_KEY
+		RandAlphaNum(30), // ENCRYPTION_KEY
 	)
 }
