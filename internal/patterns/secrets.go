@@ -17,9 +17,11 @@ var patternsYAML []byte
 
 // patternDef mirrors an engine.yml entry.
 type patternDef struct {
-	Name        string `yaml:"name"`
-	Regex       string `yaml:"regex"`
-	IncludesKey bool   `yaml:"includes_key"`
+	Name           string   `yaml:"name"`
+	Regex          string   `yaml:"regex"`
+	IncludesKey    bool     `yaml:"includes_key"`
+	Prefilters     []string `yaml:"prefilters"`
+	PrefiltersFold []string `yaml:"prefilters_fold"`
 }
 
 // HeuristicConfig holds the secret_value scorer thresholds (see secretLike).
@@ -66,10 +68,14 @@ var config = func() patternFile {
 
 // pattern pairs a name with a compiled regex.
 type pattern struct {
-	Name        string
-	Regex       *regexp.Regexp
-	includesKey bool // true if the regex matches KEY=value (not just the value)
-	scored      bool // true if redaction is gated by the secretLike value scorer
+	Name              string
+	Regex             *regexp.Regexp
+	includesKey       bool     // true if the regex matches KEY=value (not just the value)
+	scored            bool     // true if redaction is gated by the secretLike value scorer
+	prefilters        []string // regex runs only when one of these literals is present
+	foldPrefilters    []string // like prefilters, but matched on lowercased text
+	foldAllPrefilters []string // every literal must be present (lowercased text)
+	lineScoped        bool     // matches never span lines: scan only prefiltered lines
 }
 
 // Option configures a Scrubber. This is the "functional options" pattern —
@@ -78,10 +84,12 @@ type Option func(*Scrubber)
 
 // Scrubber holds patterns and whitelist, and performs the actual redaction.
 type Scrubber struct {
-	patterns  []*pattern
-	whitelist map[string]bool // pattern names to skip
-	allow     map[string]bool // variable names to never redact (case-insensitive keys)
-	heuristic HeuristicConfig // secret_value scorer thresholds
+	patterns       []*pattern
+	whitelist      map[string]bool // pattern names to skip
+	allow          map[string]bool // variable names to never redact (case-insensitive keys)
+	heuristic      HeuristicConfig // secret_value scorer thresholds
+	valueSafeChar  string          // catch-all value charset (engine.yml value_safe_char)
+	customKeywords [][]string      // WithKeywords batches, compiled after options run
 }
 
 // New creates a Scrubber with built-in defaults plus any options.
@@ -91,34 +99,26 @@ type Scrubber struct {
 //	s := patterns.New(patterns.WithWhitelist("jwt", "stripe_test"))
 func New(opts ...Option) *Scrubber {
 	s := &Scrubber{
-		patterns:  builtins(),
-		whitelist: make(map[string]bool),
-		allow:     make(map[string]bool),
-		heuristic: config.Heuristic,
+		patterns:      specificBuiltins(),
+		whitelist:     make(map[string]bool),
+		allow:         make(map[string]bool),
+		heuristic:     config.Heuristic,
+		valueSafeChar: config.ValueSafeChar,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	// The catch-alls compile last so options can shape their regexes
+	// (heuristic floor, value charset, custom keyword batches).
+	s.appendCatchAlls()
 	return s
 }
 
-// trailingCatchAlls is how many catch-alls builtins() appends last; WithExtra
-// inserts custom patterns just before them.
-const trailingCatchAlls = 3
-
 // WithExtra adds a custom pattern. It runs BEFORE the generic catch-alls
-// but AFTER the built-in specific patterns.
+// (appended after options run) but AFTER the built-in specific patterns.
 func WithExtra(name, expr string) Option {
 	return func(s *Scrubber) {
-		compiled := regexp.MustCompile(expr)
-		// Insert before the env_secret/secret_value/yaml_secret catch-alls.
-		insertIdx := len(s.patterns) - trailingCatchAlls
-		if insertIdx < 0 {
-			insertIdx = 0
-		}
-		s.patterns = append(s.patterns, nil)
-		copy(s.patterns[insertIdx+1:], s.patterns[insertIdx:])
-		s.patterns[insertIdx] = &pattern{Name: name, Regex: compiled}
+		s.patterns = append(s.patterns, &pattern{Name: name, Regex: regexp.MustCompile(expr)})
 	}
 }
 
@@ -148,7 +148,8 @@ func WithAllow(names ...string) Option {
 }
 
 // WithKeywords adds env-style detection for custom variable name keywords.
-// Matches any KEY=value where KEY contains one of the given words.
+// Matches any KEY=value where KEY contains one of the given words. The
+// pattern compiles after options run, so it picks up the effective charset.
 //
 //	patterns.New(patterns.WithKeywords("MONGO", "REDIS", "ELASTIC"))
 func WithKeywords(keywords ...string) Option {
@@ -156,12 +157,20 @@ func WithKeywords(keywords ...string) Option {
 		if len(keywords) == 0 {
 			return
 		}
-		expr := envSecretRegex(strings.Join(keywords, "|"))
-		s.patterns = append(s.patterns, &pattern{
-			Name:        "custom_keyword",
-			Regex:       regexp.MustCompile(expr),
-			includesKey: true,
-		})
+		s.customKeywords = append(s.customKeywords, keywords)
+	}
+}
+
+// WithValueSafeChar swaps the character class catch-all values are built
+// from. The class must be a valid regexp character class; it shapes the
+// env/yaml/heuristic catch-alls and any WithKeywords patterns.
+//
+//	patterns.New(patterns.WithValueSafeChar(`[A-Za-z0-9_\-]`))
+func WithValueSafeChar(class string) Option {
+	return func(s *Scrubber) {
+		if class != "" {
+			s.valueSafeChar = class
+		}
 	}
 }
 
@@ -241,12 +250,23 @@ func (s *Scrubber) Scrub(text string) Result {
 	count := 0
 	var byPattern map[string]int
 	out := text
+	// Lowercased copy for fold prefilters, computed at most once per call.
+	// Redactions don't refresh it; they only insert marker text, so a stale
+	// copy can't hide a literal that a real secret would carry.
+	lowered := ""
 	for _, p := range s.patterns {
 		if s.whitelist[p.Name] {
 			continue
 		}
+		if (len(p.foldPrefilters) > 0 || len(p.foldAllPrefilters) > 0) && lowered == "" {
+			lowered = strings.ToLower(out)
+		}
 		var n int
-		out, n = s.applyPattern(p, out)
+		if p.lineScoped && len(p.foldPrefilters) > 0 {
+			out, n = s.applyPatternByLine(p, out, lowered)
+		} else {
+			out, n = s.applyPattern(p, out, lowered)
+		}
 		if n > 0 {
 			if byPattern == nil {
 				byPattern = make(map[string]int)
@@ -265,8 +285,21 @@ func (s *Scrubber) Scrub(text string) Result {
 }
 
 // applyPattern redacts every match of p in text that isn't skipped, returning
-// the rewritten text and the number of redactions made.
-func (s *Scrubber) applyPattern(p *pattern, text string) (string, int) {
+// the rewritten text and the number of redactions made. lowered is the
+// lowercased text for fold prefilters ("" when no pattern needs it).
+func (s *Scrubber) applyPattern(p *pattern, text, lowered string) (string, int) {
+	// A missing prefilter literal proves the regex can't match; skip the
+	// scan entirely. This is where most of the per-call cost goes on
+	// typical (secret-free) tool output.
+	if len(p.prefilters) > 0 && !containsAny(text, p.prefilters) {
+		return text, 0
+	}
+	if len(p.foldPrefilters) > 0 && !containsAny(lowered, p.foldPrefilters) {
+		return text, 0
+	}
+	if len(p.foldAllPrefilters) > 0 && !containsAll(lowered, p.foldAllPrefilters) {
+		return text, 0
+	}
 	locs := p.Regex.FindAllStringIndex(text, -1)
 	if locs == nil {
 		return text, 0
@@ -306,10 +339,81 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	// Skip source-code references; the heuristic catch-all additionally requires
 	// the value to score as secret-like.
 	value := valueOf(match)
+	// A value that just re-states its own key (`password: password`) is a
+	// keyword-arg echo passing a same-named variable, not a literal secret.
+	// Quotes and the `=>` remnant are stripped before comparing.
+	if key := keyOf(match); key != "" &&
+		strings.EqualFold(key, strings.Trim(strings.TrimLeft(value, "> \t"), `"'`)) {
+		return true
+	}
 	if looksLikeIdentifier(value) || looksLikeCodeReference(value) {
 		return true
 	}
+	// Keys that name identifiers (tool_use_id, sessionId) hold IDs, not
+	// credentials; only the scored catch-all skips them, so keyword keys
+	// like CLIENT_ID keep their env_secret coverage.
+	if p.scored && isIdentifierKey(keyOf(match)) {
+		return true
+	}
+	// A scored match whose token already carries a scheme sits inside a URL:
+	// host:port/Path parses as KEY:value but is address, not secret. Keyword
+	// keys with URL values stay covered by env_secret.
+	if p.scored && insideURL(text, end-len(match)) {
+		return true
+	}
 	return p.scored && !s.secretLike(value)
+}
+
+// urlLookback caps how far insideURL walks; a scheme further back than this
+// inside one unbroken token is out of scope, and the cap bounds scan cost.
+const urlLookback = 2048
+
+// insideURL reports whether the token containing offset start begins with a
+// URL scheme: the characters from the previous token boundary up to start
+// contain "://".
+func insideURL(text string, start int) bool {
+	i := start
+	for i > 0 && start-i < urlLookback && !isTokenBoundary(text[i-1]) {
+		i--
+	}
+	return strings.Contains(text[i:start], "://")
+}
+
+// isTokenBoundary reports whether c ends a token for insideURL's walk-back:
+// whitespace, quotes, and the bracket/separator set value_safe_char excludes.
+func isTokenBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>', ',', ';':
+		return true
+	}
+	return false
+}
+
+// isIdentifierKey reports whether key names an identifier rather than a
+// credential: `id`/`uuid` alone, a `_id`/`-id` style suffix, or a camelCase
+// `Id`/`Uuid` tail. A plain lowercase tail (`liquid`) is not a boundary.
+func isIdentifierKey(key string) bool {
+	k := strings.ToLower(key)
+	if k == "id" || k == "uuid" {
+		return true
+	}
+	for _, suf := range []string{"_id", "-id", "_uuid", "-uuid"} {
+		if strings.HasSuffix(k, suf) {
+			return true
+		}
+	}
+	return strings.HasSuffix(key, "Id") || strings.HasSuffix(key, "Uuid")
+}
+
+// keyOf returns the left-hand side of a KEY=value or KEY: value match with
+// quotes and padding trimmed, mirroring valueOf; "" when no separator exists.
+func keyOf(match string) string {
+	for i, ch := range match {
+		if ch == '=' || ch == ':' {
+			return strings.Trim(strings.TrimRight(match[:i], " \t"), `"'`)
+		}
+	}
+	return ""
 }
 
 // valueOf returns the right-hand side of a KEY=value or KEY: value match,
@@ -434,6 +538,51 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
+// containsAny reports whether text contains at least one of the literals.
+func containsAny(text string, literals []string) bool {
+	for _, lit := range literals {
+		if strings.Contains(text, lit) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAll reports whether text contains every literal.
+func containsAll(text string, literals []string) bool {
+	for _, lit := range literals {
+		if !strings.Contains(text, lit) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyPatternByLine runs a line-scoped pattern only on lines carrying one of
+// its fold literals. Redactions never add or remove newlines and case mapping
+// never touches them either, so text and lowered always split into the same
+// line count, and per-line scanning is exactly full-text scanning for a
+// pattern whose matches cannot span lines.
+func (s *Scrubber) applyPatternByLine(p *pattern, text, lowered string) (string, int) {
+	lines := strings.Split(text, "\n")
+	llines := strings.Split(lowered, "\n")
+	total := 0
+	for i := range lines {
+		if i >= len(llines) || !containsAny(llines[i], p.foldPrefilters) {
+			continue
+		}
+		newLine, n := s.applyPattern(p, lines[i], llines[i])
+		if n > 0 {
+			lines[i] = newLine
+			total += n
+		}
+	}
+	if total == 0 {
+		return text, 0
+	}
+	return strings.Join(lines, "\n"), total
+}
+
 // isAllowed checks if the matched text contains any allowed variable name.
 func (s *Scrubber) isAllowed(match string) bool {
 	if len(s.allow) == 0 {
@@ -461,13 +610,13 @@ func (s *Scrubber) isAllowed(match string) bool {
 //
 // Whitespace around the separator is space/tab only — otherwise an empty
 // `KEY=\nNEXT_KEY=...` would match across the newline.
-func envSecretRegex(keywords string) string {
+func envSecretRegex(keywords, safeChar string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
 	cap := capitalizeAll(keywords)
 	snakeOrKebab := `(?:[A-Z0-9_\-]*[_\-])?(?:` + flex + `)(?:[_\-][A-Z0-9_\-]*)?`
 	camelOrPascal := `(?-i:[a-zA-Z0-9]*[a-z])?(?-i:` + cap + `)(?-i:[A-Z][a-zA-Z0-9]*)?`
 	return `(?i)\b(?:` + snakeOrKebab + `|` + camelOrPascal + `)` +
-		`["']?[ \t]*(?:=>?|:)[ \t]*["']?` + config.ValueSafeChar + `{8,}`
+		`["']?[ \t]*(?:=>?|:)[ \t]*["']?` + safeChar + `{8,}`
 }
 
 // excludeSlash adds `/` to a negated class (`[^…]` -> `[^…/]`), or returns it
@@ -479,13 +628,18 @@ func excludeSlash(class string) string {
 	return class
 }
 
-// heuristicAssignmentRegex matches KEY=value (value >= MinLength chars), scored by
-// secretLike. The value can't begin with "/" so a URL scheme isn't read as one.
-func heuristicAssignmentRegex() string {
+// heuristicAssignmentRegex matches KEY=value (value >= minLength chars), scored
+// by secretLike. The value can't begin with "/" so a URL scheme isn't read as
+// one. minLength comes from the Scrubber so runtime overrides can lower the
+// floor below the embedded default.
+func heuristicAssignmentRegex(minLength int, safeChar string) string {
+	if minLength < 1 {
+		minLength = 1
+	}
 	key := `[A-Za-z0-9_\-]*[A-Za-z][A-Za-z0-9_\-]*`
-	rest := strconv.Itoa(config.Heuristic.MinLength - 1)
+	rest := strconv.Itoa(minLength - 1)
 	return `(?i)\b` + key + `["']?[ \t]*(?:=>?|:)[ \t]*["']?` +
-		excludeSlash(config.ValueSafeChar) + config.ValueSafeChar + `{` + rest + `,}`
+		excludeSlash(safeChar) + safeChar + `{` + rest + `,}`
 }
 
 func capitalizeAll(keywords string) string {
@@ -520,31 +674,74 @@ func capitalizeKeyword(kw string) string {
 // The middle `\s*\n\s*` is intentional — it spans the key line to the value
 // line. The leading and trailing whitespace are space/tab only so the keyword
 // stays on the `key:` line and the value stays on the `value:` line.
-func yamlSecretRegex(keywords string) string {
+func yamlSecretRegex(keywords, safeChar string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
-	return `(?i)key:[ \t]*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:[ \t]*` + config.ValueSafeChar + `{8,}`
+	return `(?i)key:[ \t]*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:[ \t]*` + safeChar + `{8,}`
 }
 
-// builtins returns the engine.yml set plus the env_secret, yaml_secret, and
-// secret_value catch-alls. Order matters: specific first, heuristic fallback last.
-func builtins() []*pattern {
-	patterns := make([]*pattern, 0, len(config.Patterns)+trailingCatchAlls)
+// specificBuiltins compiles the engine.yml pattern set. The catch-alls are
+// appended by New after options run, so per-Scrubber charset and thresholds
+// shape their regexes.
+func specificBuiltins() []*pattern {
+	patterns := make([]*pattern, 0, len(config.Patterns)+3)
 
 	for _, p := range config.Patterns {
 		patterns = append(patterns, &pattern{
-			Name:        p.Name,
-			Regex:       regexp.MustCompile(p.Regex),
-			includesKey: p.IncludesKey,
+			Name:           p.Name,
+			Regex:          regexp.MustCompile(p.Regex),
+			includesKey:    p.IncludesKey,
+			prefilters:     p.Prefilters,
+			foldPrefilters: p.PrefiltersFold,
 		})
 	}
-
-	kw := strings.Join(config.Keywords, "|")
-	patterns = append(patterns,
-		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw)), includesKey: true},
-		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw)), includesKey: true},
-		&pattern{Name: "secret_value", Regex: regexp.MustCompile(heuristicAssignmentRegex()), includesKey: true, scored: true},
-	)
 	return patterns
+}
+
+// appendCatchAlls compiles and appends the env_secret, yaml_secret and
+// secret_value catch-alls plus any custom keyword batches. Order matters:
+// specific first, heuristic fallback last, custom keywords after (matching
+// WithKeywords' historical position).
+func (s *Scrubber) appendCatchAlls() {
+	kw := strings.Join(config.Keywords, "|")
+	kwFold := keywordFoldLiterals(config.Keywords)
+	s.patterns = append(s.patterns,
+		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, lineScoped: true},
+		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, foldAllPrefilters: []string{"value:"}},
+		&pattern{Name: "secret_value", Regex: regexp.MustCompile(heuristicAssignmentRegex(s.heuristic.MinLength, s.valueSafeChar)), includesKey: true, scored: true},
+	)
+	for _, batch := range s.customKeywords {
+		expr := envSecretRegex(strings.Join(batch, "|"), s.valueSafeChar)
+		s.patterns = append(s.patterns, &pattern{
+			Name:           "custom_keyword",
+			Regex:          regexp.MustCompile(expr),
+			includesKey:    true,
+			foldPrefilters: keywordFoldLiterals(batch),
+			lineScoped:     true,
+		})
+	}
+}
+
+// keywordFoldLiterals derives the lowercase literals a keyword match must
+// contain, covering the snake (api_key), kebab (api-key) and Pascal/camel
+// (apikey, from ApiKey) spellings the keyword regex accepts.
+func keywordFoldLiterals(keywords []string) []string {
+	seen := make(map[string]bool)
+	var lits []string
+	add := func(l string) {
+		if l != "" && !seen[l] {
+			seen[l] = true
+			lits = append(lits, l)
+		}
+	}
+	for _, kw := range keywords {
+		l := strings.ToLower(kw)
+		add(l)
+		if strings.Contains(l, "_") {
+			add(strings.ReplaceAll(l, "_", "-"))
+			add(strings.ReplaceAll(l, "_", ""))
+		}
+	}
+	return lits
 }
 
 // defaultScrubber is the package-level scrubber for the convenience function.

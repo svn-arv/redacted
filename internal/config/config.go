@@ -103,10 +103,11 @@ func merge(dst, src *Config) {
 // EngineConfig overrides detection rules, loaded from engine.yml (global) and
 // .redacted.engine.yml (project). config.yaml stays app/operational policy.
 type EngineConfig struct {
-	Override  bool            `yaml:"override"`
-	Heuristic HeuristicConfig `yaml:"heuristic"`
-	Keywords  []string        `yaml:"keywords"`
-	Patterns  []CustomPattern `yaml:"patterns"`
+	Override      bool            `yaml:"override"`
+	ValueSafeChar string          `yaml:"value_safe_char"`
+	Heuristic     HeuristicConfig `yaml:"heuristic"`
+	Keywords      []string        `yaml:"keywords"`
+	Patterns      []CustomPattern `yaml:"patterns"`
 }
 
 // HeuristicConfig overrides secret_value scorer thresholds; a zero field keeps the default.
@@ -142,12 +143,16 @@ func LoadEngine(cwd string) (*EngineConfig, error) {
 	merged.Keywords = append(append([]string{}, global.Keywords...), project.Keywords...)
 	merged.Patterns = append(append([]CustomPattern{}, global.Patterns...), project.Patterns...)
 	overlayHeuristic(&merged.Heuristic, project.Heuristic)
+	if project.ValueSafeChar != "" {
+		merged.ValueSafeChar = project.ValueSafeChar
+	}
 	return &merged, nil
 }
 
 // IsEmpty reports whether the engine config overrides nothing.
 func (e *EngineConfig) IsEmpty() bool {
-	return e.Heuristic == (HeuristicConfig{}) && len(e.Keywords) == 0 && len(e.Patterns) == 0
+	return e.Heuristic == (HeuristicConfig{}) && len(e.Keywords) == 0 &&
+		len(e.Patterns) == 0 && e.ValueSafeChar == ""
 }
 
 func loadEngineFile(path string) *EngineConfig {

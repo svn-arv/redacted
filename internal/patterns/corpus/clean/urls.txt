@@ -10,3 +10,5 @@ https://example.com/path/to/resource?foo=bar&baz=qux
 link: https://github.com/Luce-MG/luce-product-design/issues/123
 homepage: https://docs.example.com/v2/GuideABC123/intro
 docs_link=https://github.com/Org/Repo123/blob/main/README.md
+https://example.com:8080/FooBar/Baz123
+curl -s https://api.example.com:9200/Index7/_search?q=FooBar9

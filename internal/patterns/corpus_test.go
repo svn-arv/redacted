@@ -16,10 +16,8 @@ var cleanCorpus embed.FS
 
 // knownResidualFPs still redact today but aren't secrets. The precision test
 // asserts each still redacts, flagging when one gets fixed (promote to clean).
-var knownResidualFPs = []string{
-	"https://example.com:8080/FooBar/Baz123", // port colon + uppercase path
-	`"tool_use_id": "toolu_01ABC123DEF456"`,  // Claude tool-use id
-}
+// Currently empty; future residuals land here.
+var knownResidualFPs []string
 
 // TestCorpus_Precision fails on any redaction of the clean corpus, and reports
 // the precision so accuracy stays visible even when green.
@@ -116,6 +114,7 @@ func TestCorpus_Recall(t *testing.T) {
 		{"newrelic_key", testutil.NewRelicKey().Value},
 		{"private_key_rsa", testutil.PrivateKey("RSA ").Value},
 		{"private_key_generic", testutil.PrivateKey("").Value},
+		{"gcp_sa_private_key", testutil.GCPServiceAccountKey(testutil.RandAlphaNum(96)).Value},
 		{"env_secret_keyword", "SECRET_KEY=" + testutil.RandAlphaNum(24)},
 		{"env_secret_colon", "AUTH_TOKEN: " + testutil.RandAlphaNum(20)},
 		{"heuristic_secret_value", "WIDGET_CONFIG=" + heuristicVal},

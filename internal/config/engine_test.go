@@ -87,6 +87,44 @@ func TestLoadEngine_Merge(t *testing.T) {
 	}
 }
 
+func TestLoadEngine_ValueSafeChar(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	dir := filepath.Join(tmpHome, ".config", "redacted")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "engine.yml"), []byte("value_safe_char: '[A-Za-z0-9_]'\n"), 0o644)
+
+	eng, err := LoadEngine("/some/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.ValueSafeChar != "[A-Za-z0-9_]" {
+		t.Errorf("expected value_safe_char to load, got %q", eng.ValueSafeChar)
+	}
+	if eng.IsEmpty() {
+		t.Error("a value_safe_char override should not read as empty")
+	}
+}
+
+func TestLoadEngine_ValueSafeCharProjectWins(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	dir := filepath.Join(tmpHome, ".config", "redacted")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "engine.yml"), []byte("value_safe_char: '[A-Za-z0-9_]'\n"), 0o644)
+
+	proj := t.TempDir()
+	os.WriteFile(filepath.Join(proj, ".redacted.engine.yml"), []byte("value_safe_char: '[A-Za-z0-9]'\n"), 0o644)
+
+	eng, err := LoadEngine(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.ValueSafeChar != "[A-Za-z0-9]" {
+		t.Errorf("project value_safe_char should overlay global, got %q", eng.ValueSafeChar)
+	}
+}
+
 func TestLoadEngine_Override(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

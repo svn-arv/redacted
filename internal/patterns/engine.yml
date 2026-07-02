@@ -45,107 +45,157 @@ keywords:
   - MASTER_KEY
   - SERVICE_KEY
 
+# A pattern may declare `prefilters`: literal strings, at least one of which
+# must appear in the text before its regex runs. A cheap substring gate that
+# skips the expensive scan. `prefilters` matches case-sensitively;
+# `prefilters_fold` matches against a lowercased copy, for (?i) patterns.
 patterns:
   # === Specific patterns (value only) ===
 
   - name: aws_access_key
     regex: 'AKIA[0-9A-Z]{16}'
+    prefilters: ['AKIA']
 
   - name: aws_secret_key
     regex: '(?i)aws[_\-]?secret[_\-]?access[_\-]?key[ \t]*[=:][ \t]*[A-Za-z0-9/+=]{40}'
     includes_key: true
+    prefilters_fold: ['aws']
 
   - name: github_fine_grained
     regex: 'github_pat_[A-Za-z0-9_]{22,}'
+    prefilters: ['github_pat_']
 
   - name: github_token
     regex: 'gh[ps]_[A-Za-z0-9_]{36,}'
+    prefilters: ['ghp_', 'ghs_']
 
   - name: github_oauth
     regex: 'gho_[A-Za-z0-9_]{36,}'
+    prefilters: ['gho_']
 
   - name: github_refresh
     regex: 'ghr_[A-Za-z0-9_]{36,}'
+    prefilters: ['ghr_']
 
   - name: stripe_live
     regex: '[srp]k_live_[A-Za-z0-9]{24,}'
+    prefilters: ['k_live_']
 
   - name: stripe_test
     regex: '[srp]k_test_[A-Za-z0-9]{24,}'
+    prefilters: ['k_test_']
 
   - name: twilio_api_key
     regex: '\bSK[0-9a-fA-F]{32}\b'
+    prefilters: ['SK']
 
   - name: twilio_account_sid
     regex: '\bAC[0-9a-fA-F]{32}\b'
+    prefilters: ['AC']
 
   - name: digitalocean_token
     regex: 'dop_v1_[a-f0-9]{64}'
+    prefilters: ['dop_v1_']
 
   - name: digitalocean_spaces
     regex: '(?i)SPACES[_\-](ACCESS[_\-]KEY|SECRET[_\-]KEY)[ \t]*[=:][ \t]*[A-Za-z0-9/+=_\-]{8,}'
     includes_key: true
+    prefilters_fold: ['spaces']
 
   - name: sentry_dsn
     regex: 'https://[a-f0-9]{32}@[a-z0-9.\-]+\.ingest\.[a-z.]*sentry\.io/[0-9]+'
+    prefilters: ['.ingest.']
 
   - name: slack_token
     regex: 'xox[bpars]-[A-Za-z0-9\-]{10,}'
+    prefilters: ['xox']
 
   - name: sendgrid_key
     regex: 'SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}'
+    prefilters: ['SG.']
 
   - name: hubspot_key
     regex: '(?i)pat-[a-z0-9]{2,3}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    prefilters_fold: ['pat-']
 
   - name: private_key
     regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+    prefilters: ['PRIVATE KEY-----']
+
+  # GCP service-account JSON: the private_key field with a \n-escaped PEM.
+  # A literal multi-line PEM is caught by private_key above; this covers the
+  # single-line JSON form, including dumps truncated before the END marker.
+  - name: gcp_sa_private_key
+    regex: '"private_key"[ \t]*:[ \t]*"-----BEGIN[^"]+'
+    includes_key: true
+    prefilters: ['"private_key"']
+
+  # Backstop for service-account excerpts that show only the hex key id.
+  - name: gcp_sa_key_id
+    regex: '"private_key_id"[ \t]*:[ \t]*"[0-9a-f]{12,}"'
+    includes_key: true
+    prefilters: ['"private_key_id"']
 
   - name: jwt
     regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+    prefilters: ['eyJ']
 
   - name: anthropic_key
     regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
+    prefilters: ['sk-ant-']
 
   - name: circleci_token
     regex: 'CCIPAT_[A-Za-z0-9_]{20,}'
+    prefilters: ['CCIPAT_']
 
   - name: sentry_user_token
     regex: 'sntryu_[A-Za-z0-9]{20,}'
+    prefilters: ['sntryu_']
 
   - name: rubygems_key
     regex: 'rubygems_[A-Za-z0-9]{20,}'
+    prefilters: ['rubygems_']
 
   - name: newrelic_key
     regex: 'NRAK-[A-Za-z0-9]{20,}'
+    prefilters: ['NRAK-']
 
   - name: openai_key
     regex: 'sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'
+    prefilters: ['sk-']
 
   # Classic OpenAI key: sk- + exactly 48 chars. \b stops it matching sk-ant- (Anthropic).
   - name: openai_classic_key
     regex: '\bsk-[A-Za-z0-9]{48}\b'
+    prefilters: ['sk-']
 
   - name: google_api_key
     regex: 'AIza[A-Za-z0-9_-]{35}'
+    prefilters: ['AIza']
 
   - name: gitlab_pat
     regex: 'glpat-[A-Za-z0-9_-]{20,}'
+    prefilters: ['glpat-']
 
   - name: npm_token
     regex: 'npm_[A-Za-z0-9]{36}'
+    prefilters: ['npm_']
 
   - name: slack_webhook
     regex: 'https://hooks\.slack\.com/services/[A-Za-z0-9/]+'
+    prefilters: ['hooks.slack.com']
 
   - name: pypi_token
     regex: 'pypi-[A-Za-z0-9_-]{50,}'
+    prefilters: ['pypi-']
 
   # The char class excludes ${ } so ${VAR} placeholders in connection-string
   # templates don't match (issue #1); real credentialed URLs contain none.
   - name: database_url
     regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\${}]+'
+    prefilters: ['://']
 
   # scheme://user:pass@host for any scheme (e.g. postgis), catching passworded URLs database_url doesn't list. Runs after it so known schemes keep their label.
   - name: credentialed_url
     regex: '(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]*:[^\s:/@]+@[^\s"''`\\${}]+'
+    prefilters: ['://']
