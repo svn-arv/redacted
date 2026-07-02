@@ -127,6 +127,9 @@ func buildScrubberFromConfig(cfg *config.Config, eng *config.EngineConfig) *patt
 	}
 
 	if eng != nil {
+		if eng.ValueSafeChar != "" {
+			opts = append(opts, patterns.WithValueSafeChar(eng.ValueSafeChar))
+		}
 		if eng.Heuristic != (config.HeuristicConfig{}) {
 			opts = append(opts, patterns.WithHeuristic(patterns.HeuristicConfig{
 				MinLength:      eng.Heuristic.MinLength,

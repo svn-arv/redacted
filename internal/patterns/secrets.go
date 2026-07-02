@@ -78,10 +78,12 @@ type Option func(*Scrubber)
 
 // Scrubber holds patterns and whitelist, and performs the actual redaction.
 type Scrubber struct {
-	patterns  []*pattern
-	whitelist map[string]bool // pattern names to skip
-	allow     map[string]bool // variable names to never redact (case-insensitive keys)
-	heuristic HeuristicConfig // secret_value scorer thresholds
+	patterns       []*pattern
+	whitelist      map[string]bool // pattern names to skip
+	allow          map[string]bool // variable names to never redact (case-insensitive keys)
+	heuristic      HeuristicConfig // secret_value scorer thresholds
+	valueSafeChar  string          // catch-all value charset (engine.yml value_safe_char)
+	customKeywords [][]string      // WithKeywords batches, compiled after options run
 }
 
 // New creates a Scrubber with built-in defaults plus any options.
@@ -91,34 +93,26 @@ type Scrubber struct {
 //	s := patterns.New(patterns.WithWhitelist("jwt", "stripe_test"))
 func New(opts ...Option) *Scrubber {
 	s := &Scrubber{
-		patterns:  builtins(),
-		whitelist: make(map[string]bool),
-		allow:     make(map[string]bool),
-		heuristic: config.Heuristic,
+		patterns:      specificBuiltins(),
+		whitelist:     make(map[string]bool),
+		allow:         make(map[string]bool),
+		heuristic:     config.Heuristic,
+		valueSafeChar: config.ValueSafeChar,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	// The catch-alls compile last so options can shape their regexes
+	// (heuristic floor, value charset, custom keyword batches).
+	s.appendCatchAlls()
 	return s
 }
 
-// trailingCatchAlls is how many catch-alls builtins() appends last; WithExtra
-// inserts custom patterns just before them.
-const trailingCatchAlls = 3
-
 // WithExtra adds a custom pattern. It runs BEFORE the generic catch-alls
-// but AFTER the built-in specific patterns.
+// (appended after options run) but AFTER the built-in specific patterns.
 func WithExtra(name, expr string) Option {
 	return func(s *Scrubber) {
-		compiled := regexp.MustCompile(expr)
-		// Insert before the env_secret/secret_value/yaml_secret catch-alls.
-		insertIdx := len(s.patterns) - trailingCatchAlls
-		if insertIdx < 0 {
-			insertIdx = 0
-		}
-		s.patterns = append(s.patterns, nil)
-		copy(s.patterns[insertIdx+1:], s.patterns[insertIdx:])
-		s.patterns[insertIdx] = &pattern{Name: name, Regex: compiled}
+		s.patterns = append(s.patterns, &pattern{Name: name, Regex: regexp.MustCompile(expr)})
 	}
 }
 
@@ -148,7 +142,8 @@ func WithAllow(names ...string) Option {
 }
 
 // WithKeywords adds env-style detection for custom variable name keywords.
-// Matches any KEY=value where KEY contains one of the given words.
+// Matches any KEY=value where KEY contains one of the given words. The
+// pattern compiles after options run, so it picks up the effective charset.
 //
 //	patterns.New(patterns.WithKeywords("MONGO", "REDIS", "ELASTIC"))
 func WithKeywords(keywords ...string) Option {
@@ -156,12 +151,20 @@ func WithKeywords(keywords ...string) Option {
 		if len(keywords) == 0 {
 			return
 		}
-		expr := envSecretRegex(strings.Join(keywords, "|"))
-		s.patterns = append(s.patterns, &pattern{
-			Name:        "custom_keyword",
-			Regex:       regexp.MustCompile(expr),
-			includesKey: true,
-		})
+		s.customKeywords = append(s.customKeywords, keywords)
+	}
+}
+
+// WithValueSafeChar swaps the character class catch-all values are built
+// from. The class must be a valid regexp character class; it shapes the
+// env/yaml/heuristic catch-alls and any WithKeywords patterns.
+//
+//	patterns.New(patterns.WithValueSafeChar(`[A-Za-z0-9_\-]`))
+func WithValueSafeChar(class string) Option {
+	return func(s *Scrubber) {
+		if class != "" {
+			s.valueSafeChar = class
+		}
 	}
 }
 
@@ -532,13 +535,13 @@ func (s *Scrubber) isAllowed(match string) bool {
 //
 // Whitespace around the separator is space/tab only — otherwise an empty
 // `KEY=\nNEXT_KEY=...` would match across the newline.
-func envSecretRegex(keywords string) string {
+func envSecretRegex(keywords, safeChar string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
 	cap := capitalizeAll(keywords)
 	snakeOrKebab := `(?:[A-Z0-9_\-]*[_\-])?(?:` + flex + `)(?:[_\-][A-Z0-9_\-]*)?`
 	camelOrPascal := `(?-i:[a-zA-Z0-9]*[a-z])?(?-i:` + cap + `)(?-i:[A-Z][a-zA-Z0-9]*)?`
 	return `(?i)\b(?:` + snakeOrKebab + `|` + camelOrPascal + `)` +
-		`["']?[ \t]*(?:=>?|:)[ \t]*["']?` + config.ValueSafeChar + `{8,}`
+		`["']?[ \t]*(?:=>?|:)[ \t]*["']?` + safeChar + `{8,}`
 }
 
 // excludeSlash adds `/` to a negated class (`[^…]` -> `[^…/]`), or returns it
@@ -550,13 +553,18 @@ func excludeSlash(class string) string {
 	return class
 }
 
-// heuristicAssignmentRegex matches KEY=value (value >= MinLength chars), scored by
-// secretLike. The value can't begin with "/" so a URL scheme isn't read as one.
-func heuristicAssignmentRegex() string {
+// heuristicAssignmentRegex matches KEY=value (value >= minLength chars), scored
+// by secretLike. The value can't begin with "/" so a URL scheme isn't read as
+// one. minLength comes from the Scrubber so runtime overrides can lower the
+// floor below the embedded default.
+func heuristicAssignmentRegex(minLength int, safeChar string) string {
+	if minLength < 1 {
+		minLength = 1
+	}
 	key := `[A-Za-z0-9_\-]*[A-Za-z][A-Za-z0-9_\-]*`
-	rest := strconv.Itoa(config.Heuristic.MinLength - 1)
+	rest := strconv.Itoa(minLength - 1)
 	return `(?i)\b` + key + `["']?[ \t]*(?:=>?|:)[ \t]*["']?` +
-		excludeSlash(config.ValueSafeChar) + config.ValueSafeChar + `{` + rest + `,}`
+		excludeSlash(safeChar) + safeChar + `{` + rest + `,}`
 }
 
 func capitalizeAll(keywords string) string {
@@ -591,15 +599,16 @@ func capitalizeKeyword(kw string) string {
 // The middle `\s*\n\s*` is intentional — it spans the key line to the value
 // line. The leading and trailing whitespace are space/tab only so the keyword
 // stays on the `key:` line and the value stays on the `value:` line.
-func yamlSecretRegex(keywords string) string {
+func yamlSecretRegex(keywords, safeChar string) string {
 	flex := strings.ReplaceAll(keywords, "_", `[_\-]`)
-	return `(?i)key:[ \t]*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:[ \t]*` + config.ValueSafeChar + `{8,}`
+	return `(?i)key:[ \t]*[A-Z0-9_\-]*(` + flex + `)[A-Z0-9_\-]*\s*\n\s*value:[ \t]*` + safeChar + `{8,}`
 }
 
-// builtins returns the engine.yml set plus the env_secret, yaml_secret, and
-// secret_value catch-alls. Order matters: specific first, heuristic fallback last.
-func builtins() []*pattern {
-	patterns := make([]*pattern, 0, len(config.Patterns)+trailingCatchAlls)
+// specificBuiltins compiles the engine.yml pattern set. The catch-alls are
+// appended by New after options run, so per-Scrubber charset and thresholds
+// shape their regexes.
+func specificBuiltins() []*pattern {
+	patterns := make([]*pattern, 0, len(config.Patterns)+3)
 
 	for _, p := range config.Patterns {
 		patterns = append(patterns, &pattern{
@@ -608,14 +617,28 @@ func builtins() []*pattern {
 			includesKey: p.IncludesKey,
 		})
 	}
-
-	kw := strings.Join(config.Keywords, "|")
-	patterns = append(patterns,
-		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw)), includesKey: true},
-		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw)), includesKey: true},
-		&pattern{Name: "secret_value", Regex: regexp.MustCompile(heuristicAssignmentRegex()), includesKey: true, scored: true},
-	)
 	return patterns
+}
+
+// appendCatchAlls compiles and appends the env_secret, yaml_secret and
+// secret_value catch-alls plus any custom keyword batches. Order matters:
+// specific first, heuristic fallback last, custom keywords after (matching
+// WithKeywords' historical position).
+func (s *Scrubber) appendCatchAlls() {
+	kw := strings.Join(config.Keywords, "|")
+	s.patterns = append(s.patterns,
+		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw, s.valueSafeChar)), includesKey: true},
+		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw, s.valueSafeChar)), includesKey: true},
+		&pattern{Name: "secret_value", Regex: regexp.MustCompile(heuristicAssignmentRegex(s.heuristic.MinLength, s.valueSafeChar)), includesKey: true, scored: true},
+	)
+	for _, batch := range s.customKeywords {
+		expr := envSecretRegex(strings.Join(batch, "|"), s.valueSafeChar)
+		s.patterns = append(s.patterns, &pattern{
+			Name:        "custom_keyword",
+			Regex:       regexp.MustCompile(expr),
+			includesKey: true,
+		})
+	}
 }
 
 // defaultScrubber is the package-level scrubber for the convenience function.
