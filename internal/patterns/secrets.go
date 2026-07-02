@@ -316,7 +316,29 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	if looksLikeIdentifier(value) || looksLikeCodeReference(value) {
 		return true
 	}
+	// Keys that name identifiers (tool_use_id, sessionId) hold IDs, not
+	// credentials; only the scored catch-all skips them, so keyword keys
+	// like CLIENT_ID keep their env_secret coverage.
+	if p.scored && isIdentifierKey(keyOf(match)) {
+		return true
+	}
 	return p.scored && !s.secretLike(value)
+}
+
+// isIdentifierKey reports whether key names an identifier rather than a
+// credential: `id`/`uuid` alone, a `_id`/`-id` style suffix, or a camelCase
+// `Id`/`Uuid` tail. A plain lowercase tail (`liquid`) is not a boundary.
+func isIdentifierKey(key string) bool {
+	k := strings.ToLower(key)
+	if k == "id" || k == "uuid" {
+		return true
+	}
+	for _, suf := range []string{"_id", "-id", "_uuid", "-uuid"} {
+		if strings.HasSuffix(k, suf) {
+			return true
+		}
+	}
+	return strings.HasSuffix(key, "Id") || strings.HasSuffix(key, "Uuid")
 }
 
 // keyOf returns the left-hand side of a KEY=value or KEY: value match with

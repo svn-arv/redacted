@@ -6,3 +6,7 @@ sha256:9b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c
 2026-06-22T14:30:00Z log entry written
 order_id: 1234567890
 trace_id: 00000000000000000000000000000000
+"tool_use_id": "toolu_01ABC123DEF456"
+"session_id": "Ab3xK9mQ2rT8wZ4yP6vN"
+deployment requestId: Zx9Kq2Lm8Pn4Rt6Vw1Yb
+"trace_uuid": "Xk7Pq9mW2vB8nZ4cA1fH"

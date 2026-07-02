@@ -18,7 +18,6 @@ var cleanCorpus embed.FS
 // asserts each still redacts, flagging when one gets fixed (promote to clean).
 var knownResidualFPs = []string{
 	"https://example.com:8080/FooBar/Baz123", // port colon + uppercase path
-	`"tool_use_id": "toolu_01ABC123DEF456"`,  // Claude tool-use id
 }
 
 // TestCorpus_Precision fails on any redaction of the clean corpus, and reports
