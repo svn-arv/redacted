@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="A hook that redacts secrets from tool output before your AI coding assistant sees them.">
+<title>redacted — secrets never reach the model</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f7f4ec;--ink:#181611;--dim:#5f5a4d;--rule:#181611;--red:#b3261e;--panel:#f0ecdf;
+    --serif:'Fraunces',Georgia,'Times New Roman',serif;
+    --mono:'Space Mono',ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--serif);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 26px}
+  /* the signature interaction, inherited from theme 03 */
+  .rb{background:var(--ink);color:transparent;cursor:pointer;padding:0 .14em;position:relative;transition:background .18s,color .18s;white-space:nowrap;border-radius:1px;user-select:none}
+  .rb.on{background:transparent;color:var(--red);text-decoration:underline;text-decoration-thickness:3px;text-underline-offset:4px}
+  .hint{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--red);margin-top:16px}
+  .topline{border-bottom:1.5px solid var(--rule);font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .topline .wrap{display:flex;justify-content:space-between;padding-top:12px;padding-bottom:12px;gap:12px;flex-wrap:wrap}
+  .masthead{text-align:center;padding:44px 0 26px;border-bottom:4px double var(--rule)}
+  .masthead .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--red)}
+  .masthead h1{font-weight:900;font-size:clamp(3rem,9vw,6.2rem);letter-spacing:-.02em;line-height:.95;margin-top:10px}
+  .masthead .dateline{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:16px;display:flex;justify-content:center;gap:26px;flex-wrap:wrap}
+  .lede{border-bottom:3px solid var(--rule);padding:38px 0}
+  .lede h2{font-weight:900;font-size:clamp(1.7rem,4.2vw,2.7rem);line-height:1.14;max-width:30ch}
+  .lede .standfirst{font-size:19px;font-style:italic;color:var(--dim);max-width:64ch;margin-top:18px}
+  .install-line{display:flex;gap:0;margin-top:24px;max-width:720px;border:3px solid var(--ink)}
+  .install-line code{flex:1;font-family:var(--mono);font-size:13px;padding:14px 16px;overflow-x:auto;white-space:nowrap}
+  .install-line code .red{color:var(--red)}
+  .install-line button{font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;background:var(--ink);color:var(--paper);border:none;padding:0 22px;cursor:pointer}
+  .install-line button:hover{background:var(--red)}
+  /* exhibit */
+  .exhibit-sec{border-bottom:3px solid var(--rule);padding:34px 0 44px}
+  .shead{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:18px}
+  .shead b{color:var(--red)}
+  .exhibit{border:3px solid var(--ink);background:var(--panel)}
+  .exhibit .xh{display:flex;justify-content:space-between;padding:12px 18px;border-bottom:3px solid var(--ink);font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.1em}
+  .exhibit .xh .red{color:var(--red);font-weight:700}
+  .xcols{display:grid;grid-template-columns:1fr 1fr}
+  .xcol{font-family:var(--mono);font-size:12.5px;line-height:2.1;padding:20px 18px;white-space:pre-wrap;word-break:break-all}
+  .xcol.before{border-right:3px solid var(--ink)}
+  .xcol .cap{display:block;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  .xcol .rtag{color:var(--red);font-weight:700}
+  .xcol .pass{color:#3f7a4e}
+  /* columns */
+  .cols{display:grid;grid-template-columns:1.2fr 1fr 1fr;border-bottom:1.5px solid var(--rule)}
+  .col{padding:30px 26px;border-right:1.5px solid var(--rule)}
+  .col:last-child{border-right:none}
+  .col h3{font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--red);margin-bottom:14px}
+  .col h4{font-weight:900;font-size:20px;line-height:1.15;margin-bottom:10px}
+  .col p{font-size:15px;color:#33301f}
+  .col p + h4{margin-top:22px}
+  .col .drop::first-letter{font-weight:900;font-size:3.1em;float:left;line-height:.85;padding-right:8px}
+  .col code{font-family:var(--mono);font-size:.85em;background:#ece8db;padding:1px 5px}
+  .pull{border-bottom:1.5px solid var(--rule);padding:44px 0;text-align:center}
+  .pull blockquote{font-weight:600;font-style:italic;font-size:clamp(1.4rem,3.4vw,2.2rem);line-height:1.3;max-width:36ch;margin:0 auto}
+  .pull .attr{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-top:14px}
+  /* coverage: hover to declassify */
+  .coverage{border-bottom:1.5px solid var(--rule);padding:36px 0 44px}
+  .vgrid{display:flex;flex-wrap:wrap;gap:10px 12px;font-family:var(--mono);font-size:13.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+  .briefs{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:3px solid var(--rule)}
+  .brief{padding:22px 20px;border-right:1.5px solid var(--rule)}
+  .brief:last-child{border-right:none}
+  .brief b{font-weight:900;font-size:15.5px;display:block;margin-bottom:6px}
+  .brief span{font-size:13.5px;color:#33301f}
+  .brief code{font-family:var(--mono);font-size:.85em;background:#ece8db;padding:1px 5px}
+  .install{padding:40px 0;border-bottom:1.5px solid var(--rule);display:grid;grid-template-columns:1fr 1.4fr;gap:34px;align-items:start}
+  .install h2{font-weight:900;font-size:clamp(1.5rem,3.4vw,2.2rem);line-height:1.05}
+  .install h2 em{font-style:italic;color:var(--red)}
+  .install pre{background:#181611;color:#efece0;font-family:var(--mono);font-size:13.5px;padding:22px 20px;line-height:2;overflow-x:auto}
+  .install .c{color:#8b8674}
+  .install .p{color:#9fdca8}
+  .closer{padding:44px 0;text-align:center}
+  .closer p{font-weight:900;font-size:clamp(1.5rem,3.6vw,2.3rem)}
+  .closer small{display:block;font-family:var(--mono);font-size:12.5px;color:var(--dim);margin-top:12px;letter-spacing:.06em}
+  footer{border-top:4px double var(--rule);font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  footer .wrap{display:flex;justify-content:space-between;padding-top:16px;padding-bottom:22px;gap:12px;flex-wrap:wrap}
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(60px);background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;padding:11px 18px;opacity:0;transition:all .22s}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media(max-width:900px){
+    .cols{grid-template-columns:1fr}.col{border-right:none;border-bottom:1.5px solid var(--rule)}.col:last-child{border-bottom:none}
+    .xcols{grid-template-columns:1fr}.xcol.before{border-right:none;border-bottom:3px solid var(--ink)}
+    .briefs{grid-template-columns:1fr 1fr}.brief:nth-child(2n){border-right:none}.brief:nth-child(-n+2){border-bottom:1.5px solid var(--rule)}
+    .install{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<div class="topline"><div class="wrap">
+  <span>The developer's record of things that never left the machine</span>
+  <span>Price: $0 · MIT</span>
+</div></div>
+
+<div class="masthead"><div class="wrap">
+  <div class="kicker">Declassified · for immediate release</div>
+  <h1>redacted</h1>
+  <div class="dateline"><span>Vol. 1, № 7</span><span>Local edition</span><span>Weather: no leaks expected</span></div>
+</div></div>
+
+<div class="lede"><div class="wrap">
+  <h2>The <span class="rb" onclick="this.classList.toggle('on')">secrets</span> never reached the model, investigators confirm.</h2>
+  <div class="hint">Click the black bar. That is the whole product.</div>
+  <p class="standfirst">A hook that redacts secrets from tool output before your AI coding assistant reads it. API keys, database URLs, and tokens are scrubbed on your machine, never in the context window.</p>
+  <div class="install-line">
+    <code><span class="red">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
+    <button onclick="cp('curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh')">Copy</button>
+  </div>
+</div></div>
+
+<div class="exhibit-sec"><div class="wrap">
+  <div class="shead"><span><b>Exhibit A</b> — the same .env, two readers</span><span>Fig. 01</span></div>
+  <div class="exhibit">
+    <div class="xh"><span>cat .env</span><span class="red">● 2 secrets intercepted</span></div>
+    <div class="xcols">
+      <div class="xcol before"><span class="cap">Before — straight to the model</span>DATABASE_URL=<span>postgres:<wbr>//app:s3cr3t…@db.prod/app</span>
+STRIPE_SECRET_KEY=<span>sk_live_XXXXXXXXXXXXXXXXXX8STU</span>
+APP_NAME=myapp</div>
+      <div class="xcol"><span class="cap">After — through redacted</span>DATABASE_URL=<span class="rtag">[REDACTED:database_url .../app]</span>
+STRIPE_SECRET_KEY=<span class="rtag">[REDACTED:stripe_live ...8STU]</span>
+APP_NAME=<span class="pass">myapp</span></div>
+    </div>
+  </div>
+</div></div>
+
+<div class="wrap"><div class="cols">
+  <div class="col">
+    <h3>The story</h3>
+    <p class="drop">When an AI tool runs a command or reads a file, the full output lands in context. One <code>cat .env</code>, one stack trace, one debug dump, and your live credentials are on the wire. redacted gets there first: a PostToolUse hook scans the output, replaces matches inline, and hands the assistant the clean copy, never the original. You cannot un-send a token. This makes sure you never have to.</p>
+  </div>
+  <div class="col">
+    <h3>How it works</h3>
+    <h4>1 · Hook in</h4>
+    <p><code>redacted init</code> registers the hook. Every tool output (Bash, Read, Grep, WebFetch) runs through it.</p>
+    <h4>2 · Scan &amp; redact</h4>
+    <p>Vendor signatures, credential-named keys, and an entropy scorer. Matches replaced inline, last 4 chars kept as a hint.</p>
+    <h4>3 · Model sees clean</h4>
+    <p>Nothing found? The output passes through untouched. Non-secret text is never modified.</p>
+  </div>
+  <div class="col">
+    <h3>Detection, three tiers</h3>
+    <h4>Provider signatures</h4>
+    <p>AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Twilio and more. Near-zero false positives.</p>
+    <h4>Credential-named keys</h4>
+    <p>Any env var named SECRET, TOKEN, PASSWORD, API_KEY… gets its value redacted.</p>
+    <h4>Entropy scorer</h4>
+    <p>Unknown 16–128 char values, mixed case and digits, high Shannon entropy. Catches what no signature names.</p>
+  </div>
+</div></div>
+
+<div class="pull"><div class="wrap">
+  <blockquote>"My production key is absolutely not in the context window."</blockquote>
+  <div class="attr">— every redacted user, correctly</div>
+</div></div>
+
+<div class="coverage"><div class="wrap">
+  <div class="shead"><span><b>Index of the classified</b> — 20+ patterns</span><span>hover to declassify</span></div>
+  <div class="vgrid">
+    <span class="rb" onmouseenter="this.classList.add('on')">AWS</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">GitHub</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Stripe</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">OpenAI</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Anthropic</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Twilio</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Slack</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">SendGrid</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">HubSpot</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">DigitalOcean</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">GitLab</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Google</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">npm</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">PyPI</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Sentry</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">New Relic</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">CircleCI</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Private keys</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">JWTs</span>
+    <span class="rb" onmouseenter="this.classList.add('on')">Database URLs</span>
+  </div>
+</div></div>
+
+<div class="wrap"><div class="briefs">
+  <div class="brief"><b>Runs offline</b><span>A single Go binary. No network calls, no telemetry, no account.</span></div>
+  <div class="brief"><b>Fail-closed</b><span>On any error the output is withheld, never passed through raw.</span></div>
+  <div class="brief"><b>Counts, not secrets</b><span>Stats record the timestamp, tool, and per-pattern counts. Never values.</span></div>
+  <div class="brief"><b>Last-4 hint</b><span><code>...8STU</code> says which key fired without exposing it.</span></div>
+</div></div>
+
+<div class="wrap"><div class="install" id="install">
+  <h2>One line,<br>then <em>redacted init</em>.</h2>
+  <pre><span class="c"># curl (recommended)</span>
+curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh
+<span class="p">redacted init</span>
+
+<span class="c"># or Homebrew</span>
+brew tap svn-arv/tap &amp;&amp; brew install redacted
+<span class="p">redacted init</span></pre>
+</div></div>
+
+<div class="closer"><div class="wrap">
+  <p>Stop trusting yourself to remember.</p>
+  <small>Wire it once. Every future cat .env is already handled.</small>
+</div></div>
+
+<footer><div class="wrap">
+  <span>redacted · MIT</span>
+  <span>All the output that's fit to print</span>
+  <span>github.com/svn-arv/redacted</span>
+</div></footer>
+
+<div class="toast" id="toast">Copied to clipboard</div>
+<script>
+  function cp(t){navigator.clipboard.writeText(t).then(()=>{const e=document.getElementById('toast');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400)})}
+</script>
+
+</body>
+</html>
