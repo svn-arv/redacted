@@ -101,6 +101,18 @@ patterns:
   - name: private_key
     regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
 
+  # GCP service-account JSON: the private_key field with a \n-escaped PEM.
+  # A literal multi-line PEM is caught by private_key above; this covers the
+  # single-line JSON form, including dumps truncated before the END marker.
+  - name: gcp_sa_private_key
+    regex: '"private_key"[ \t]*:[ \t]*"-----BEGIN[^"]+'
+    includes_key: true
+
+  # Backstop for service-account excerpts that show only the hex key id.
+  - name: gcp_sa_key_id
+    regex: '"private_key_id"[ \t]*:[ \t]*"[0-9a-f]{12,}"'
+    includes_key: true
+
   - name: jwt
     regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
 

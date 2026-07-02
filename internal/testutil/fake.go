@@ -302,3 +302,12 @@ func HookPayload() string {
 		RandAlphaNum(30), // ENCRYPTION_KEY
 	)
 }
+
+// GCPServiceAccountKey returns a service-account JSON excerpt whose private
+// key is \n-escaped and truncated (no END marker), the shape a log or tool
+// dump leaks. material is caller-supplied so tests can assert the key itself
+// never survives a scrub.
+func GCPServiceAccountKey(material string) Secret {
+	return secret(`{"type": "service_account", "private_key_id": "` + RandHex(40) +
+		`", "private_key": "-----BEGIN PRIVATE KEY-----\n` + material + `\n`)
+}
