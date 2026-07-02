@@ -306,10 +306,28 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	// Skip source-code references; the heuristic catch-all additionally requires
 	// the value to score as secret-like.
 	value := valueOf(match)
+	// A value that just re-states its own key (`password: password`) is a
+	// keyword-arg echo passing a same-named variable, not a literal secret.
+	// Quotes and the `=>` remnant are stripped before comparing.
+	if key := keyOf(match); key != "" &&
+		strings.EqualFold(key, strings.Trim(strings.TrimLeft(value, "> \t"), `"'`)) {
+		return true
+	}
 	if looksLikeIdentifier(value) || looksLikeCodeReference(value) {
 		return true
 	}
 	return p.scored && !s.secretLike(value)
+}
+
+// keyOf returns the left-hand side of a KEY=value or KEY: value match with
+// quotes and padding trimmed, mirroring valueOf; "" when no separator exists.
+func keyOf(match string) string {
+	for i, ch := range match {
+		if ch == '=' || ch == ':' {
+			return strings.Trim(strings.TrimRight(match[:i], " \t"), `"'`)
+		}
+	}
+	return ""
 }
 
 // valueOf returns the right-hand side of a KEY=value or KEY: value match,

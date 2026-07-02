@@ -7,3 +7,7 @@ api_key = ENV.fetch("API_KEY")
 client_id: user.account_id
 context_object: { credit_account_id: credit_account.id }
 const apiUrl = `https://api.example.com/${version}/users`
+user.authenticate(password: password)
+session = create_session(token: token, credential: credential)
+opts = { "password" => "password" }
+update!(PASSWORD: password)
