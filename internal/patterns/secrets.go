@@ -17,9 +17,11 @@ var patternsYAML []byte
 
 // patternDef mirrors an engine.yml entry.
 type patternDef struct {
-	Name        string `yaml:"name"`
-	Regex       string `yaml:"regex"`
-	IncludesKey bool   `yaml:"includes_key"`
+	Name           string   `yaml:"name"`
+	Regex          string   `yaml:"regex"`
+	IncludesKey    bool     `yaml:"includes_key"`
+	Prefilters     []string `yaml:"prefilters"`
+	PrefiltersFold []string `yaml:"prefilters_fold"`
 }
 
 // HeuristicConfig holds the secret_value scorer thresholds (see secretLike).
@@ -66,10 +68,14 @@ var config = func() patternFile {
 
 // pattern pairs a name with a compiled regex.
 type pattern struct {
-	Name        string
-	Regex       *regexp.Regexp
-	includesKey bool // true if the regex matches KEY=value (not just the value)
-	scored      bool // true if redaction is gated by the secretLike value scorer
+	Name              string
+	Regex             *regexp.Regexp
+	includesKey       bool     // true if the regex matches KEY=value (not just the value)
+	scored            bool     // true if redaction is gated by the secretLike value scorer
+	prefilters        []string // regex runs only when one of these literals is present
+	foldPrefilters    []string // like prefilters, but matched on lowercased text
+	foldAllPrefilters []string // every literal must be present (lowercased text)
+	lineScoped        bool     // matches never span lines: scan only prefiltered lines
 }
 
 // Option configures a Scrubber. This is the "functional options" pattern —
@@ -244,12 +250,23 @@ func (s *Scrubber) Scrub(text string) Result {
 	count := 0
 	var byPattern map[string]int
 	out := text
+	// Lowercased copy for fold prefilters, computed at most once per call.
+	// Redactions don't refresh it; they only insert marker text, so a stale
+	// copy can't hide a literal that a real secret would carry.
+	lowered := ""
 	for _, p := range s.patterns {
 		if s.whitelist[p.Name] {
 			continue
 		}
+		if (len(p.foldPrefilters) > 0 || len(p.foldAllPrefilters) > 0) && lowered == "" {
+			lowered = strings.ToLower(out)
+		}
 		var n int
-		out, n = s.applyPattern(p, out)
+		if p.lineScoped && len(p.foldPrefilters) > 0 {
+			out, n = s.applyPatternByLine(p, out, lowered)
+		} else {
+			out, n = s.applyPattern(p, out, lowered)
+		}
 		if n > 0 {
 			if byPattern == nil {
 				byPattern = make(map[string]int)
@@ -268,8 +285,21 @@ func (s *Scrubber) Scrub(text string) Result {
 }
 
 // applyPattern redacts every match of p in text that isn't skipped, returning
-// the rewritten text and the number of redactions made.
-func (s *Scrubber) applyPattern(p *pattern, text string) (string, int) {
+// the rewritten text and the number of redactions made. lowered is the
+// lowercased text for fold prefilters ("" when no pattern needs it).
+func (s *Scrubber) applyPattern(p *pattern, text, lowered string) (string, int) {
+	// A missing prefilter literal proves the regex can't match; skip the
+	// scan entirely. This is where most of the per-call cost goes on
+	// typical (secret-free) tool output.
+	if len(p.prefilters) > 0 && !containsAny(text, p.prefilters) {
+		return text, 0
+	}
+	if len(p.foldPrefilters) > 0 && !containsAny(lowered, p.foldPrefilters) {
+		return text, 0
+	}
+	if len(p.foldAllPrefilters) > 0 && !containsAll(lowered, p.foldAllPrefilters) {
+		return text, 0
+	}
 	locs := p.Regex.FindAllStringIndex(text, -1)
 	if locs == nil {
 		return text, 0
@@ -508,6 +538,51 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
+// containsAny reports whether text contains at least one of the literals.
+func containsAny(text string, literals []string) bool {
+	for _, lit := range literals {
+		if strings.Contains(text, lit) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAll reports whether text contains every literal.
+func containsAll(text string, literals []string) bool {
+	for _, lit := range literals {
+		if !strings.Contains(text, lit) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyPatternByLine runs a line-scoped pattern only on lines carrying one of
+// its fold literals. Redactions never add or remove newlines and case mapping
+// never touches them either, so text and lowered always split into the same
+// line count, and per-line scanning is exactly full-text scanning for a
+// pattern whose matches cannot span lines.
+func (s *Scrubber) applyPatternByLine(p *pattern, text, lowered string) (string, int) {
+	lines := strings.Split(text, "\n")
+	llines := strings.Split(lowered, "\n")
+	total := 0
+	for i := range lines {
+		if i >= len(llines) || !containsAny(llines[i], p.foldPrefilters) {
+			continue
+		}
+		newLine, n := s.applyPattern(p, lines[i], llines[i])
+		if n > 0 {
+			lines[i] = newLine
+			total += n
+		}
+	}
+	if total == 0 {
+		return text, 0
+	}
+	return strings.Join(lines, "\n"), total
+}
+
 // isAllowed checks if the matched text contains any allowed variable name.
 func (s *Scrubber) isAllowed(match string) bool {
 	if len(s.allow) == 0 {
@@ -612,9 +687,11 @@ func specificBuiltins() []*pattern {
 
 	for _, p := range config.Patterns {
 		patterns = append(patterns, &pattern{
-			Name:        p.Name,
-			Regex:       regexp.MustCompile(p.Regex),
-			includesKey: p.IncludesKey,
+			Name:           p.Name,
+			Regex:          regexp.MustCompile(p.Regex),
+			includesKey:    p.IncludesKey,
+			prefilters:     p.Prefilters,
+			foldPrefilters: p.PrefiltersFold,
 		})
 	}
 	return patterns
@@ -626,19 +703,45 @@ func specificBuiltins() []*pattern {
 // WithKeywords' historical position).
 func (s *Scrubber) appendCatchAlls() {
 	kw := strings.Join(config.Keywords, "|")
+	kwFold := keywordFoldLiterals(config.Keywords)
 	s.patterns = append(s.patterns,
-		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw, s.valueSafeChar)), includesKey: true},
-		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw, s.valueSafeChar)), includesKey: true},
+		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, lineScoped: true},
+		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, foldAllPrefilters: []string{"value:"}},
 		&pattern{Name: "secret_value", Regex: regexp.MustCompile(heuristicAssignmentRegex(s.heuristic.MinLength, s.valueSafeChar)), includesKey: true, scored: true},
 	)
 	for _, batch := range s.customKeywords {
 		expr := envSecretRegex(strings.Join(batch, "|"), s.valueSafeChar)
 		s.patterns = append(s.patterns, &pattern{
-			Name:        "custom_keyword",
-			Regex:       regexp.MustCompile(expr),
-			includesKey: true,
+			Name:           "custom_keyword",
+			Regex:          regexp.MustCompile(expr),
+			includesKey:    true,
+			foldPrefilters: keywordFoldLiterals(batch),
+			lineScoped:     true,
 		})
 	}
+}
+
+// keywordFoldLiterals derives the lowercase literals a keyword match must
+// contain, covering the snake (api_key), kebab (api-key) and Pascal/camel
+// (apikey, from ApiKey) spellings the keyword regex accepts.
+func keywordFoldLiterals(keywords []string) []string {
+	seen := make(map[string]bool)
+	var lits []string
+	add := func(l string) {
+		if l != "" && !seen[l] {
+			seen[l] = true
+			lits = append(lits, l)
+		}
+	}
+	for _, kw := range keywords {
+		l := strings.ToLower(kw)
+		add(l)
+		if strings.Contains(l, "_") {
+			add(strings.ReplaceAll(l, "_", "-"))
+			add(strings.ReplaceAll(l, "_", ""))
+		}
+	}
+	return lits
 }
 
 // defaultScrubber is the package-level scrubber for the convenience function.
