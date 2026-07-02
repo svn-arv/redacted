@@ -322,7 +322,38 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	if p.scored && isIdentifierKey(keyOf(match)) {
 		return true
 	}
+	// A scored match whose token already carries a scheme sits inside a URL:
+	// host:port/Path parses as KEY:value but is address, not secret. Keyword
+	// keys with URL values stay covered by env_secret.
+	if p.scored && insideURL(text, end-len(match)) {
+		return true
+	}
 	return p.scored && !s.secretLike(value)
+}
+
+// urlLookback caps how far insideURL walks; a scheme further back than this
+// inside one unbroken token is out of scope, and the cap bounds scan cost.
+const urlLookback = 2048
+
+// insideURL reports whether the token containing offset start begins with a
+// URL scheme: the characters from the previous token boundary up to start
+// contain "://".
+func insideURL(text string, start int) bool {
+	i := start
+	for i > 0 && start-i < urlLookback && !isTokenBoundary(text[i-1]) {
+		i--
+	}
+	return strings.Contains(text[i:start], "://")
+}
+
+// isTokenBoundary reports whether c ends a token for insideURL's walk-back:
+// whitespace, quotes, and the bracket/separator set value_safe_char excludes.
+func isTokenBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>', ',', ';':
+		return true
+	}
+	return false
 }
 
 // isIdentifierKey reports whether key names an identifier rather than a

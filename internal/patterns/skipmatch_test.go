@@ -63,3 +63,30 @@ func TestScrub_IdentifierKeyValues(t *testing.T) {
 		}
 	}
 }
+
+// TestScrub_URLContextValues covers port URLs: host:port parses as KEY:value
+// and an uppercase path clears the scorer, but a scored match whose token
+// already carries a scheme is an address, not a secret.
+func TestScrub_URLContextValues(t *testing.T) {
+	clean := []string{
+		"https://example.com:8080/FooBar/Baz123",
+		"curl https://api.example.com:9200/Index7/_search?q=FooBar9",
+	}
+	for _, in := range clean {
+		if result := Scrub(in); result.Redacted {
+			t.Errorf("expected no redaction for URL %q, got: %q", in, result.Text)
+		}
+	}
+
+	// Guardrails: a keyword key with a URL value stays covered (env_secret is
+	// not scored), and a scored secret merely adjacent to a URL still redacts.
+	redactGuards := []string{
+		"API_TOKEN: https://example.com:8080/FooBar/Baz123",
+		"see https://example.com:8080/docs then WIDGET=aB3xK9pLq2mNz7rT4vWy",
+	}
+	for _, in := range redactGuards {
+		if result := Scrub(in); !result.Redacted {
+			t.Errorf("expected redaction for %q, got: %q", in, result.Text)
+		}
+	}
+}

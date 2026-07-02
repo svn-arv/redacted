@@ -221,9 +221,9 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"bare github issue url", "https://github.com/Luce-MG/luce-product-design/issues/123", true, "", ""},
 		{"bare github pull url in text", "See https://github.com/Luce-MG/luce-product-design/pull/4567 for details", true, "", ""},
 		{"bare url mixed-case path", "https://docs.example.com/d/abcDEF123ghiJKL/edit", true, "", ""},
-		// Known residual: a port colon is a second host:port separator, so an
-		// uppercase path segment after :PORT can still redact (port-less URLs are clean).
-		{"port url uppercase path (known residual)", "https://example.com:8080/FooBar/Baz123", false, "", ""},
+		// A port colon reads as a second host:port separator, but the token
+		// carries a scheme, so the URL-context skip keeps it clean.
+		{"port url uppercase path", "https://example.com:8080/FooBar/Baz123", true, "", ""},
 
 		// === Identifier-like values in source code (should NOT redact) ===
 		{"ruby assignment", "token = not_token", true, "", ""},

@@ -16,9 +16,8 @@ var cleanCorpus embed.FS
 
 // knownResidualFPs still redact today but aren't secrets. The precision test
 // asserts each still redacts, flagging when one gets fixed (promote to clean).
-var knownResidualFPs = []string{
-	"https://example.com:8080/FooBar/Baz123", // port colon + uppercase path
-}
+// Currently empty; future residuals land here.
+var knownResidualFPs []string
 
 // TestCorpus_Precision fails on any redaction of the clean corpus, and reports
 // the precision so accuracy stays visible even when green.
