@@ -105,7 +105,7 @@
 <div class="lede"><div class="wrap">
   <h2>The <span class="rb" onclick="this.classList.toggle('on')">secrets</span> never reached the model, investigators confirm.</h2>
   <div class="hint">Click the black bar. That is the whole product.</div>
-  <p class="standfirst">It doesn't take a dangerous command to leak a key. Normal work is enough: a diff, a stack trace, a config dump. redacted scrubs secrets from tool output on your machine, before your AI coding assistant reads it.</p>
+  <p class="standfirst">Leaks don't need a dangerous command. A diff, a log, a config dump, and the key is in context. redacted scrubs tool output on your machine, before your AI coding assistant reads it.</p>
   <div class="install-line">
     <code><span class="red">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
     <button onclick="cp('curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh')">Copy</button>
@@ -130,7 +130,7 @@ APP_NAME=<span class="pass">myapp</span></div>
 <div class="wrap"><div class="cols">
   <div class="col">
     <h3>Why this exists</h3>
-    <p class="drop">Nobody asked the model to do anything dangerous. It ran <code>git diff</code>; there was the committed key. It read the crash log; the stack trace dumped ENV. It ran <code>heroku config</code>, a command whose whole job is returning secrets. The guard watching for <code>cat .env</code> never fired, because the command was wrapped in a script. Secrets enter context through normal work, and once there they are in the transcript and on the wire. redacted scrubs the output itself, whatever produced it. You cannot un-send a token. This makes sure you never have to.</p>
+    <p class="drop">Nobody asked the model to do anything dangerous. It ran <code>git diff</code>; the committed key came back. It read a crash log; the stack trace dumped ENV. It ran <code>heroku config</code>, a command whose job is printing secrets. The guard watching for <code>cat .env</code> saw a script name instead. Secrets arrive through normal work. redacted scrubs the output itself, whatever produced it. You cannot un-send a token. This makes sure you never have to.</p>
   </div>
   <div class="col">
     <h3>How it works</h3>
@@ -139,7 +139,7 @@ APP_NAME=<span class="pass">myapp</span></div>
     <h4>2 · Scan &amp; redact</h4>
     <p>Vendor signatures, credential-named keys, and an entropy scorer. Matches replaced inline, last 4 chars kept as a hint.</p>
     <h4>3 · Model sees clean</h4>
-    <p>Nothing found? The output passes through untouched. Non-secret text is never modified.</p>
+    <p>Nothing found? The output passes through untouched, byte for byte.</p>
   </div>
   <div class="col">
     <h3>Detection, three tiers</h3>
