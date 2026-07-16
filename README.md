@@ -2,9 +2,19 @@
 
 A hook that redacts secrets from tool output before your AI coding assistant sees them.
 
-When an AI tool runs a command or reads a file, the full output goes into conversation context. If that output contains API keys, database URLs, or tokens, they end up on the wire. `redacted` prevents this by scanning the output and replacing secrets before they leave your machine.
+## Why this exists
 
-Built for Claude Code's PostToolUse hook, which is the tested integration. `redacted scrub` also runs standalone: pipe a Claude-Code-style JSON payload (or, in test mode, any raw text) through stdin and it writes back the scrubbed result, so other hook-capable tools can wire it in.
+"Models are smart enough not to run `cat .env`." True, and beside the point. Secrets don't enter the context window because the model does something dangerous. They arrive through normal work:
+
+- **Incidental leakage.** Secrets ride along in legitimate output: a committed key in `git diff`, a token in a tailed log, a stack trace that dumps ENV, CI logs, `ps aux`.
+- **By-design disclosure.** Ops CLIs return secrets because that's their contract: `heroku config`, `kubectl get secret -o yaml`, `aws secretsmanager get-secret-value`. The command isn't dangerous. It's the job.
+- **Guard laundering.** Deny lists, permission rules, and model judgment key on the command string. Wrappers (a proxy CLI, an npm script, a make target, `ssh host '...'`) change the string without changing the output.
+
+Once in context, a secret is in the transcript on disk and on the wire with every request that follows. Model restraint is behavioral and input-side. `redacted` is deterministic and output-side: it scans what came back, no matter which command produced it.
+
+`redacted` runs as Claude Code's PostToolUse hook, the last point before tool output enters context. It scans each tool result on your machine and replaces secrets before they go anywhere; clean output passes through untouched.
+
+Claude Code is the tested integration. `redacted scrub` also runs standalone: pipe a Claude-Code-style JSON payload (or, in test mode, any raw text) through stdin and it writes back the scrubbed result, so other hook-capable tools can wire it in.
 
 ## Install
 
