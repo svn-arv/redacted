@@ -105,7 +105,7 @@
 <div class="lede"><div class="wrap">
   <h2>The <span class="rb" onclick="this.classList.toggle('on')">secrets</span> never reached the model, investigators confirm.</h2>
   <div class="hint">Click the black bar. That is the whole product.</div>
-  <p class="standfirst">A hook that redacts secrets from tool output before your AI coding assistant reads it. API keys, database URLs, and tokens are scrubbed on your machine, never in the context window.</p>
+  <p class="standfirst">Leaks don't need a dangerous command. A diff, a log, a config dump, and the key is in context. redacted scrubs tool output on your machine, before your AI coding assistant reads it.</p>
   <div class="install-line">
     <code><span class="red">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
     <button onclick="cp('curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh')">Copy</button>
@@ -129,17 +129,17 @@ APP_NAME=<span class="pass">myapp</span></div>
 
 <div class="wrap"><div class="cols">
   <div class="col">
-    <h3>The story</h3>
-    <p class="drop">When an AI tool runs a command or reads a file, the full output lands in context. One <code>cat .env</code>, one stack trace, one debug dump, and your live credentials are on the wire. redacted gets there first: a PostToolUse hook scans the output, replaces matches inline, and hands the assistant the clean copy, never the original. You cannot un-send a token. This makes sure you never have to.</p>
+    <h3>Why this exists</h3>
+    <p class="drop">Nobody asked the model to do anything dangerous. It ran <code>git diff</code>; the committed key came back. It read a crash log; the stack trace dumped ENV. It ran <code>heroku config</code>, a command whose job is printing secrets. The guard watching for <code>cat .env</code> saw a script name instead. Secrets arrive through normal work. redacted scrubs the output itself, whatever produced it. You cannot un-send a token. This makes sure you never have to.</p>
   </div>
   <div class="col">
     <h3>How it works</h3>
     <h4>1 · Hook in</h4>
-    <p><code>redacted init</code> registers the hook. Every tool output (Bash, Read, Grep, WebFetch) runs through it.</p>
+    <p><code>redacted init</code> registers the PostToolUse hook. Every tool output (Bash, Read, Grep, WebFetch) runs through it.</p>
     <h4>2 · Scan &amp; redact</h4>
     <p>Vendor signatures, credential-named keys, and an entropy scorer. Matches replaced inline, last 4 chars kept as a hint.</p>
     <h4>3 · Model sees clean</h4>
-    <p>Nothing found? The output passes through untouched. Non-secret text is never modified.</p>
+    <p>Nothing found? The output passes through untouched, byte for byte.</p>
   </div>
   <div class="col">
     <h3>Detection, three tiers</h3>
@@ -203,7 +203,7 @@ brew tap svn-arv/tap &amp;&amp; brew install redacted
 
 <div class="closer"><div class="wrap">
   <p>Stop trusting yourself to remember.</p>
-  <small>Wire it once. Every future cat .env is already handled.</small>
+  <small>Wire it once. Every future tool call is already handled.</small>
 </div></div>
 
 <footer><div class="wrap">

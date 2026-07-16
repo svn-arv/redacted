@@ -1,10 +1,36 @@
 # redacted
 
-A hook that redacts secrets from tool output before your AI coding assistant sees them.
+Redacts secrets from tool output before your AI coding assistant sees them.
 
-When an AI tool runs a command or reads a file, the full output goes into conversation context. If that output contains API keys, database URLs, or tokens, they end up on the wire. `redacted` prevents this by scanning the output and replacing secrets before they leave your machine.
+## Why
 
-Built for Claude Code's PostToolUse hook, which is the tested integration. `redacted scrub` also runs standalone: pipe a Claude-Code-style JSON payload (or, in test mode, any raw text) through stdin and it writes back the scrubbed result, so other hook-capable tools can wire it in.
+"Models are smart enough not to run `cat .env`." True. Also not the problem. Secrets reach the model through normal work:
+
+- **They ride along in ordinary output.** A committed key in `git diff`. A token in a log. A stack trace that dumps ENV.
+- **Some commands exist to print them.** `heroku config`, `kubectl get secret -o yaml`, `aws secretsmanager get-secret-value`. Running them is the job.
+- **Command guards are easy to sidestep.** Deny lists and model judgment read the command string. An npm script, a make target, or a proxy CLI changes the string, not the output.
+
+Once in context, a secret is in the transcript on disk and in every request that follows. `redacted` doesn't judge commands. It scrubs the output, whatever produced it.
+
+## How
+
+A Claude Code PostToolUse hook, the last stop before tool output enters context. Every tool result is scanned on your machine. Secrets are replaced inline; the last 4 characters stay as a hint. Clean output passes through untouched.
+
+`cat .env` would normally expose:
+
+```
+DATABASE_URL=postgres://admin:secret@db.example.com:5432/prod
+STRIPE_SECRET_KEY=<your-stripe-live-key>
+APP_NAME=myapp
+```
+
+Your assistant sees:
+
+```
+DATABASE_URL=[REDACTED:database_url .../prod]
+STRIPE_SECRET_KEY=[REDACTED:stripe_live ...8STU]
+APP_NAME=myapp
+```
 
 ## Install
 
@@ -46,7 +72,7 @@ redacted init
 redacted init --local
 ```
 
-This registers `redacted scrub` as a PostToolUse hook. All tool output (Bash, Read, Grep, WebFetch, etc.) gets scanned before it reaches the model. Safe to run multiple times.
+Registers `redacted scrub` as a PostToolUse hook. Safe to run multiple times.
 
 | Flag       | Settings file                 | Scope        |
 | ---------- | ----------------------------- | ------------ |
@@ -55,17 +81,19 @@ This registers `redacted scrub` as a PostToolUse hook. All tool output (Bash, Re
 
 ### Other tools
 
-`redacted scrub` reads a JSON payload from stdin and writes to stdout. Pipe any tool output through it:
+`redacted scrub` reads a Claude-Code-style JSON payload on stdin and writes to stdout, so any hook-capable tool can wire it in:
 
 ```bash
 echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=SUPER-SECRETPASSWORD"}}' | redacted scrub
 ```
 
-If secrets are found, it outputs a JSON response with `decision: "block"` and the redacted text. If no secrets are found, it outputs nothing (pass-through).
+Secrets found: a JSON response with `decision: "block"` and the redacted text. Nothing found: no output (pass-through). Bash stdout and stderr are scrubbed separately; other tools (Read, Grep, WebFetch) are scrubbed on the raw response.
 
 ## What it detects
 
-### Specific patterns
+Three tiers: vendor patterns, credential keywords, entropy heuristic.
+
+### Vendor patterns
 
 | Pattern         | Example                                       |
 | --------------- | --------------------------------------------- |
@@ -95,64 +123,29 @@ If secrets are found, it outputs a JSON response with `decision: "block"` and th
 | Database URLs   | `postgres://`, `mysql://`, `mongodb://`, `redis://`, `amqp://` |
 | Credentialed URLs | `scheme://user:pass@host` for any scheme (e.g. `postgis://`) |
 
-### Generic catch-alls
+### Credential keywords
 
-Any environment variable whose name contains these keywords gets its value redacted:
+Any env var whose name contains one of these gets its value redacted:
 
 `SECRET`, `TOKEN`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`, `ACCESS_KEY`, `ENCRYPTION_KEY`, `SIGNING_KEY`, `LICENSE_KEY`, `CLIENT_ID`, `DB_PASS`, `DB_URL`, `DATABASE_URL`, `REDIS_URL`, `_DSN`, `_SID`, `ACCOUNT_ID`, `AUTH_KEY`, `MASTER_KEY`, `SERVICE_KEY`
 
-Works in env files (`SECRET_KEY=value`), shell exports, and YAML configs.
+Works in env files (`SECRET_KEY=value`), shell exports, and YAML.
 
-### Heuristic value detection
+### Entropy heuristic
 
-The keyword list above can't name every secret-bearing variable. So any `KEY=value` / `key: value` assignment is also redacted when the **value itself** looks like a random credential, regardless of the key name. A value qualifies only when it:
+Keywords can't name every secret-bearing variable. So any `KEY=value` / `key: value` assignment is also redacted when the value itself looks like a credential:
 
-- is 16–128 characters long,
-- mixes lowercase, uppercase, and digits, and
-- has high enough Shannon entropy (it looks random, not structured).
+- 16–128 characters,
+- lowercase + uppercase + digits, and
+- high Shannon entropy (random, not structured).
 
-These rules are deliberately strict to avoid false positives: structured high-entropy strings such as UUIDs, git/SHA hashes, version numbers, and timestamps use a single case (or omit a class), so they pass through untouched. Thresholds live under `heuristic:` in `engine.yml`.
-
-The trade-off is precision over recall: a secret under an unknown key that is single-case (e.g. all-lowercase hex) won't be caught by this tier, though a matching specific pattern or keyword still would.
-
-## Known limitations
-
-- A URL with both a port and a mixed-case path (`https://host:8080/FooBar`) can have the `:port/path` tail redacted, because `host:port` parses as a key and value. Bare URLs without a port pass through fine.
-- A high-entropy identifier that mixes case and digits (some tool or request IDs) may be caught by the heuristic. The 4-character hint makes these easy to spot.
-- Every pattern scans the full output in sequence, so multi-megabyte tool output adds noticeable per-call latency.
-
-## How it works
-
-The hook reads a JSON payload from stdin and scrubs secrets from tool output. For Bash, it processes stdout and stderr separately. For other tools (Read, Grep, WebFetch), it scrubs the raw response. If no secrets are found, it exits silently (pass-through). If secrets are found, it outputs a JSON block response with redacted text. The last 4 characters of each secret are kept as a hint so you can tell which key was hit without exposing the value.
-
-## Example
-
-`cat .env` output that would normally expose:
-
-```
-DATABASE_URL=postgres://admin:secret@db.example.com:5432/prod
-STRIPE_SECRET_KEY=<your-stripe-live-key>
-APP_NAME=myapp
-```
-
-Your AI assistant instead sees:
-
-```
-DATABASE_URL=[REDACTED:database_url .../prod]
-STRIPE_SECRET_KEY=[REDACTED:stripe_live ...8STU]
-APP_NAME=myapp
-```
-
-Non-sensitive values pass through unchanged.
+Strict on purpose. UUIDs, git SHAs, versions, and timestamps use a single case or skip a character class, so they pass. The trade-off is precision over recall: a single-case secret under an unknown key slips this tier; a vendor pattern or keyword still catches it. Thresholds live under `heuristic:` in `engine.yml`.
 
 ## Configuration
 
-Two files, split by concern. Detection rules (what counts as a secret) live in
-`engine.yml`; operational policy lives in `config.yaml`. Each loads a global
-copy and a per-project copy. See `engine.example.yml`, `config.example.yaml`,
-and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Two files. Detection rules in `engine.yml`, operational policy in `config.yaml`. Each loads a global copy and a per-project copy. See `engine.example.yml`, `config.example.yaml`, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-### Engine config (detection)
+### engine.yml (detection)
 
 Global `~/.config/redacted/engine.yml`, project `.redacted.engine.yml`.
 
@@ -170,41 +163,33 @@ patterns:
     regex: 'sk-proj-[A-Za-z0-9_-]{20,}'
 ```
 
-Raising heuristic thresholds takes effect at runtime. Lowering `min_length`
-below the built-in 16 needs a rebuild, since the candidate regex floor is
-compiled in.
+Raising heuristic thresholds works at runtime. Lowering `min_length` below 16 needs a rebuild (the candidate regex floor is compiled in).
 
-### App config (operational)
+### config.yaml (operational)
 
 Global `~/.config/redacted/config.yaml`, project `.redacted.yaml`.
 
 ```yaml
 whitelist: # turn off built-in patterns by name
   - jwt
-allow: # variable names that must never be redacted
+allow: # keyword-matching names that aren't secrets
+  - TWILIO_WORKFLOW_SID
   - APP_URL
 ```
 
-Set `override: true` in a project file to ignore the global file entirely.
-`patterns` and `keywords` go in `engine.yml`, not here.
+`override: true` in a project file ignores the global file. Patterns and keywords go in `engine.yml`, not here.
 
-### Internal tools
-
-By default, all tool output is scrubbed (Bash, Read, Grep, WebFetch, etc.). To only scrub Bash output:
+To scrub Bash output only:
 
 ```yaml
 ignore_internal_tools: true
 ```
 
-### Allow list
+## Known limitations
 
-Some variables match secret keywords but aren't actually sensitive (workflow SIDs, app URLs). Add them to the allow list:
-
-```yaml
-allow:
-  - TWILIO_WORKFLOW_SID
-  - APP_URL
-```
+- A URL with a port and a mixed-case path (`https://host:8080/FooBar`) can have the `:port/path` tail redacted; `host:port` parses as a key and value. Bare URLs without a port pass fine.
+- A high-entropy identifier that mixes case and digits (some tool or request IDs) may trip the heuristic. The 4-character hint makes these easy to spot.
+- Every pattern scans the full output in sequence; multi-megabyte output adds noticeable per-call latency.
 
 ## Verify
 
@@ -212,17 +197,15 @@ allow:
 redacted verify
 ```
 
-Runs health checks: binary in PATH, hook registered, config loaded, patterns compiled, test scrub passes.
+Health checks: binary in PATH, hook registered, config loaded, patterns compiled, test scrub passes.
 
 ## Stats
-
-See which patterns actually fire:
 
 ```bash
 redacted stats
 ```
 
-It reports total redactions, a per-pattern breakdown, and a confidence tier for each: `vendor` (provider signatures, near-zero false positives), `keyword` (credential-named keys), and `heuristic` (entropy-only, where false positives concentrate). A high heuristic share flags patterns worth reviewing. Data lives at `~/.config/redacted/stats.jsonl` and holds pattern names and counts only, never secret values.
+Total redactions, per-pattern counts, and each pattern's confidence tier: `vendor` (near-zero false positives), `keyword` (credential-named keys), `heuristic` (entropy-only, where false positives concentrate). A high heuristic share flags patterns worth reviewing. Data lives at `~/.config/redacted/stats.jsonl`: pattern names and counts only, never values.
 
 ## Uninstall
 
@@ -230,7 +213,7 @@ It reports total redactions, a per-pattern breakdown, and a confidence tier for 
 redacted uninstall
 ```
 
-Removes hooks from settings and deletes the binary. Use `--keep-binary` to only remove hooks.
+Removes hooks and deletes the binary. `--keep-binary` removes hooks only.
 
 ## Development
 
