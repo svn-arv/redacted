@@ -161,6 +161,11 @@ keywords:
 patterns:
   - name: openai_key
     regex: 'sk-proj-[A-Za-z0-9_-]{20,}'
+
+# Value shapes never redacted: a match whose value (key=value) or whole match
+# (value-only) matches one of these passes through.
+allow_values:
+  - '^svc_[A-Za-z0-9]+$'
 ```
 
 Raising heuristic thresholds works at runtime. Lowering `min_length` below 16 needs a rebuild (the candidate regex floor is compiled in).

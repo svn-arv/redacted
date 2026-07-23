@@ -116,7 +116,7 @@ func TestCorpus_Recall(t *testing.T) {
 		{"private_key_generic", testutil.PrivateKey("").Value},
 		{"gcp_sa_private_key", testutil.GCPServiceAccountKey(testutil.RandAlphaNum(96)).Value},
 		{"env_secret_keyword", "SECRET_KEY=" + testutil.RandAlphaNum(24)},
-		{"env_secret_colon", "AUTH_TOKEN: " + testutil.RandAlphaNum(20)},
+		{"env_secret_colon", "AUTH_TOKEN: aB3" + testutil.RandAlphaNum(17)},
 		{"heuristic_secret_value", "WIDGET_CONFIG=" + heuristicVal},
 	}
 

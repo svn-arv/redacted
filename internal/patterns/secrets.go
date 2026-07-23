@@ -37,6 +37,7 @@ type patternFile struct {
 	ValueSafeChar string          `yaml:"value_safe_char"`
 	Heuristic     HeuristicConfig `yaml:"heuristic"`
 	Keywords      []string        `yaml:"keywords"`
+	AllowValues   []string        `yaml:"allow_values"`
 	Patterns      []patternDef    `yaml:"patterns"`
 }
 
@@ -90,6 +91,11 @@ type Scrubber struct {
 	heuristic      HeuristicConfig // secret_value scorer thresholds
 	valueSafeChar  string          // catch-all value charset (engine.yml value_safe_char)
 	customKeywords [][]string      // WithKeywords batches, compiled after options run
+	keywords       []string        // effective keyword set (config + WithKeywords) for #29 placeholder guards
+	// allow_values: value shapes that are never redacted (engine.yml built-ins +
+	// WithAllowValues); customAllowValues holds option rows compiled after opts run.
+	allowValues       []*regexp.Regexp
+	customAllowValues []string
 }
 
 // New creates a Scrubber with built-in defaults plus any options.
@@ -111,6 +117,7 @@ func New(opts ...Option) *Scrubber {
 	// The catch-alls compile last so options can shape their regexes
 	// (heuristic floor, value charset, custom keyword batches).
 	s.appendCatchAlls()
+	s.compileAllowValues()
 	return s
 }
 
@@ -158,6 +165,16 @@ func WithKeywords(keywords ...string) Option {
 			return
 		}
 		s.customKeywords = append(s.customKeywords, keywords)
+	}
+}
+
+// WithAllowValues adds value-shape allow rows: a candidate whose value
+// (key=value) or whole match (value-only) matches one is never redacted.
+//
+//	patterns.New(patterns.WithAllowValues(`^svc_[A-Za-z0-9]+$`))
+func WithAllowValues(exprs ...string) Option {
+	return func(s *Scrubber) {
+		s.customAllowValues = append(s.customAllowValues, exprs...)
 	}
 }
 
@@ -328,6 +345,9 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	if s.isAllowed(match) {
 		return true
 	}
+	if s.allowsValue(p, match, text, end) {
+		return true
+	}
 	if !p.includesKey {
 		return false
 	}
@@ -339,14 +359,34 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	// Skip source-code references; the heuristic catch-all additionally requires
 	// the value to score as secret-like.
 	value := valueOf(match)
-	// A value that just re-states its own key (`password: password`) is a
-	// keyword-arg echo passing a same-named variable, not a literal secret.
-	// Quotes and the `=>` remnant are stripped before comparing.
-	if key := keyOf(match); key != "" &&
-		strings.EqualFold(key, strings.Trim(strings.TrimLeft(value, "> \t"), `"'`)) {
+	// A value that re-states its own key (`password: password`) is a keyword-arg
+	// echo, not a literal; valueOf already stripped quotes and the `=>` remnant.
+	if key := keyOf(match); key != "" && strings.EqualFold(key, value) {
 		return true
 	}
 	if looksLikeIdentifier(value) || looksLikeCodeReference(value) {
+		return true
+	}
+	// Lenient separators (`:`, `=>`, spaced `=`) mean source code, where an
+	// identifier-shaped value is a reference. Bare KEY=value env dumps stay strict.
+	if separatorLenient(match) && looksLikeLenientIdentifier(value) {
+		return true
+	}
+	// #29 (a): a value that is just the key's own keyword plus digits/separators
+	// (`API_KEY=apikey123`) is a placeholder; a secretLike value still redacts.
+	if key := keyOf(match); key != "" {
+		if nv := normLetters(value); nv != "" {
+			upperKey := strings.ToUpper(key)
+			for _, kw := range s.keywords {
+				if strings.Contains(upperKey, strings.ToUpper(kw)) && nv == normLetters(kw) && !s.secretLike(value) {
+					return true
+				}
+			}
+		}
+	}
+	// #29 (b): a short all-lowercase dictionary word (<=12 chars) is a
+	// placeholder (`changeme`, `placeholder`), not a random credential.
+	if n := len(value); n > 0 && n <= 12 && isAllLowerASCII(value) {
 		return true
 	}
 	// Keys that name identifiers (tool_use_id, sessionId) hold IDs, not
@@ -416,12 +456,18 @@ func keyOf(match string) string {
 	return ""
 }
 
-// valueOf returns the right-hand side of a KEY=value or KEY: value match,
-// mirroring how redact splits the key and value.
+// valueOf returns the right-hand side of a KEY=value or KEY: value match with
+// the `=>` remnant, padding, and one leading quote stripped (redact splits raw).
 func valueOf(match string) string {
 	for i, ch := range match {
 		if ch == '=' || ch == ':' {
-			return strings.TrimLeft(match[i+1:], " \t")
+			v := match[i+1:]
+			v = strings.TrimPrefix(v, ">")
+			v = strings.TrimLeft(v, " \t")
+			if len(v) > 0 && (v[0] == '\'' || v[0] == '"') {
+				v = v[1:]
+			}
+			return v
 		}
 	}
 	return ""
@@ -477,6 +523,81 @@ func looksLikeCodeReference(v string) bool {
 	return hasSep && hasLower && hasUpper
 }
 
+// separatorLenient reports whether the first separator reads as source code —
+// `:`, `=>`, or spaced `=` — rather than a strict env-dump `KEY=value`.
+func separatorLenient(match string) bool {
+	for i := 0; i < len(match); i++ {
+		switch match[i] {
+		case ':':
+			return true
+		case '=':
+			if i+1 < len(match) && match[i+1] == '>' {
+				return true // Ruby/PHP =>
+			}
+			spacedBefore := i > 0 && (match[i-1] == ' ' || match[i-1] == '\t')
+			spacedAfter := i+1 < len(match) && (match[i+1] == ' ' || match[i+1] == '\t')
+			return spacedBefore && spacedAfter
+		}
+	}
+	return false
+}
+
+// looksLikeLenientIdentifier accepts identifier paths (letters/digits + `_.&#`,
+// one trailing `?`/`!`) and pure-letter camelCase; digits with no separator fail.
+func looksLikeLenientIdentifier(v string) bool {
+	if n := len(v); n > 0 && (v[n-1] == '?' || v[n-1] == '!') {
+		v = v[:n-1]
+	}
+	hasLetter, hasUpper, hasLower, hasDigit, hasSep := false, false, false, false, false
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case c >= 'a' && c <= 'z':
+			hasLower, hasLetter = true, true
+		case c >= 'A' && c <= 'Z':
+			hasUpper, hasLetter = true, true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case c == '_' || c == '.' || c == '&' || c == '#':
+			hasSep = true
+		default:
+			return false
+		}
+	}
+	if !hasLetter {
+		return false
+	}
+	if hasSep {
+		return true
+	}
+	return !hasDigit && hasUpper && hasLower
+}
+
+// normLetters lowercases s and drops every non-letter, so a keyword and a
+// decorated echo of it compare equal (`API_KEY` and `apikey123` -> `apikey`).
+func normLetters(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 'A' && c <= 'Z':
+			b.WriteByte(c + 32)
+		case c >= 'a' && c <= 'z':
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// isAllLowerASCII reports whether s is non-empty and every byte is a-z.
+func isAllLowerASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
 // secretLike reports whether v looks like a random credential. Requiring lower,
 // upper, and digit together is what lets UUIDs, hashes, and timestamps through.
 func (s *Scrubber) secretLike(v string) bool {
@@ -485,6 +606,17 @@ func (s *Scrubber) secretLike(v string) bool {
 	// A value containing "://" is a URL, not a credential (credentialed URLs are caught earlier).
 	if strings.Contains(v, "://") {
 		return false
+	}
+
+	// Percent-decode before scoring: decoding that reveals a space or control
+	// byte means encoded prose, not a secret; otherwise score the decoded form.
+	if decoded := percentDecode(v); decoded != v {
+		for i := 0; i < len(decoded); i++ {
+			if decoded[i] < 0x21 || decoded[i] == 0x7F {
+				return false
+			}
+		}
+		v = decoded
 	}
 
 	length := utf8.RuneCountInString(v)
@@ -514,6 +646,42 @@ func (s *Scrubber) secretLike(v string) bool {
 	}
 
 	return shannonEntropy(v) >= h.MinEntropy
+}
+
+// percentDecode replaces each %XX pair with its byte; a malformed `%` stays
+// literal and `+` is never a space. Bounds-checked, panic-safe on any input.
+func percentDecode(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2]) {
+			b.WriteByte(hexNibble(s[i+1])<<4 | hexNibble(s[i+2]))
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// isHexDigit reports whether c is a hex digit (0-9, a-f, A-F).
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// hexNibble returns the 0-15 value of a hex digit; callers gate on isHexDigit.
+func hexNibble(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	default:
+		return c - 'A' + 10
+	}
 }
 
 // shannonEntropy returns the entropy of s in bits per character: high for random
@@ -581,6 +749,35 @@ func (s *Scrubber) applyPatternByLine(p *pattern, text, lowered string) (string,
 		return text, 0
 	}
 	return strings.Join(lines, "\n"), total
+}
+
+// allowsValue reports whether the candidate's value clears an allow_values row.
+// Value-only patterns test the whole match; key=value patterns test the value.
+func (s *Scrubber) allowsValue(p *pattern, match, text string, end int) bool {
+	if len(s.allowValues) == 0 {
+		return false
+	}
+	candidate := match
+	if p.includesKey {
+		candidate = allowValueToken(match, text, end)
+	}
+	for _, re := range s.allowValues {
+		if re.MatchString(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowValueToken is the value tested against allow_values: valueOf plus the
+// tail value_safe_char truncated at `@`, so URL userinfo rejoins the value.
+func allowValueToken(match, text string, end int) string {
+	v := valueOf(match)
+	i := end
+	for i < len(text) && !isTokenBoundary(text[i]) {
+		i++
+	}
+	return v + text[end:i]
 }
 
 // isAllowed checks if the matched text contains any allowed variable name.
@@ -704,6 +901,12 @@ func specificBuiltins() []*pattern {
 func (s *Scrubber) appendCatchAlls() {
 	kw := strings.Join(config.Keywords, "|")
 	kwFold := keywordFoldLiterals(config.Keywords)
+	// Effective keyword set for the #29 placeholder guards: built-ins plus any
+	// WithKeywords batches, so custom keywords also recognize their own echoes.
+	s.keywords = append([]string(nil), config.Keywords...)
+	for _, batch := range s.customKeywords {
+		s.keywords = append(s.keywords, batch...)
+	}
 	s.patterns = append(s.patterns,
 		&pattern{Name: "env_secret", Regex: regexp.MustCompile(envSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, lineScoped: true},
 		&pattern{Name: "yaml_secret", Regex: regexp.MustCompile(yamlSecretRegex(kw, s.valueSafeChar)), includesKey: true, foldPrefilters: kwFold, foldAllPrefilters: []string{"value:"}},
@@ -718,6 +921,15 @@ func (s *Scrubber) appendCatchAlls() {
 			foldPrefilters: keywordFoldLiterals(batch),
 			lineScoped:     true,
 		})
+	}
+}
+
+// compileAllowValues compiles the value-shape allow-list once per Scrubber:
+// engine.yml built-ins plus any WithAllowValues rows.
+func (s *Scrubber) compileAllowValues() {
+	exprs := append(append([]string(nil), config.AllowValues...), s.customAllowValues...)
+	for _, e := range exprs {
+		s.allowValues = append(s.allowValues, regexp.MustCompile(e))
 	}
 }
 

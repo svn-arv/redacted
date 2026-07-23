@@ -45,6 +45,24 @@ keywords:
   - MASTER_KEY
   - SERVICE_KEY
 
+# Value-shape allow-list: a candidate whose VALUE (key=value) or whole MATCH
+# (value-only) matches one of these is never redacted. Complements `keywords`.
+allow_values:
+  # Anthropic transcript ids (toolu_/msg_/req_) — identifiers, not credentials.
+  - '^(toolu|msg|req)_[A-Za-z0-9_]+$'
+  # Placeholder doc-URL creds: lowercase pass/password in the userinfo.
+  - '://[^:@/\s]*:(pass|password)@'
+  # Placeholder doc-URL creds: ALL-CAPS USER:PASSWORD userinfo.
+  - '://[A-Z_]+:[A-Z_]+@'
+  # Placeholder doc-URL creds: <password> angle-bracket userinfo.
+  - '://[^:@/\s]*:<[^>]*>@'
+  # GitHub ticket refs (org/repo#123), one optional trailing punctuation.
+  - '^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+#[0-9]+[.,;:)]?$'
+  # Version tails (Release/v1.2.3.4 PR titles) — dotted numeric, not a secret.
+  - '(^|/)v?[0-9]+(\.[0-9]+){2,3}$'
+  # Credential-free localhost service URLs (host immediately follows scheme).
+  - '^(redis|rediss|postgres|postgresql|mysql|mongodb|amqps?)://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:[0-9]{1,5})?(/[A-Za-z0-9_-]*)?$'
+
 # A pattern may declare `prefilters`: literal strings, at least one of which
 # must appear in the text before its regex runs. A cheap substring gate that
 # skips the expensive scan. `prefilters` matches case-sensitively;

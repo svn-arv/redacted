@@ -144,6 +144,9 @@ func buildScrubberFromConfig(cfg *config.Config, eng *config.EngineConfig) *patt
 		if len(eng.Keywords) > 0 {
 			opts = append(opts, patterns.WithKeywords(eng.Keywords...))
 		}
+		if len(eng.AllowValues) > 0 {
+			opts = append(opts, patterns.WithAllowValues(eng.AllowValues...))
+		}
 	}
 
 	return patterns.New(opts...)

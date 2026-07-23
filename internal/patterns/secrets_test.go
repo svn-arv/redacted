@@ -51,17 +51,19 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 
 	jwt := testutil.JWT()
 
-	postgresURL := testutil.DatabaseURL("postgres", "user", "pass", "db.example.com", "5432", "mydb")
-	postgresParams := testutil.DatabaseURLWithParams("postgres", "user", "pass", "host", "5432", "db", "sslmode=require")
+	// Passwords are randomized so these fixtures don't collide with the
+	// allow_values placeholder-URL rows (a literal `:pass@` would be cleared).
+	postgresURL := testutil.DatabaseURL("postgres", "user", testutil.RandAlphaNum(12), "db.example.com", "5432", "mydb")
+	postgresParams := testutil.DatabaseURLWithParams("postgres", "user", testutil.RandAlphaNum(12), "host", "5432", "db", "sslmode=require")
 	mysqlURL := testutil.DatabaseURL("mysql", "root", "secret", "localhost", "3306", "app")
-	mongoURL := testutil.DatabaseURL("mongodb", "admin", "pass", "cluster.example.com", "27017", "db")
-	mongoSRV := testutil.DatabaseURLNoPort("mongodb+srv", "admin", "pass", "cluster.example.com", "db")
-	redisURL := testutil.DatabaseURL("redis", "default", "pass", "redis.example.com", "6379", "")
-	redissURL := testutil.DatabaseURL("rediss", "default", "pass", "redis.example.com", "6379", "")
+	mongoURL := testutil.DatabaseURL("mongodb", "admin", testutil.RandAlphaNum(12), "cluster.example.com", "27017", "db")
+	mongoSRV := testutil.DatabaseURLNoPort("mongodb+srv", "admin", testutil.RandAlphaNum(12), "cluster.example.com", "db")
+	redisURL := testutil.DatabaseURL("redis", "default", testutil.RandAlphaNum(12), "redis.example.com", "6379", "")
+	redissURL := testutil.DatabaseURL("rediss", "default", testutil.RandAlphaNum(12), "redis.example.com", "6379", "")
 	amqpURL := testutil.DatabaseURL("amqp", "guest", "guest", "rabbitmq.example.com", "5672", "vhost")
 	amqpsURL := testutil.DatabaseURL("amqps", "guest", "guest", "rabbitmq.example.com", "5671", "vhost")
 
-	envSecretVal := testutil.RandAlphaNum(15)
+	envSecretVal := "Xy7" + testutil.RandAlphaNum(12) // pinned digit: feeds lenient `:`/spaced-`=` rows
 	envPassVal := testutil.RandAlphaNum(20)
 	envTokenVal := testutil.RandAlphaNum(18)
 	envGenericVal := testutil.RandAlphaNum(18)
@@ -176,7 +178,7 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 
 		// === Hyphen-separated keys (HTTP headers, YAML, CLI flags) ===
 		{"hyphen api-key", "api-key=" + testutil.RandAlphaNum(24), false, "api-key= [REDACTED", ""},
-		{"hyphen x-api-key header", "x-api-key: " + testutil.RandAlphaNum(20), false, "x-api-key: [REDACTED", ""},
+		{"hyphen x-api-key header", "x-api-key: aB3" + testutil.RandAlphaNum(17), false, "x-api-key: [REDACTED", ""},
 		{"hyphen private-key", "private-key=" + testutil.RandAlphaNum(30), false, "private-key= [REDACTED", ""},
 		{"hyphen access-key", "AWS-ACCESS-KEY=" + testutil.RandAlphaNum(20), false, "AWS-ACCESS-KEY= [REDACTED", ""},
 		{"hyphen database-url", "database-url=postgresql://host/db?a=bcdefghi", false, "database-url=[REDACTED", ""},
@@ -196,7 +198,7 @@ func TestScrub_BuiltinPatterns(t *testing.T) {
 		{"sid var", "TWILIO_WORKSPACE_SID=WS" + testutil.RandAlphaNum(16), false, "TWILIO_WORKSPACE_SID= [REDACTED", ""},
 		{"account id", "AWS_ACCOUNT_ID=" + testutil.RandDigits(12), false, "AWS_ACCOUNT_ID= [REDACTED", ""},
 		{"service key", "GCP_SERVICE_KEY=" + testutil.RandAlphaNum(22), false, "GCP_SERVICE_KEY= [REDACTED", ""},
-		{"postgresql url", testutil.DatabaseURL("postgresql", "user", "pass", "host", "5432", "db").Value, false, "[REDACTED:database_url", ""},
+		{"postgresql url", testutil.DatabaseURL("postgresql", "user", testutil.RandAlphaNum(12), "host", "5432", "db").Value, false, "[REDACTED:database_url", ""},
 
 		// === Multi-secret in one string ===
 		{"multiple secrets", "DB=" + postgresURL.Value + "\nKEY=" + awsKey.Value, false, "[REDACTED", ""},
@@ -420,7 +422,7 @@ func TestScrubber_WithExtra_DoesNotBreakBuiltins(t *testing.T) {
 func TestScrubber_WithKeywords(t *testing.T) {
 	s := New(WithKeywords("MONGO", "ELASTIC"))
 
-	result := s.Scrub("MONGO_URI=mongodb+srv://user:pass@cluster.example.com")
+	result := s.Scrub("MONGO_URI=mongodb+srv://user:" + testutil.RandAlphaNum(12) + "@cluster.example.com")
 	if !result.Redacted {
 		t.Error("expected MONGO keyword to match")
 	}
@@ -744,6 +746,27 @@ func TestSecretLike(t *testing.T) {
 		{"uppercase letters only (1 class)", "ABCDEFGHIJKLMNOP", false},
 		{"mixed classes but repetitive (low entropy)", "Aa1Aa1Aa1Aa1Aa1Aa1", false},
 		{"empty", "", false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultScrubber.secretLike(tt.v); got != tt.want {
+				t.Errorf("secretLike(%q) = %v, want %v", tt.v, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSecretLike_PercentEncoded covers #35: values percent-decode before scoring.
+// Encoded prose is rejected; encoded credentials and malformed escapes still score.
+func TestSecretLike_PercentEncoded(t *testing.T) {
+	cases := []struct {
+		name string
+		v    string
+		want bool
+	}{
+		{"encoded prose decodes to spaces", "Re%3A%20Your%20letter&body=Hello%20world", false},
+		{"encoded credential stays high-entropy", "Xy7%2BaK9mQ2rT8wZ4yP6vN3s%3D", true},
+		{"malformed escape falls through to scoring", "Xy7%ZZaK9mQ2rT8wZ4yP6vN", true},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

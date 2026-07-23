@@ -223,7 +223,7 @@ func checkPatterns() (c check) {
 func checkScrub() check {
 	s := patterns.New()
 
-	result := s.Scrub("DATABASE_URL=postgres://user:pass@host:5432/db")
+	result := s.Scrub("DATABASE_URL=postgres://user:Xk7Pq9mW2vB8@host:5432/db")
 	if !result.Redacted || result.Count == 0 {
 		return check{"test scrub", statusFail, "scrubber did not detect a database URL, patterns may be broken"}
 	}

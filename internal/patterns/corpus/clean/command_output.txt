@@ -6,3 +6,5 @@ added 150 packages in 3s
 ok   github.com/example/pkg   0.003s
 Compiled successfully in 1200ms
 src/components/Button.test.tsx (5 tests) 42ms
+== 20260714000000 AddSmsMessageSidToMessages: migrating ====
+2026-07-17T03:12:45.123Z pid=4242 tid=abc INFO: Sidekiq 7.2.0 connecting to Redis with options {:url=>"redis://localhost:6379/0"}
