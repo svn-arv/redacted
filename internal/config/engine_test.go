@@ -64,6 +64,28 @@ patterns:
 	}
 }
 
+func TestLoadEngine_AllowValues(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	dir := filepath.Join(tmpHome, ".config", "redacted")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "engine.yml"), []byte("allow_values:\n  - '^svc_[A-Za-z0-9]+$'\n"), 0o644)
+
+	proj := t.TempDir()
+	os.WriteFile(filepath.Join(proj, ".redacted.engine.yml"), []byte("allow_values:\n  - '^job_[A-Za-z0-9]+$'\n"), 0o644)
+
+	eng, err := LoadEngine(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.AllowValues) != 2 {
+		t.Errorf("expected merged allow_values, got %v", eng.AllowValues)
+	}
+	if eng.IsEmpty() {
+		t.Error("an allow_values override should not read as empty")
+	}
+}
+
 func TestLoadEngine_Merge(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

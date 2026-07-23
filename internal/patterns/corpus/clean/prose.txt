@@ -1,0 +1,3 @@
+the password: forgotten again
+I reset my password: temporary until Monday
+token: placeholder

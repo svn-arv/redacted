@@ -12,3 +12,6 @@ homepage: https://docs.example.com/v2/GuideABC123/intro
 docs_link=https://github.com/Org/Repo123/blob/main/README.md
 https://example.com:8080/FooBar/Baz123
 curl -s https://api.example.com:9200/Index7/_search?q=FooBar9
+mailto:someone@example.com?subject=Re%3A%20Your%20letter&body=Hello%20world
+https://teams.microsoft.com/l/channel/19%3Aabc@thread.tacv2/General?groupId=1&teamName=Function%20-%20Product
+https://www.sepe.es/HomeSepe/que-es-el-sepe?folder=%2FSEPE%2F2026%2FFebrero%2F&detail=1

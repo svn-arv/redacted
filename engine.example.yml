@@ -17,6 +17,11 @@ keywords:
   - MONGO
   - ELASTIC
 
+# Extra value-shape allow rows: a candidate whose value (key=value) or whole
+# match (value-only) matches one is never redacted.
+allow_values:
+  - '^svc_[A-Za-z0-9]+$'
+
 # Extra vendor patterns. These run before the catch-alls.
 patterns:
   - name: openai_key

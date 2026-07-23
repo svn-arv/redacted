@@ -1,0 +1,5 @@
+PASSWORD=christmas
+DB_PASSWORD=changeme
+SECRET_KEY=placeholder
+ADMIN_PASSWORD=password123
+API_KEY=apikey123

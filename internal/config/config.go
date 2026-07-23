@@ -107,6 +107,7 @@ type EngineConfig struct {
 	ValueSafeChar string          `yaml:"value_safe_char"`
 	Heuristic     HeuristicConfig `yaml:"heuristic"`
 	Keywords      []string        `yaml:"keywords"`
+	AllowValues   []string        `yaml:"allow_values"`
 	Patterns      []CustomPattern `yaml:"patterns"`
 }
 
@@ -141,6 +142,7 @@ func LoadEngine(cwd string) (*EngineConfig, error) {
 
 	merged := *global
 	merged.Keywords = append(append([]string{}, global.Keywords...), project.Keywords...)
+	merged.AllowValues = append(append([]string{}, global.AllowValues...), project.AllowValues...)
 	merged.Patterns = append(append([]CustomPattern{}, global.Patterns...), project.Patterns...)
 	overlayHeuristic(&merged.Heuristic, project.Heuristic)
 	if project.ValueSafeChar != "" {
@@ -152,7 +154,7 @@ func LoadEngine(cwd string) (*EngineConfig, error) {
 // IsEmpty reports whether the engine config overrides nothing.
 func (e *EngineConfig) IsEmpty() bool {
 	return e.Heuristic == (HeuristicConfig{}) && len(e.Keywords) == 0 &&
-		len(e.Patterns) == 0 && e.ValueSafeChar == ""
+		len(e.AllowValues) == 0 && len(e.Patterns) == 0 && e.ValueSafeChar == ""
 }
 
 func loadEngineFile(path string) *EngineConfig {
