@@ -3,218 +3,533 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="A hook that redacts secrets from tool output before your AI coding assistant sees them.">
-<title>redacted — secrets never reach the model</title>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<meta name="color-scheme" content="light dark">
+<title>redacted: secrets never reach the model</title>
+<meta name="description" content="A local hook that scrubs secrets out of tool output before your AI coding assistant reads it.">
+<meta property="og:title" content="redacted">
+<meta property="og:description" content="A local hook that scrubs secrets out of tool output before your AI coding assistant reads it.">
+<meta property="og:type" content="website">
 <style>
+/* ---------------------------------------------------------------
+   No webfonts, no CDN, no analytics. A tool that makes no network
+   calls ships a page that makes none either.
+   --------------------------------------------------------------- */
+:root{
+  color-scheme:light dark;
+  --paper:#f5f4f1;
+  --panel:#eceae5;
+  --ink:#131211;
+  --dim:#6b6862;
+  --line:rgba(19,18,17,.13);
+  --line-hard:rgba(19,18,17,.30);
+  --bar:#131211;          /* the redaction block */
+  --bar-ink:#f5f4f1;
+  --accent:#c2381f;
+  --sel:rgba(194,56,31,.16);
+
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,"Cascadia Mono","Segoe UI Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+
+  --gut:clamp(20px,4vw,40px);
+  --sec:clamp(64px,9vw,116px);
+}
+@media (prefers-color-scheme:dark){
   :root{
-    --paper:#f7f4ec;--ink:#181611;--dim:#5f5a4d;--rule:#181611;--red:#b3261e;--panel:#f0ecdf;
-    --serif:'Fraunces',Georgia,'Times New Roman',serif;
-    --mono:'Space Mono',ui-monospace,Menlo,monospace;
+    --paper:#131313;
+    --panel:#1c1c1b;
+    --ink:#e8e6e1;
+    --dim:#8f8c85;
+    --line:rgba(232,230,225,.14);
+    --line-hard:rgba(232,230,225,.30);
+    --bar:#3a3835;
+    --bar-ink:#3a3835;
+    --accent:#e5674a;
+    --sel:rgba(229,103,74,.20);
   }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--paper);color:var(--ink);font-family:var(--serif);line-height:1.55;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1060px;margin:0 auto;padding:0 26px}
-  /* the signature interaction, inherited from theme 03 */
-  .rb{background:var(--ink);color:transparent;cursor:pointer;padding:0 .14em;position:relative;transition:background .18s,color .18s;white-space:nowrap;border-radius:1px;user-select:none}
-  .rb.on{background:transparent;color:var(--red);text-decoration:underline;text-decoration-thickness:3px;text-underline-offset:4px}
-  .hint{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--red);margin-top:16px}
-  .topline{border-bottom:1.5px solid var(--rule);font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
-  .topline .wrap{display:flex;justify-content:space-between;padding-top:12px;padding-bottom:12px;gap:12px;flex-wrap:wrap}
-  .masthead{text-align:center;padding:44px 0 26px;border-bottom:4px double var(--rule)}
-  .masthead .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--red)}
-  .masthead h1{font-weight:900;font-size:clamp(3rem,9vw,6.2rem);letter-spacing:-.02em;line-height:.95;margin-top:10px}
-  .masthead .dateline{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:16px;display:flex;justify-content:center;gap:26px;flex-wrap:wrap}
-  .lede{border-bottom:3px solid var(--rule);padding:38px 0}
-  .lede h2{font-weight:900;font-size:clamp(1.7rem,4.2vw,2.7rem);line-height:1.14;max-width:30ch}
-  .lede .standfirst{font-size:19px;font-style:italic;color:var(--dim);max-width:64ch;margin-top:18px}
-  .install-line{display:flex;gap:0;margin-top:24px;max-width:720px;border:3px solid var(--ink)}
-  .install-line code{flex:1;font-family:var(--mono);font-size:13px;padding:14px 16px;overflow-x:auto;white-space:nowrap}
-  .install-line code .red{color:var(--red)}
-  .install-line button{font-family:var(--mono);font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;background:var(--ink);color:var(--paper);border:none;padding:0 22px;cursor:pointer}
-  .install-line button:hover{background:var(--red)}
-  /* exhibit */
-  .exhibit-sec{border-bottom:3px solid var(--rule);padding:34px 0 44px}
-  .shead{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:18px}
-  .shead b{color:var(--red)}
-  .exhibit{border:3px solid var(--ink);background:var(--panel)}
-  .exhibit .xh{display:flex;justify-content:space-between;padding:12px 18px;border-bottom:3px solid var(--ink);font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.1em}
-  .exhibit .xh .red{color:var(--red);font-weight:700}
-  .xcols{display:grid;grid-template-columns:1fr 1fr}
-  .xcol{font-family:var(--mono);font-size:12.5px;line-height:2.1;padding:20px 18px;white-space:pre-wrap;word-break:break-all}
-  .xcol.before{border-right:3px solid var(--ink)}
-  .xcol .cap{display:block;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
-  .xcol .rtag{color:var(--red);font-weight:700}
-  .xcol .pass{color:#3f7a4e}
-  /* columns */
-  .cols{display:grid;grid-template-columns:1.2fr 1fr 1fr;border-bottom:1.5px solid var(--rule)}
-  .col{padding:30px 26px;border-right:1.5px solid var(--rule)}
-  .col:last-child{border-right:none}
-  .col h3{font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--red);margin-bottom:14px}
-  .col h4{font-weight:900;font-size:20px;line-height:1.15;margin-bottom:10px}
-  .col p{font-size:15px;color:#33301f}
-  .col p + h4{margin-top:22px}
-  .col .drop::first-letter{font-weight:900;font-size:3.1em;float:left;line-height:.85;padding-right:8px}
-  .col code{font-family:var(--mono);font-size:.85em;background:#ece8db;padding:1px 5px}
-  .pull{border-bottom:1.5px solid var(--rule);padding:44px 0;text-align:center}
-  .pull blockquote{font-weight:600;font-style:italic;font-size:clamp(1.4rem,3.4vw,2.2rem);line-height:1.3;max-width:36ch;margin:0 auto}
-  .pull .attr{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-top:14px}
-  /* coverage: hover to declassify */
-  .coverage{border-bottom:1.5px solid var(--rule);padding:36px 0 44px}
-  .vgrid{display:flex;flex-wrap:wrap;gap:10px 12px;font-family:var(--mono);font-size:13.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-  .briefs{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:3px solid var(--rule)}
-  .brief{padding:22px 20px;border-right:1.5px solid var(--rule)}
-  .brief:last-child{border-right:none}
-  .brief b{font-weight:900;font-size:15.5px;display:block;margin-bottom:6px}
-  .brief span{font-size:13.5px;color:#33301f}
-  .brief code{font-family:var(--mono);font-size:.85em;background:#ece8db;padding:1px 5px}
-  .install{padding:40px 0;border-bottom:1.5px solid var(--rule);display:grid;grid-template-columns:1fr 1.4fr;gap:34px;align-items:start}
-  .install h2{font-weight:900;font-size:clamp(1.5rem,3.4vw,2.2rem);line-height:1.05}
-  .install h2 em{font-style:italic;color:var(--red)}
-  .install pre{background:#181611;color:#efece0;font-family:var(--mono);font-size:13.5px;padding:22px 20px;line-height:2;overflow-x:auto}
-  .install .c{color:#8b8674}
-  .install .p{color:#9fdca8}
-  .closer{padding:44px 0;text-align:center}
-  .closer p{font-weight:900;font-size:clamp(1.5rem,3.6vw,2.3rem)}
-  .closer small{display:block;font-family:var(--mono);font-size:12.5px;color:var(--dim);margin-top:12px;letter-spacing:.06em}
-  footer{border-top:4px double var(--rule);font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
-  footer .wrap{display:flex;justify-content:space-between;padding-top:16px;padding-bottom:22px;gap:12px;flex-wrap:wrap}
-  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(60px);background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;padding:11px 18px;opacity:0;transition:all .22s}
-  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-  @media(max-width:900px){
-    .cols{grid-template-columns:1fr}.col{border-right:none;border-bottom:1.5px solid var(--rule)}.col:last-child{border-bottom:none}
-    .xcols{grid-template-columns:1fr}.xcol.before{border-right:none;border-bottom:3px solid var(--ink)}
-    .briefs{grid-template-columns:1fr 1fr}.brief:nth-child(2n){border-right:none}.brief:nth-child(-n+2){border-bottom:1.5px solid var(--rule)}
-    .install{grid-template-columns:1fr}
-  }
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+::selection{background:var(--sel)}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding-left:var(--gut);padding-right:var(--gut)}
+
+/* type registers: mono for structure, sans for prose */
+h1,h2,h3,.mono{font-family:var(--mono)}
+/* sized so the 35-char headline lands on exactly 2 lines in the split column:
+   mono advance is ~.6em, so 18ch needs 18*.6*fontsize <= column width */
+h1{font-size:clamp(1.95rem,3.6vw,2.9rem);font-weight:700;letter-spacing:-.035em;line-height:1.1}
+h2{font-size:clamp(1.5rem,3.2vw,2.2rem);font-weight:700;letter-spacing:-.03em;line-height:1.12}
+h3{font-size:15px;font-weight:700;letter-spacing:-.01em}
+p{max-width:62ch}
+code,pre{font-family:var(--mono)}
+
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+/* ---------- the redaction block ---------- */
+.rb{
+  display:inline-block;background:var(--bar);color:transparent;
+  padding:0 .16em;cursor:pointer;white-space:nowrap;user-select:none;
+  border:0;font:inherit;letter-spacing:inherit;
+  box-shadow:0 2px 0 0 var(--accent);
+  transition:background .18s ease,color .18s ease,box-shadow .18s ease;
+}
+.rb:hover{box-shadow:0 3px 0 0 var(--accent)}
+.rb.on{background:transparent;color:var(--accent);box-shadow:0 2px 0 0 var(--accent)}
+@media (prefers-reduced-motion:reduce){.rb{transition:none}}
+
+/* ---------- nav ---------- */
+header{
+  position:sticky;top:0;z-index:20;background:var(--paper);
+  border-bottom:1px solid var(--line);
+}
+header .wrap{height:60px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+.mark{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:-.02em}
+.mark i{width:11px;height:11px;background:var(--bar);display:block}
+nav{display:flex;align-items:center;gap:clamp(14px,2.4vw,28px);font-family:var(--mono);font-size:12.5px;letter-spacing:.01em}
+nav a{color:var(--dim);padding:4px 0;border-bottom:1px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
+nav a:hover{color:var(--ink);border-bottom-color:var(--accent)}
+@media (max-width:620px){nav a.opt{display:none}}
+
+/* ---------- hero ---------- */
+.hero{padding:clamp(40px,6vw,84px) 0 var(--sec)}
+.hero .grid{display:grid;grid-template-columns:1fr;gap:clamp(34px,5vw,56px);align-items:center}
+@media (min-width:1000px){.hero .grid{grid-template-columns:1.05fr .95fr;gap:clamp(40px,4vw,64px)}}
+.hero h1{max-width:20ch}
+.hero .sub{margin-top:22px;font-size:clamp(16px,1.5vw,18px);color:var(--dim);max-width:52ch}
+.cta{margin-top:32px;display:flex;flex-wrap:wrap;align-items:center;gap:16px}
+.cmdline{display:flex;align-items:stretch;border:1px solid var(--line-hard);background:var(--panel);min-width:0;flex:1 1 420px}
+.cmdline code{
+  flex:1 1 auto;min-width:0;font-size:11.5px;line-height:1.4;
+  padding:13px 14px;overflow-x:auto;white-space:nowrap;
+}
+.cmdline .pr{color:var(--accent);user-select:none}
+.copy{
+  flex:0 0 auto;font-family:var(--mono);font-size:11.5px;font-weight:700;
+  letter-spacing:.09em;text-transform:uppercase;
+  background:var(--ink);color:var(--paper);border:0;padding:0 18px;cursor:pointer;
+  transition:background .15s ease,transform .06s ease;
+}
+.copy:hover{background:var(--accent)}
+.copy:active{transform:translateY(1px)}
+.gh{font-family:var(--mono);font-size:12.5px;color:var(--dim);border-bottom:1px solid var(--line-hard);padding-bottom:2px;transition:color .15s,border-color .15s}
+.gh:hover{color:var(--ink);border-bottom-color:var(--accent)}
+
+/* ---------- terminal surfaces ---------- */
+.term{border:1px solid var(--line-hard);background:var(--panel)}
+.term-head{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;
+  padding:10px 14px;border-bottom:1px solid var(--line-hard);
+  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
+}
+.term-head .fired{color:var(--accent);font-weight:700;white-space:nowrap}
+.term-body{padding:16px 14px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.85}
+.term-body .cmd{white-space:pre;margin-bottom:6px}
+.term-body .pr{color:var(--accent);user-select:none}
+.tag{color:var(--accent);font-weight:700}
+.ln{position:relative;height:1.85em;white-space:pre}
+.ln>span{position:absolute;left:0;top:0;white-space:pre}
+.ln .raw{opacity:0}
+.ln .red{opacity:1}
+.plain{white-space:pre;color:var(--dim)}
+.term-foot{
+  border-top:1px solid var(--line);padding:9px 14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--dim);
+}
+
+/* the one motivated animation: the product doing its job, once, on load */
+@keyframes rOut{from{opacity:1}to{opacity:0}}
+@keyframes rIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:no-preference){
+  .ln .raw{animation:rOut .45s ease var(--d,1s) both}
+  .ln .red{animation:rIn .45s ease var(--d,1s) both}
+  .term-head .fired{animation:rIn .45s ease 1.45s both}
+}
+
+/* ---------- section scaffolding ---------- */
+section{padding:var(--sec) 0;border-top:1px solid var(--line)}
+.lede{max-width:34ch}
+.note{color:var(--dim);font-size:15px;margin-top:16px}
+[data-reveal]{opacity:1}
+@media (prefers-reduced-motion:no-preference){
+  [data-reveal]{opacity:0;transform:translateY(14px);transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1)}
+  [data-reveal].in{opacity:1;transform:none}
+}
+
+/* ---------- threat model ---------- */
+.why{display:grid;grid-template-columns:1fr;gap:clamp(28px,4vw,48px)}
+@media (min-width:900px){.why{grid-template-columns:minmax(220px,.62fr) 1fr;gap:clamp(40px,6vw,90px)}
+  .why .head{position:sticky;top:96px;align-self:start}}
+.claims{border-top:1px solid var(--line-hard)}
+.claim{padding:26px 0;border-bottom:1px solid var(--line)}
+.claim h3{margin-bottom:8px}
+.claim p{color:var(--dim);font-size:15.5px;max-width:56ch}
+.claim code{font-size:.88em;background:var(--panel);padding:1px 5px;border:1px solid var(--line);white-space:nowrap}
+.after{margin-top:26px;font-size:16px;max-width:56ch}
+.after strong{font-weight:600}
+
+/* ---------- pipeline + exhibit ---------- */
+.pipe{display:flex;flex-wrap:wrap;align-items:center;gap:12px;font-family:var(--mono);font-size:12px;margin-bottom:clamp(26px,3.5vw,40px)}
+.node{border:1px solid var(--line-hard);padding:8px 13px;color:var(--dim);white-space:nowrap}
+.node.self{border-color:var(--accent);color:var(--accent);font-weight:700}
+.arw{color:var(--dim);user-select:none}
+.panes{display:grid;grid-template-columns:1fr;border:1px solid var(--line-hard)}
+@media (min-width:820px){.panes{grid-template-columns:1fr 1fr}}
+.pane{padding:18px 16px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.9;white-space:pre}
+.pane .cap{
+  display:block;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:14px;white-space:normal;
+}
+.pane.a{border-bottom:1px solid var(--line-hard)}
+@media (min-width:820px){.pane.a{border-bottom:0;border-right:1px solid var(--line-hard)}}
+.pane .add{color:var(--dim)}
+.exhibit-head{
+  display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  border:1px solid var(--line-hard);border-bottom:0;padding:10px 14px;background:var(--panel);
+  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
+}
+
+/* ---------- detection tiers ---------- */
+.tiers{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line-hard);border:1px solid var(--line-hard)}
+@media (min-width:900px){.tiers{grid-template-columns:1.35fr 1fr 1fr}}
+.tier{background:var(--paper);padding:clamp(22px,2.6vw,32px)}
+.tier.lead{
+  background:var(--panel);
+  background-image:repeating-linear-gradient(135deg,var(--line) 0 1px,transparent 1px 9px);
+}
+.tier .n{font-family:var(--mono);font-size:clamp(2.6rem,5vw,3.6rem);font-weight:700;letter-spacing:-.05em;line-height:1;display:block}
+.tier.lead .n{color:var(--accent)}
+.tier h3{margin:14px 0 8px}
+.tier p{color:var(--dim);font-size:14.5px;max-width:38ch}
+.tier .unit{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:block;margin-top:10px}
+
+/* ---------- coverage ---------- */
+.chips{display:flex;flex-wrap:wrap;gap:9px 10px;font-family:var(--mono);font-size:13px;font-weight:700;margin-top:28px}
+.chips .rb{padding:5px 9px}
+
+/* ---------- guarantees ---------- */
+.guards{display:grid;grid-template-columns:1fr;margin-top:8px;border-top:1px solid var(--line-hard)}
+@media (min-width:760px){.guards{grid-template-columns:1fr 1fr}}
+.guard{padding:26px 0;border-bottom:1px solid var(--line)}
+@media (min-width:760px){
+  .guard{padding:26px clamp(20px,3vw,38px) 26px 0}
+  .guard:nth-child(2n){padding-right:0;padding-left:clamp(20px,3vw,38px);border-left:1px solid var(--line)}
+}
+.guard h3{margin-bottom:7px}
+.guard p{color:var(--dim);font-size:14.5px;max-width:42ch}
+.guard code{font-size:.9em;color:var(--accent)}
+
+/* ---------- install ---------- */
+.methods{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line-hard);border:1px solid var(--line-hard);margin-top:32px}
+@media (min-width:820px){.methods{grid-template-columns:1.35fr 1fr}}
+.method{background:var(--paper);padding:22px 20px}
+.method .lab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex;gap:10px;align-items:baseline}
+.method .lab b{color:var(--accent);font-weight:700}
+.method pre{margin-top:14px;font-size:12.5px;line-height:1.9;overflow-x:auto;white-space:pre}
+.method .pr{color:var(--accent);user-select:none}
+.initrow{
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;
+  border:1px solid var(--line-hard);border-top:0;background:var(--panel);padding:18px 20px;
+}
+.initrow code{font-size:14px;font-weight:700}
+.initrow span{font-size:14px;color:var(--dim);max-width:52ch}
+.gopath{margin-top:16px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+.gopath b{color:var(--ink);font-weight:400}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--line);padding:30px 0 40px}
+footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+footer a{border-bottom:1px solid var(--line-hard);padding-bottom:1px}
+footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
+
+/* ---------- toast ---------- */
+.toast{
+  position:fixed;left:50%;bottom:26px;z-index:40;
+  transform:translateX(-50%) translateY(64px);opacity:0;pointer-events:none;
+  background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px;
+  letter-spacing:.05em;padding:11px 17px;transition:opacity .2s ease,transform .2s ease;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.err{background:var(--accent)}
+@media (prefers-reduced-motion:reduce){.toast{transition:opacity .2s ease}.toast.show{transform:translateX(-50%) translateY(0)}}
 </style>
 </head>
 <body>
 
-<div class="topline"><div class="wrap">
-  <span>The developer's record of things that never left the machine</span>
-  <span>Price: $0 · MIT</span>
-</div></div>
-
-<div class="masthead"><div class="wrap">
-  <div class="kicker">Declassified · for immediate release</div>
-  <h1>redacted</h1>
-  <div class="dateline"><span>Vol. 1, № 7</span><span>Local edition</span><span>Weather: no leaks expected</span></div>
-</div></div>
-
-<div class="lede"><div class="wrap">
-  <h2>The <span class="rb" onclick="this.classList.toggle('on')">secrets</span> never reached the model, investigators confirm.</h2>
-  <div class="hint">Click the black bar. That is the whole product.</div>
-  <p class="standfirst">Leaks don't need a dangerous command. A diff, a log, a config dump, and the key is in context. redacted scrubs tool output on your machine, before your AI coding assistant reads it.</p>
-  <div class="install-line">
-    <code><span class="red">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
-    <button onclick="cp('curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh')">Copy</button>
+<header>
+  <div class="wrap">
+    <a class="mark" href="#top"><i></i>redacted</a>
+    <nav>
+      <a class="opt" href="#why">Threat model</a>
+      <a class="opt" href="#detection">Detection</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/svn-arv/redacted">GitHub</a>
+    </nav>
   </div>
-</div></div>
+</header>
 
-<div class="exhibit-sec"><div class="wrap">
-  <div class="shead"><span><b>Exhibit A</b> — the same .env, two readers</span><span>Fig. 01</span></div>
-  <div class="exhibit">
-    <div class="xh"><span>cat .env</span><span class="red">● 2 secrets intercepted</span></div>
-    <div class="xcols">
-      <div class="xcol before"><span class="cap">Before — straight to the model</span>DATABASE_URL=<span>postgres:<wbr>//app:s3cr3t…@db.prod/app</span>
-STRIPE_SECRET_KEY=<span>sk_live_XXXXXXXXXXXXXXXXXX8STU</span>
-APP_NAME=myapp</div>
-      <div class="xcol"><span class="cap">After — through redacted</span>DATABASE_URL=<span class="rtag">[REDACTED:database_url .../app]</span>
-STRIPE_SECRET_KEY=<span class="rtag">[REDACTED:stripe_live ...8STU]</span>
-APP_NAME=<span class="pass">myapp</span></div>
+<main id="top">
+
+<!-- ============ hero ============ -->
+<div class="hero"><div class="wrap"><div class="grid">
+  <div>
+    <h1>Your <button type="button" class="rb" aria-label="Reveal the redacted word">secrets</button> never reach the model.</h1>
+    <p class="sub">A local hook scrubs every tool result before your coding assistant reads it. No allow-lists, no judgment calls.</p>
+    <div class="cta">
+      <div class="cmdline">
+        <code><span class="pr">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
+        <button class="copy" type="button" data-copy="curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh">Copy</button>
+      </div>
+      <a class="gh" href="https://github.com/svn-arv/redacted">GitHub</a>
     </div>
   </div>
-</div></div>
 
-<div class="wrap"><div class="cols">
-  <div class="col">
-    <h3>Why this exists</h3>
-    <p class="drop">Nobody asked the model to do anything dangerous. It ran <code>git diff</code>; the committed key came back. It read a crash log; the stack trace dumped ENV. It ran <code>heroku config</code>, a command whose job is printing secrets. The guard watching for <code>cat .env</code> saw a script name instead. Secrets arrive through normal work. redacted scrubs the output itself, whatever produced it. You cannot un-send a token. This makes sure you never have to.</p>
+  <!-- real output. generated by running `redacted scrub` against this payload. -->
+  <div class="term">
+    <div class="term-head"><span>PostToolUse hook</span><span class="fired">2 secrets scrubbed</span></div>
+    <div class="term-body">
+      <div class="cmd"><span class="pr">$</span> heroku config -a billing-prod</div>
+      <div class="ln" style="--d:1.05s">
+        <!-- trailing space is load-bearing: the database_url pattern's character class
+             does not exclude "<", so without it the match eats the closing tag when this
+             page is fetched through a tool that has the hook installed. -->
+        <span class="raw">DATABASE_URL:          postgres://billing:EXAMPLEPASSWORD@db-1.internal/billing </span>
+        <span class="red">DATABASE_URL:          <span class="tag">[REDACTED:database_url ...ling]</span></span>
+      </div>
+      <div class="ln" style="--d:1.3s">
+        <span class="raw">NEW_RELIC_LICENSE_KEY: NRAK-EXAMPLEKEYEXAMPLEKEYNRAK</span>
+        <span class="red">NEW_RELIC_LICENSE_KEY: <span class="tag">[REDACTED:newrelic_key ...NRAK]</span></span>
+      </div>
+      <div class="plain">RACK_ENV:              production</div>
+    </div>
+    <div class="term-foot">Scanned on your machine. Clean lines pass through byte for byte.</div>
   </div>
-  <div class="col">
-    <h3>How it works</h3>
-    <h4>1 · Hook in</h4>
-    <p><code>redacted init</code> registers the PostToolUse hook. Every tool output (Bash, Read, Grep, WebFetch) runs through it.</p>
-    <h4>2 · Scan &amp; redact</h4>
-    <p>Vendor signatures, credential-named keys, and an entropy scorer. Matches replaced inline, last 4 chars kept as a hint.</p>
-    <h4>3 · Model sees clean</h4>
-    <p>Nothing found? The output passes through untouched, byte for byte.</p>
+</div></div></div>
+
+<!-- ============ threat model ============ -->
+<section id="why"><div class="wrap"><div class="why">
+  <div class="head" data-reveal>
+    <h2>Nobody has to run a dangerous command.</h2>
+    <p class="note">The model is smart enough not to <code>cat .env</code>. That was never the way keys get in.</p>
   </div>
-  <div class="col">
-    <h3>Detection, three tiers</h3>
-    <h4>Provider signatures</h4>
-    <p>AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Twilio and more. Near-zero false positives.</p>
-    <h4>Credential-named keys</h4>
-    <p>Any env var named SECRET, TOKEN, PASSWORD, API_KEY… gets its value redacted.</p>
-    <h4>Entropy scorer</h4>
-    <p>Unknown 16–128 char values, mixed case and digits, high Shannon entropy. Catches what no signature names.</p>
+  <div class="claims" data-reveal>
+    <div class="claim">
+      <h3>They ride along in ordinary output.</h3>
+      <p>A committed key in <code>git diff</code>. A token in a log line. A stack trace that dumps the environment on its way out.</p>
+    </div>
+    <div class="claim">
+      <h3>Some commands exist to print them.</h3>
+      <p><code>heroku config</code>, <code>kubectl get secret</code>, <code>aws secretsmanager get-secret-value</code>. Running them is the job, not a mistake.</p>
+    </div>
+    <div class="claim">
+      <h3>Command guards read the wrong thing.</h3>
+      <p>Deny lists and model judgment inspect the command string. An npm script, a make target, or a proxy CLI changes the string. The output is unchanged.</p>
+    </div>
+    <p class="after">Once a secret is in context it is in the transcript on disk and in every request that follows. <strong>redacted does not judge commands. It scrubs the output, whatever produced it.</strong></p>
   </div>
-</div></div>
+</div></div></section>
 
-<div class="pull"><div class="wrap">
-  <blockquote>"My production key is absolutely not in the context window."</blockquote>
-  <div class="attr">— every redacted user, correctly</div>
-</div></div>
-
-<div class="coverage"><div class="wrap">
-  <div class="shead"><span><b>Index of the classified</b> — 20+ patterns</span><span>hover to declassify</span></div>
-  <div class="vgrid">
-    <span class="rb" onmouseenter="this.classList.add('on')">AWS</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">GitHub</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Stripe</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">OpenAI</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Anthropic</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Twilio</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Slack</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">SendGrid</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">HubSpot</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">DigitalOcean</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">GitLab</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Google</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">npm</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">PyPI</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Sentry</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">New Relic</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">CircleCI</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Private keys</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">JWTs</span>
-    <span class="rb" onmouseenter="this.classList.add('on')">Database URLs</span>
+<!-- ============ where it sits + before/after ============ -->
+<section><div class="wrap">
+  <div class="pipe" data-reveal>
+    <span class="node">Bash, Read, Grep, WebFetch</span>
+    <span class="arw">&rarr;</span>
+    <span class="node self">redacted scrub</span>
+    <span class="arw">&rarr;</span>
+    <span class="node">context window</span>
   </div>
-</div></div>
+  <div data-reveal>
+    <div class="exhibit-head"><span>Bash: git diff config/staging.env</span><span>3 secrets scrubbed</span></div>
+    <div class="panes">
+      <div class="pane a"><span class="cap">Without the hook</span>diff --git a/config/staging.env
+@@ -3,6 +3,7 @@ REGION=eu-west-1
+ POOL_SIZE=12
+-AWS_ACCESS_KEY_ID=AKIAEXAMPLEKEYID0001
++AWS_ACCESS_KEY_ID=AKIAEXAMPLEKEYID0002
++GITHUB_TOKEN=ghp_EXAMPLETOKENEXAMPLETOKENEXAMPLETOKEN
+ LOG_LEVEL=info</div>
+      <div class="pane b"><span class="cap">What the model receives</span>diff --git a/config/staging.env
+@@ -3,6 +3,7 @@ REGION=eu-west-1
+ POOL_SIZE=12
+-AWS_ACCESS_KEY_ID=<span class="tag">[REDACTED:aws_access_key ...0001]</span>
++AWS_ACCESS_KEY_ID=<span class="tag">[REDACTED:aws_access_key ...0002]</span>
++GITHUB_TOKEN=<span class="tag">[REDACTED:github_token ...OKEN]</span>
+ LOG_LEVEL=info</div>
+    </div>
+  </div>
+</div></section>
 
-<div class="wrap"><div class="briefs">
-  <div class="brief"><b>Runs offline</b><span>A single Go binary. No network calls, no telemetry, no account.</span></div>
-  <div class="brief"><b>Fail-closed</b><span>On any error the output is withheld, never passed through raw.</span></div>
-  <div class="brief"><b>Counts, not secrets</b><span>Stats record the timestamp, tool, and per-pattern counts. Never values.</span></div>
-  <div class="brief"><b>Last-4 hint</b><span><code>...8STU</code> says which key fired without exposing it.</span></div>
-</div></div>
+<!-- ============ detection tiers ============ -->
+<section id="detection"><div class="wrap">
+  <div data-reveal>
+    <h2 class="lede">Three tiers, most precise first.</h2>
+    <p class="note">Each tag names the pattern that matched. An entropy-only guess prints without a name, so you can tell the two apart.</p>
+  </div>
+  <div class="tiers" style="margin-top:36px" data-reveal>
+    <div class="tier lead">
+      <span class="n">34</span>
+      <span class="unit">vendor signatures</span>
+      <h3>Provider patterns</h3>
+      <p>AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Twilio and more, matched on their exact key shape. Near-zero false positives.</p>
+    </div>
+    <div class="tier">
+      <span class="n">22</span>
+      <span class="unit">credential keywords</span>
+      <h3>Named keys</h3>
+      <p>Any variable whose name contains SECRET, TOKEN, PASSWORD, API_KEY and the rest. Works in env files, shell exports, and YAML.</p>
+    </div>
+    <div class="tier">
+      <span class="n">3.5</span>
+      <span class="unit">bits per character</span>
+      <h3>Entropy scorer</h3>
+      <p>Unknown keys whose value runs 16 to 128 characters, mixes case with digits, and scores above that threshold. Catches what no signature names.</p>
+    </div>
+  </div>
+</div></section>
 
-<div class="wrap"><div class="install" id="install">
-  <h2>One line,<br>then <em>redacted init</em>.</h2>
-  <pre><span class="c"># curl (recommended)</span>
-curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh
-<span class="p">redacted init</span>
+<!-- ============ coverage ============ -->
+<section><div class="wrap" data-reveal>
+  <h2 class="lede">The signature list.</h2>
+  <p class="note">Hover or tap a block to reveal it.</p>
+  <div class="chips">
+    <button type="button" class="rb">AWS</button>
+    <button type="button" class="rb">GitHub</button>
+    <button type="button" class="rb">Stripe</button>
+    <button type="button" class="rb">OpenAI</button>
+    <button type="button" class="rb">Anthropic</button>
+    <button type="button" class="rb">Google</button>
+    <button type="button" class="rb">Google Cloud</button>
+    <button type="button" class="rb">Slack</button>
+    <button type="button" class="rb">Twilio</button>
+    <button type="button" class="rb">SendGrid</button>
+    <button type="button" class="rb">HubSpot</button>
+    <button type="button" class="rb">DigitalOcean</button>
+    <button type="button" class="rb">GitLab</button>
+    <button type="button" class="rb">npm</button>
+    <button type="button" class="rb">PyPI</button>
+    <button type="button" class="rb">RubyGems</button>
+    <button type="button" class="rb">Sentry</button>
+    <button type="button" class="rb">New Relic</button>
+    <button type="button" class="rb">CircleCI</button>
+    <button type="button" class="rb">Private keys</button>
+    <button type="button" class="rb">JWTs</button>
+    <button type="button" class="rb">Database URLs</button>
+    <button type="button" class="rb">Credentialed URLs</button>
+  </div>
+</div></section>
 
-<span class="c"># or Homebrew</span>
-brew tap svn-arv/tap &amp;&amp; brew install redacted
-<span class="p">redacted init</span></pre>
-</div></div>
+<!-- ============ guarantees ============ -->
+<section><div class="wrap" data-reveal>
+  <h2 class="lede">What it will not do.</h2>
+  <div class="guards">
+    <div class="guard">
+      <h3>Reach the network</h3>
+      <p>A single Go binary that runs on your machine. No calls out, no telemetry, no account.</p>
+    </div>
+    <div class="guard">
+      <h3>Fail open</h3>
+      <p>If the hook errors, the output is withheld rather than passed through raw.</p>
+    </div>
+    <div class="guard">
+      <h3>Store a value</h3>
+      <p>Stats keep a timestamp, the tool name, and per-pattern counts. Never the matched text.</p>
+    </div>
+    <div class="guard">
+      <h3>Leave you guessing</h3>
+      <p>The last four characters stay, so the two rotated AWS keys above read as <code>...0001</code> and <code>...0002</code> without exposing either.</p>
+    </div>
+  </div>
+</div></section>
 
-<div class="closer"><div class="wrap">
-  <p>Stop trusting yourself to remember.</p>
-  <small>Wire it once. Every future tool call is already handled.</small>
-</div></div>
+<!-- ============ install ============ -->
+<section id="install"><div class="wrap" data-reveal>
+  <h2 class="lede">Install, then init.</h2>
+  <p class="note">One command registers the PostToolUse hook. Safe to run again at any time.</p>
+
+  <div class="methods">
+    <div class="method">
+      <div class="lab">curl <b>recommended</b></div>
+      <pre><span class="pr">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</pre>
+    </div>
+    <div class="method">
+      <div class="lab">Homebrew</div>
+      <pre><span class="pr">$</span> brew tap svn-arv/tap
+<span class="pr">$</span> brew install redacted</pre>
+    </div>
+  </div>
+  <div class="initrow">
+    <code><span class="pr" style="color:var(--accent)">$</span> redacted init</code>
+    <span>Add <code>--local</code> to wire it into this project only, instead of every project.</span>
+    <button class="copy" type="button" data-copy="redacted init" style="padding:10px 18px">Copy</button>
+  </div>
+  <p class="gopath">Also on Go: <b>go install github.com/svn-arv/redacted@latest</b></p>
+</div></section>
+
+</main>
 
 <footer><div class="wrap">
-  <span>redacted · MIT</span>
-  <span>All the output that's fit to print</span>
-  <span>github.com/svn-arv/redacted</span>
+  <span>redacted, MIT licensed</span>
+  <span><a href="https://github.com/svn-arv/redacted">github.com/svn-arv/redacted</a></span>
+  <span><a href="https://github.com/svn-arv/redacted/releases">Releases</a></span>
 </div></footer>
 
-<div class="toast" id="toast">Copied to clipboard</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <script>
-  function cp(t){navigator.clipboard.writeText(t).then(()=>{const e=document.getElementById('toast');e.classList.add('show');setTimeout(()=>e.classList.remove('show'),1400)})}
+(function(){
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var canHover = window.matchMedia('(hover: hover)').matches;
+
+  /* redaction blocks: click always, hover only where hovering is real */
+  document.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('.rb') : null;
+    if (b) b.classList.toggle('on');
+  });
+  if (canHover){
+    document.querySelectorAll('.rb').forEach(function(b){
+      b.addEventListener('mouseenter', function(){ b.classList.add('on'); });
+    });
+  }
+
+  /* scroll reveal. IntersectionObserver, never a scroll listener. */
+  var targets = document.querySelectorAll('[data-reveal]');
+  if (reduce || !('IntersectionObserver' in window)){
+    targets.forEach(function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -8% 0px' });
+    targets.forEach(function(el){ io.observe(el); });
+  }
+
+  /* copy, with a real failure path */
+  var toast = document.getElementById('toast'), t;
+  function say(msg, isErr){
+    toast.textContent = msg;
+    toast.classList.toggle('err', !!isErr);
+    toast.classList.add('show');
+    clearTimeout(t);
+    t = setTimeout(function(){ toast.classList.remove('show'); }, 1800);
+  }
+  document.querySelectorAll('[data-copy]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var text = btn.getAttribute('data-copy');
+      if (!navigator.clipboard){ say('Copy blocked. Select the command instead.', true); return; }
+      navigator.clipboard.writeText(text).then(
+        function(){ say('Copied'); },
+        function(){ say('Copy blocked. Select the command instead.', true); }
+      );
+    });
+  });
+})();
 </script>
 
 </body>
