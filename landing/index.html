@@ -9,6 +9,16 @@
 <meta property="og:title" content="redacted">
 <meta property="og:description" content="A local hook that scrubs secrets out of tool output before your AI coding assistant reads it.">
 <meta property="og:type" content="website">
+<script>
+/* Applies the stored theme before first paint. Anything later and the page
+   renders the OS theme and visibly flips to the chosen one. */
+(function(){
+  try{
+    var stored = localStorage.getItem('theme');
+    if (stored === 'light' || stored === 'dark'){ document.documentElement.setAttribute('data-theme', stored); }
+  }catch(e){}
+})();
+</script>
 <style>
 /* ---------------------------------------------------------------
    No webfonts, no CDN, no analytics. A tool that makes no network
@@ -23,9 +33,8 @@
   --line:rgba(19,18,17,.13);
   --line-hard:rgba(19,18,17,.30);
   --bar:#131211;          /* the redaction block */
-  --bar-ink:#f5f4f1;
-  --accent:#c2381f;
-  --sel:rgba(194,56,31,.16);
+  --accent:#15645a;
+  --sel:rgba(21,100,90,.16);
 
   --mono:ui-monospace,"SF Mono",SFMono-Regular,"Cascadia Mono","Segoe UI Mono","Roboto Mono",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -33,8 +42,13 @@
   --gut:clamp(20px,4vw,40px);
   --sec:clamp(64px,9vw,116px);
 }
+/* The dark palette is declared twice on purpose. The media-query copy is the
+   default, skipped when the visitor has explicitly chosen light; the attribute
+   copy is the explicit dark choice. A plain custom-property block cannot be
+   shared across a media boundary, so the values are duplicated rather than
+   aliased. Keep the two lists in sync. */
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme="light"]){
     --paper:#131313;
     --panel:#1c1c1b;
     --ink:#e8e6e1;
@@ -42,11 +56,25 @@
     --line:rgba(232,230,225,.14);
     --line-hard:rgba(232,230,225,.30);
     --bar:#3a3835;
-    --bar-ink:#3a3835;
-    --accent:#e5674a;
-    --sel:rgba(229,103,74,.20);
+    --accent:#4cbfae;
+    --sel:rgba(76,191,174,.20);
   }
 }
+:root[data-theme="dark"]{
+  --paper:#131313;
+  --panel:#1c1c1b;
+  --ink:#e8e6e1;
+  --dim:#8f8c85;
+  --line:rgba(232,230,225,.14);
+  --line-hard:rgba(232,230,225,.30);
+  --bar:#3a3835;
+  --accent:#4cbfae;
+  --sel:rgba(76,191,174,.20);
+}
+/* Without this the browser paints scrollbars and form controls in the OS
+   scheme even when the page has been switched the other way. */
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
 
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
@@ -95,12 +123,21 @@ header .wrap{height:60px;display:flex;align-items:center;justify-content:space-b
 nav{display:flex;align-items:center;gap:clamp(14px,2.4vw,28px);font-family:var(--mono);font-size:12.5px;letter-spacing:.01em}
 nav a{color:var(--dim);padding:4px 0;border-bottom:1px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
 nav a:hover{color:var(--ink);border-bottom-color:var(--accent)}
+/* Deliberately not .opt: the theme control has to survive the mobile cull. */
+.themetog{
+  font:inherit;letter-spacing:inherit;background:none;border:0;border-bottom:1px solid transparent;
+  color:var(--dim);padding:4px 0;cursor:pointer;white-space:nowrap;
+  transition:color .15s,border-color .15s;
+}
+.themetog:hover{color:var(--ink);border-bottom-color:var(--accent)}
 @media (max-width:620px){nav a.opt{display:none}}
 
 /* ---------- hero ---------- */
 .hero{padding:clamp(40px,6vw,84px) 0 var(--sec)}
-.hero .grid{display:grid;grid-template-columns:1fr;gap:clamp(34px,5vw,56px);align-items:center}
-@media (min-width:1000px){.hero .grid{grid-template-columns:1.05fr .95fr;gap:clamp(40px,4vw,64px)}}
+/* minmax(0,…) not 1fr: a grid item defaults to min-width:auto, so the terminal's
+   white-space:pre lines would widen the track instead of scrolling inside it. */
+.hero .grid{display:grid;grid-template-columns:minmax(0,1fr);gap:clamp(34px,5vw,56px);align-items:center}
+@media (min-width:1000px){.hero .grid{grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:clamp(40px,4vw,64px)}}
 .hero h1{max-width:20ch}
 .hero .sub{margin-top:22px;font-size:clamp(16px,1.5vw,18px);color:var(--dim);max-width:52ch}
 .cta{margin-top:32px;display:flex;flex-wrap:wrap;align-items:center;gap:16px}
@@ -124,7 +161,7 @@ nav a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 /* ---------- terminal surfaces ---------- */
 .term{border:1px solid var(--line-hard);background:var(--panel)}
 .term-head{
-  display:flex;justify-content:space-between;align-items:center;gap:14px;
+  display:flex;justify-content:space-between;align-items:center;gap:6px 14px;flex-wrap:wrap;
   padding:10px 14px;border-bottom:1px solid var(--line-hard);
   font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
 }
@@ -170,7 +207,9 @@ section{padding:var(--sec) 0;border-top:1px solid var(--line)}
 .claim{padding:26px 0;border-bottom:1px solid var(--line)}
 .claim h3{margin-bottom:8px}
 .claim p{color:var(--dim);font-size:15.5px;max-width:56ch}
-.claim code{font-size:.88em;background:var(--panel);padding:1px 5px;border:1px solid var(--line);white-space:nowrap}
+/* no nowrap: these fit on one line at desktop widths anyway, and forcing it
+   pushed `aws secretsmanager get-secret-value` past a 320px viewport. */
+.claim code{font-size:.88em;background:var(--panel);padding:1px 5px;border:1px solid var(--line)}
 .after{margin-top:26px;font-size:16px;max-width:56ch}
 .after strong{font-weight:600}
 
@@ -179,8 +218,8 @@ section{padding:var(--sec) 0;border-top:1px solid var(--line)}
 .node{border:1px solid var(--line-hard);padding:8px 13px;color:var(--dim);white-space:nowrap}
 .node.self{border-color:var(--accent);color:var(--accent);font-weight:700}
 .arw{color:var(--dim);user-select:none}
-.panes{display:grid;grid-template-columns:1fr;border:1px solid var(--line-hard)}
-@media (min-width:820px){.panes{grid-template-columns:1fr 1fr}}
+.panes{display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--line-hard)}
+@media (min-width:820px){.panes{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .pane{padding:18px 16px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.9;white-space:pre}
 .pane .cap{
   display:block;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
@@ -226,9 +265,9 @@ section{padding:var(--sec) 0;border-top:1px solid var(--line)}
 .guard code{font-size:.9em;color:var(--accent)}
 
 /* ---------- install ---------- */
-.methods{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line-hard);border:1px solid var(--line-hard);margin-top:32px}
-@media (min-width:820px){.methods{grid-template-columns:1.35fr 1fr}}
-.method{background:var(--paper);padding:22px 20px}
+.methods{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;background:var(--line-hard);border:1px solid var(--line-hard);margin-top:32px}
+@media (min-width:820px){.methods{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}}
+.method{background:var(--paper);padding:22px 20px;min-width:0}
 .method .lab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex;gap:10px;align-items:baseline}
 .method .lab b{color:var(--accent);font-weight:700}
 .method pre{margin-top:14px;font-size:12.5px;line-height:1.9;overflow-x:auto;white-space:pre}
@@ -270,6 +309,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
       <a class="opt" href="#detection">Detection</a>
       <a href="#install">Install</a>
       <a href="https://github.com/svn-arv/redacted">GitHub</a>
+      <button class="themetog" type="button" data-theme-toggle></button>
     </nav>
   </div>
 </header>
@@ -508,6 +548,31 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
       });
     }, { threshold: 0.15, rootMargin: '0px 0px -8% 0px' });
     targets.forEach(function(el){ io.observe(el); });
+  }
+
+  /* theme control: label names the mode it switches to, so it has to read the
+     effective theme, which is the OS preference until an explicit choice exists */
+  var root = document.documentElement;
+  var tog = document.querySelector('[data-theme-toggle]');
+  var dark = window.matchMedia('(prefers-color-scheme:dark)');
+  function effective(){
+    return root.getAttribute('data-theme') || (dark.matches ? 'dark' : 'light');
+  }
+  function relabel(){
+    var next = effective() === 'dark' ? 'light' : 'dark';
+    tog.textContent = next === 'dark' ? 'Dark' : 'Light';
+    tog.setAttribute('aria-label', 'Switch to ' + next + ' theme');
+  }
+  relabel();
+  tog.addEventListener('click', function(){
+    var next = effective() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try{ localStorage.setItem('theme', next); }catch(e){}
+    relabel();
+  });
+  /* keep the label honest if the OS flips while no explicit choice is stored */
+  if (dark.addEventListener){
+    dark.addEventListener('change', function(){ if (!root.getAttribute('data-theme')){ relabel(); } });
   }
 
   /* copy, with a real failure path */
