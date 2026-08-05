@@ -710,6 +710,8 @@ func TestScrub_CodeReferenceValues(t *testing.T) {
 		"secret = configuration[:database]",
 		// Ruby `::` namespace constant.
 		"secret_key: MyApp::Config::TOKEN_V2",
+		// Long segments stay exempt: an identifier is not random, whatever its length.
+		"api_key: Settings.application_controller_defaults",
 	}
 	for _, in := range clean {
 		if result := Scrub(in); result.Redacted {
@@ -723,11 +725,44 @@ func TestScrub_CodeReferenceValues(t *testing.T) {
 		"secret_key = Xk7Pq9mW2vB8nZ4cA1fH",
 		"TOKEN=abc.def.ghi123",
 		"SECRET=abcdefgh::ijklmnopqr",
+		// A dot does not make a credential a code reference: one random segment
+		// is enough to lose the exemption, under any keyword key or separator.
+		"SECRET=aB3xK9pQ7rT2wY5n.M8vC4zL6hJ1sD0fG",
+		"SECRET=aB3xK9pQ7rT2wY5n:M8vC4zL6hJ1sD0fG",
+		"AWS_SECRET_ACCESS_KEY=Zk4Rm9Wq2Xt7Bv5Nc8.Ld3Hj6Fy1Pa0Sg9Ue2Ri",
+		"API_TOKEN: aB3xK9pQ7rT2wY5n.M8vC4zL6hJ1sD0fG",
+		// Segments short enough to duck the scorer's length floor are still random.
+		"DB_PASSWORD=Qw8Er5Ty2Ui9.Op6As3Df0Gh7",
 	}
 	for _, in := range redactGuards {
 		if result := Scrub(in); !result.Redacted {
 			t.Errorf("expected redaction for %q, got: %q", in, result.Text)
 		}
+	}
+}
+
+// TestScrub_TruncatedPrivateKey covers a PEM cut off before its END marker, the
+// shape a key takes when tool output hits a capture limit. Asserting on the body
+// rather than the Redacted flag, since redacting the header alone still leaks it.
+func TestScrub_TruncatedPrivateKey(t *testing.T) {
+	for _, kind := range []string{"RSA ", "EC ", "OPENSSH ", ""} {
+		key := testutil.PrivateKeyTruncated(kind)
+		result := Scrub(key.Value)
+		if !result.Redacted {
+			t.Errorf("truncated %sPEM not redacted at all", kind)
+			continue
+		}
+		for _, line := range strings.Split(key.Value, "\n")[1:] {
+			if strings.Contains(result.Text, line) {
+				t.Errorf("truncated %sPEM leaked a body line, got: %q", kind, result.Text)
+			}
+		}
+	}
+
+	// Guardrail: the fallback must not eat past the key into ordinary output.
+	trailing := testutil.PrivateKeyTruncated("RSA ").Value + "\nError: upload failed, retrying in 5s"
+	if result := Scrub(trailing); !strings.Contains(result.Text, "Error: upload failed, retrying in 5s") {
+		t.Errorf("truncated PEM redaction ate trailing output, got: %q", result.Text)
 	}
 }
 

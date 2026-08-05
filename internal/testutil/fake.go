@@ -232,6 +232,12 @@ func GoogleAPIKey() Secret {
 	return secret("AIza" + randBase64URL(35))
 }
 
+// GoogleAPIKeyV2 returns an AQ.-prefixed Google API key, the newer format that
+// AIza does not cover. The body is base64url, so it may or may not hold hyphens.
+func GoogleAPIKeyV2() Secret {
+	return secret("AQ." + randBase64URL(50))
+}
+
 // GitLabPAT returns a glpat- personal access token.
 func GitLabPAT() Secret {
 	return secret("glpat-" + RandAlphaNum(20))
@@ -256,6 +262,45 @@ func PyPIToken() Secret {
 func PrivateKey(kind string) Secret {
 	body := RandAlphaNum(14)
 	v := fmt.Sprintf("-----BEGIN %sPRIVATE KEY-----\n%s\n-----END %sPRIVATE KEY-----", kind, body, kind)
+	return secret(v)
+}
+
+// AWSSTSKey returns a temporary STS access key (ASIA, not AKIA).
+func AWSSTSKey() Secret {
+	return secret("ASIA" + randUpperAlphaNum(16))
+}
+
+// StripeWebhookSecret returns a whsec_ webhook signing secret.
+func StripeWebhookSecret() Secret {
+	return secret("whsec_" + RandAlphaNum(32))
+}
+
+// AIVendorKey returns a token for one of the AI-stack vendors, whose prefixes
+// carry the signal. Lengths are representative floors, not exact formats.
+func AIVendorKey(vendor string) Secret {
+	switch vendor {
+	case "huggingface":
+		return secret("hf_" + RandAlphaNum(34))
+	case "groq":
+		return secret("gsk_" + RandAlphaNum(52))
+	case "openrouter":
+		return secret("sk-or-v1-" + RandHex(64))
+	case "xai":
+		return secret("xai-" + RandAlphaNum(80))
+	case "perplexity":
+		return secret("pplx-" + RandAlphaNum(48))
+	case "tavily":
+		return secret("tvly-" + RandAlphaNum(32))
+	case "langsmith":
+		return secret("lsv2_pt_" + RandAlphaNum(32) + "_" + RandAlphaNum(10))
+	}
+	panic("unknown vendor: " + vendor)
+}
+
+// PrivateKeyTruncated returns a PEM cut off before the END marker, the shape
+// tool output takes when a key is longer than the capture limit.
+func PrivateKeyTruncated(kind string) Secret {
+	v := fmt.Sprintf("-----BEGIN %sPRIVATE KEY-----\n%s\n%s", kind, RandAlphaNum(64), RandAlphaNum(64))
 	return secret(v)
 }
 
