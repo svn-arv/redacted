@@ -35,6 +35,11 @@ keywords:
   - LICENSE_KEY
   - CLIENT_ID
   - DB_PASS
+  # PASSWD and MYSQL_PWD, not a bare PWD: the keyword prefix is optional, so
+  # `PWD` alone would redact the working directory in every shell env dump.
+  - PASSWD
+  - MYSQL_PWD
+  - CONNECTION_STRING
   - DB_URL
   - DATABASE_URL
   - REDIS_URL
@@ -70,9 +75,10 @@ allow_values:
 patterns:
   # === Specific patterns (value only) ===
 
+  # ASIA is the temporary STS form of the same 16-char body as AKIA.
   - name: aws_access_key
-    regex: 'AKIA[0-9A-Z]{16}'
-    prefilters: ['AKIA']
+    regex: 'A(?:KIA|SIA)[0-9A-Z]{16}'
+    prefilters: ['AKIA', 'ASIA']
 
   - name: aws_secret_key
     regex: '(?i)aws[_\-]?secret[_\-]?access[_\-]?key[ \t]*[=:][ \t]*[A-Za-z0-9/+=]{40}'
@@ -83,9 +89,10 @@ patterns:
     regex: 'github_pat_[A-Za-z0-9_]{22,}'
     prefilters: ['github_pat_']
 
+  # ghu_ is the user-to-server token an app exchanges for a user's OAuth code.
   - name: github_token
-    regex: 'gh[ps]_[A-Za-z0-9_]{36,}'
-    prefilters: ['ghp_', 'ghs_']
+    regex: 'gh[psu]_[A-Za-z0-9_]{36,}'
+    prefilters: ['ghp_', 'ghs_', 'ghu_']
 
   - name: github_oauth
     regex: 'gho_[A-Za-z0-9_]{36,}'
@@ -124,8 +131,9 @@ patterns:
     regex: 'https://[a-f0-9]{32}@[a-z0-9.\-]+\.ingest\.[a-z.]*sentry\.io/[0-9]+'
     prefilters: ['.ingest.']
 
+  # xoxe- is the rotating refresh token; it mints new xoxb/xoxp tokens.
   - name: slack_token
-    regex: 'xox[bpars]-[A-Za-z0-9\-]{10,}'
+    regex: 'xox[baeprs]-[A-Za-z0-9\-]{10,}'
     prefilters: ['xox']
 
   - name: sendgrid_key
@@ -153,6 +161,14 @@ patterns:
     regex: '"private_key_id"[ \t]*:[ \t]*"[0-9a-f]{12,}"'
     includes_key: true
     prefilters: ['"private_key_id"']
+
+  # Fallback for a PEM cut off before its END marker, which is what tool output
+  # hands back when a key is longer than the capture limit. Runs after the two
+  # bounded patterns above so complete keys keep their label. The 16-char floor
+  # per line stops it eating trailing prose (`retrying` is base64-shaped at 8).
+  - name: private_key_truncated
+    regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----(?:\s*[A-Za-z0-9+/=]{16,})+'
+    prefilters: ['PRIVATE KEY-----']
 
   - name: jwt
     regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
@@ -191,6 +207,46 @@ patterns:
     regex: 'AIza[A-Za-z0-9_-]{35}'
     prefilters: ['AIza']
 
+  # Newer Google/Gemini API key: AQ. + a base64url body. The dot is why the
+  # catch-alls miss it, so the value needs a pattern of its own.
+  - name: google_api_key_v2
+    regex: 'AQ\.[A-Za-z0-9_-]{40,}'
+    prefilters: ['AQ.']
+
+  - name: stripe_webhook_secret
+    regex: 'whsec_[A-Za-z0-9]{24,}'
+    prefilters: ['whsec_']
+
+  # AI-stack vendor tokens. The prefix carries the signal; the length bounds are
+  # floors, not exact formats, so a vendor lengthening its body still matches.
+  - name: huggingface_token
+    regex: 'hf_[A-Za-z0-9]{30,}'
+    prefilters: ['hf_']
+
+  - name: groq_key
+    regex: 'gsk_[A-Za-z0-9]{40,}'
+    prefilters: ['gsk_']
+
+  - name: openrouter_key
+    regex: 'sk-or-v1-[a-f0-9]{48,}'
+    prefilters: ['sk-or-v1-']
+
+  - name: xai_key
+    regex: 'xai-[A-Za-z0-9]{60,}'
+    prefilters: ['xai-']
+
+  - name: perplexity_key
+    regex: 'pplx-[A-Za-z0-9]{32,}'
+    prefilters: ['pplx-']
+
+  - name: tavily_key
+    regex: 'tvly-(?:dev-)?[A-Za-z0-9]{24,}'
+    prefilters: ['tvly-']
+
+  - name: langsmith_key
+    regex: 'lsv2_(?:pt|sk)_[A-Za-z0-9]{24,}_[A-Za-z0-9]{8,}'
+    prefilters: ['lsv2_']
+
   - name: gitlab_pat
     regex: 'glpat-[A-Za-z0-9_-]{20,}'
     prefilters: ['glpat-']
@@ -206,6 +262,14 @@ patterns:
   - name: pypi_token
     regex: 'pypi-[A-Za-z0-9_-]{50,}'
     prefilters: ['pypi-']
+
+  # Opaque Authorization headers: the keyword tier stops its value at the space
+  # after the scheme, so only JWTs survive via their own pattern. Runs after jwt
+  # so a bearer JWT keeps the more specific label.
+  - name: auth_header
+    regex: '(?i)\b(proxy-)?authorization[ \t]*:[ \t]*(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}'
+    includes_key: true
+    prefilters_fold: ['authorization']
 
   # The char class excludes ${ } so ${VAR} placeholders in connection-string
   # templates don't match (issue #1); real credentialed URLs contain none.

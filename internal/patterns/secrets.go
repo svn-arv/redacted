@@ -364,12 +364,12 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	if key := keyOf(match); key != "" && strings.EqualFold(key, value) {
 		return true
 	}
-	if looksLikeIdentifier(value) || looksLikeCodeReference(value) {
+	if looksLikeIdentifier(value) || (looksLikeCodeReference(value) && !s.hasRandomSegment(value)) {
 		return true
 	}
 	// Lenient separators (`:`, `=>`, spaced `=`) mean source code, where an
 	// identifier-shaped value is a reference. Bare KEY=value env dumps stay strict.
-	if separatorLenient(match) && looksLikeLenientIdentifier(value) {
+	if separatorLenient(match) && looksLikeLenientIdentifier(value) && !s.hasRandomSegment(value) {
 		return true
 	}
 	// #29 (a): a value that is just the key's own keyword plus digits/separators
@@ -401,7 +401,23 @@ func (s *Scrubber) skipMatch(p *pattern, match, text string, end int) bool {
 	if p.scored && insideURL(text, end-len(match)) {
 		return true
 	}
-	return p.scored && !s.secretLike(value)
+	return p.scored && !s.secretLike(value) && !hexUnderKeySuffix(keyOf(match), value)
+}
+
+// hexUnderKeySuffix reports whether value is a long hex run under a `*_KEY`
+// name. The scorer rejects lowercase hex as 2-class by design, which is what
+// keeps SHAs and UUIDs clean, so key-suffixed hex needs its own way in.
+func hexUnderKeySuffix(key, value string) bool {
+	if len(key) < 4 || len(value) < 24 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if !isHexDigit(value[i]) {
+			return false
+		}
+	}
+	upper := strings.ToUpper(key)
+	return strings.HasSuffix(upper, "_KEY") || strings.HasSuffix(upper, "-KEY")
 }
 
 // urlLookback caps how far insideURL walks; a scheme further back than this
@@ -523,6 +539,41 @@ func looksLikeCodeReference(v string) bool {
 	return hasSep && hasLower && hasUpper
 }
 
+// hasRandomSegment reports whether any `.`/`::`-separated segment is random,
+// which separates a constant path from a token that merely contains a dot.
+// Scored without secretLike's length floor: a segment is short by construction,
+// so the floor would exempt every dotted value short enough to be split.
+func (s *Scrubber) hasRandomSegment(value string) bool {
+	for _, segment := range strings.FieldsFunc(value, func(r rune) bool { return r == '.' || r == ':' }) {
+		if charClasses(segment) >= s.heuristic.MinCharClasses && shannonEntropy(segment) >= s.heuristic.MinEntropy {
+			return true
+		}
+	}
+	return false
+}
+
+// charClasses counts how many of lower, upper, and digit appear in v.
+func charClasses(v string) int {
+	var hasLower, hasUpper, hasDigit bool
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		}
+	}
+	classes := 0
+	for _, present := range []bool{hasLower, hasUpper, hasDigit} {
+		if present {
+			classes++
+		}
+	}
+	return classes
+}
+
 // separatorLenient reports whether the first separator reads as source code —
 // `:`, `=>`, or spaced `=` — rather than a strict env-dump `KEY=value`.
 func separatorLenient(match string) bool {
@@ -624,24 +675,7 @@ func (s *Scrubber) secretLike(v string) bool {
 		return false
 	}
 
-	var hasLower, hasUpper, hasDigit bool
-	for _, r := range v {
-		switch {
-		case r >= 'a' && r <= 'z':
-			hasLower = true
-		case r >= 'A' && r <= 'Z':
-			hasUpper = true
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		}
-	}
-	classes := 0
-	for _, present := range []bool{hasLower, hasUpper, hasDigit} {
-		if present {
-			classes++
-		}
-	}
-	if classes < h.MinCharClasses {
+	if charClasses(v) < h.MinCharClasses {
 		return false
 	}
 

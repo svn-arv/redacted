@@ -6,3 +6,6 @@ NODE_ENV=development
 BASE_URL=https://example.com
 APP_URL=https://myapp.example.com
 TZ=UTC
+PWD=/Users/dev/projects/myapp
+OLDPWD=/Users/dev/projects
+CACHE_KEY=homepage_v3_fragment
