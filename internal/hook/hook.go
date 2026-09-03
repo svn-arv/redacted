@@ -39,7 +39,11 @@ type Output struct {
 }
 
 type HookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
+	HookEventName string `json:"hookEventName"`
+	// UpdatedToolOutput replaces the tool's result. decision/reason only
+	// annotate: the raw result still reaches the model and the session
+	// transcript, so this is the field that actually contains a secret.
+	UpdatedToolOutput string `json:"updatedToolOutput,omitempty"`
 	AdditionalContext string `json:"additionalContext,omitempty"`
 }
 
@@ -51,7 +55,8 @@ type HookSpecificOutput struct {
 //
 // If scrubber is nil, uses the default package-level scrubber.
 // If no secrets found: writes nothing, exits cleanly (pass-through).
-// If secrets found: blocks the output and provides redacted version as reason.
+// If secrets found: replaces the result via updatedToolOutput, and keeps
+// decision/reason as the visible annotation.
 func Process(stdin io.Reader, stdout io.Writer, scrubber *patterns.Scrubber) error {
 	data, err := io.ReadAll(stdin)
 	if err != nil {
@@ -113,10 +118,14 @@ func recoverToError(fn func() error) (err error) {
 func writeWithheld(w io.Writer) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
+	const withheld = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets."
 	_ = enc.Encode(Output{
-		Decision:           "block",
-		Reason:             "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.",
-		HookSpecificOutput: &HookSpecificOutput{HookEventName: "PostToolUse"},
+		Decision: "block",
+		Reason:   withheld,
+		HookSpecificOutput: &HookSpecificOutput{
+			HookEventName:     "PostToolUse",
+			UpdatedToolOutput: withheld,
+		},
 	})
 }
 
@@ -165,7 +174,14 @@ func processBash(data []byte, scrub func(string) patterns.Result, w io.Writer) (
 		redactedOutput += "\n[stderr]\n" + stderrResult.Text
 	}
 
-	if err := writeBlock(w, total, "command", redactedOutput); err != nil {
+	// The replacement keeps stderr whether or not it was redacted; dropping a
+	// clean stderr would delete output the model still needs.
+	updated := stdoutResult.Text
+	if input.ToolResponse.Stderr != "" {
+		updated += "\n[stderr]\n" + stderrResult.Text
+	}
+
+	if err := writeBlock(w, total, "command", redactedOutput, updated); err != nil {
 		return nil, err
 	}
 	return mergeCounts(stdoutResult.ByPattern, stderrResult.ByPattern), nil
@@ -193,10 +209,77 @@ func processGeneric(data []byte, toolName string, scrub func(string) patterns.Re
 		content = summarizeScrubbed(result.Text)
 	}
 
-	if err := writeBlock(w, result.Count, toolName, content); err != nil {
+	// reason may summarize, the replacement may not: it stands in for the
+	// result, so anything it drops the model never sees.
+	updated := result.Text
+	if !jsonString(raw.ToolResponse) {
+		scrubbed, err := scrubJSON(raw.ToolResponse, scrub)
+		if err != nil {
+			return nil, err
+		}
+		updated = string(scrubbed)
+	}
+
+	if err := writeBlock(w, result.Count, toolName, content, updated); err != nil {
 		return nil, err
 	}
 	return result.ByPattern, nil
+}
+
+// jsonString reports whether raw is a bare JSON string, the one shape whose
+// scrubbed text can replace the result verbatim.
+func jsonString(raw json.RawMessage) bool {
+	var s string
+	return json.Unmarshal(raw, &s) == nil
+}
+
+// scrubJSON returns raw with every string leaf scrubbed and the value's shape
+// intact, so the replacement keeps the keys, nesting and non-string fields the
+// summarized reason throws away.
+func scrubJSON(raw json.RawMessage, scrub func(string) patterns.Result) (json.RawMessage, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return marshalNoEscape(scrub(s).Text)
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil && obj != nil {
+		for key, value := range obj {
+			scrubbed, err := scrubJSON(value, scrub)
+			if err != nil {
+				return nil, err
+			}
+			obj[key] = scrubbed
+		}
+		return marshalNoEscape(obj)
+	}
+
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err == nil && arr != nil {
+		for i, value := range arr {
+			scrubbed, err := scrubJSON(value, scrub)
+			if err != nil {
+				return nil, err
+			}
+			arr[i] = scrubbed
+		}
+		return marshalNoEscape(arr)
+	}
+
+	// Numbers, booleans and null carry no secrets and pass through unchanged.
+	return raw, nil
+}
+
+// marshalNoEscape encodes v without escaping <, > and &, so markup inside a
+// scrubbed value survives as literal text rather than < sequences.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, fmt.Errorf("encode scrubbed value: %w", err)
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 type fileResponse struct {
@@ -286,7 +369,7 @@ func summarizeScrubbed(scrubbed string) string {
 	return strings.Join(hits, "\n")
 }
 
-func writeBlock(w io.Writer, count int, source, redactedOutput string) error {
+func writeBlock(w io.Writer, count int, source, redactedOutput, updated string) error {
 	output := Output{
 		Decision: "block",
 		Reason: fmt.Sprintf(
@@ -294,7 +377,8 @@ func writeBlock(w io.Writer, count int, source, redactedOutput string) error {
 			count, source, redactedOutput,
 		),
 		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName: "PostToolUse",
+			HookEventName:     "PostToolUse",
+			UpdatedToolOutput: updated,
 		},
 	}
 
