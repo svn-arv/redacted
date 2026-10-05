@@ -208,13 +208,14 @@ impl Scrubber {
                     .match_indices(['=', ':'])
                     .map(|(i, _)| run.start() + i + 1),
             );
+            // Sentence punctuation after a value is still inside the run, so also try without it.
+            let trimmed = run.start() + run.as_str().trim_end_matches(['.', ':', '!', '?']).len();
             let hit = starts
-                .filter(|&start| self.exact_lens.contains(&(run.end() - start)))
-                .find_map(|start| {
-                    let name = self
-                        .exact
-                        .get(&sha256_hex(&result.text[start..run.end()]))?;
-                    Some((start, run.end(), name.as_str()))
+                .flat_map(|start| [(start, run.end()), (start, trimmed)])
+                .filter(|&(start, end)| start < end && self.exact_lens.contains(&(end - start)))
+                .find_map(|(start, end)| {
+                    let name = self.exact.get(&sha256_hex(&result.text[start..end]))?;
+                    Some((start, end, name.as_str()))
                 });
             spans.extend(hit);
         }
@@ -926,6 +927,8 @@ mod tests {
             (format!("\"DB_PASS={v}\""), format!("\"DB_PASS={marker}\"")),
             (format!("db_pass: '{v}'"), format!("db_pass: '{marker}'")),
             (format!("x:y={v}"), format!("x:y={marker}")),
+            (format!("it is {v}."), format!("it is {marker}.")),
+            (format!("K={v}:!"), format!("K={marker}:!")),
         ] {
             let r = s.scrub(&input);
             assert_eq!(r.text, want);
