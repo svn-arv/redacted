@@ -1,0 +1,34 @@
+Vendor signatures, one per line, as tool output would show them.
+aws access key AKIA{{upper:16}} and sts ASIA{{upper:16}}
+aws_secret_access_key={{alnum:37}}/{{alnum:2}}
+AWS-Secret-Access-Key: {{alnum:40}}
+github ghp_{{alnum:40}} ghs_{{alnum:40}} ghu_{{alnum:40}}
+oauth gho_{{alnum:40}} refresh ghr_{{alnum:40}} fine github_pat_{{alnum:26}}
+stripe sk_live_{{alnum:24}} pk_test_{{alnum:24}} rk_live_{{alnum:30}}
+twilio SK{{hex:32}} and AC{{hex:32}}
+digitalocean dop_v1_{{hex:64}}
+SPACES_SECRET_KEY={{upper:4}}{{alnum:16}}
+sentry https://{{hex:32}}@o{{digits:6}}.ingest.us.sentry.io/{{digits:7}}
+slack xoxb-{{digits:12}}-{{digits:12}} xoxe-{{digits:12}}-{{alnum:20}}
+sendgrid SG.{{alnum:22}}.{{alnum:43}}
+hubspot pat-na1-{{hex:8}}-{{hex:4}}-{{hex:4}}-{{hex:4}}-{{hex:12}}
+jwt eyJ{{b64:33}}.eyJ{{b64:25}}.{{b64:43}}
+Authorization: Bearer eyJ{{b64:20}}.eyJ{{b64:20}}.{{b64:20}}
+authorization: basic {{alnum:24}}
+Proxy-Authorization: Token {{alnum:28}}
+anthropic sk-ant-api03-{{b64:90}}
+circleci CCIPAT_{{alnum:30}} sentry user sntryu_{{alnum:40}}
+rubygems rubygems_{{alnum:30}} newrelic NRAK-{{alnum:27}}
+openai sk-proj-{{alnum:48}} classic sk-{{alnum:48}}
+google AIza{{b64:35}} v2 AQ.{{b64:50}}
+webhook whsec_{{alnum:32}}
+hf hf_{{alnum:34}} groq gsk_{{alnum:52}} openrouter sk-or-v1-{{hex:64}}
+xai xai-{{alnum:80}} pplx pplx-{{alnum:48}} tavily tvly-dev-{{alnum:32}}
+langsmith lsv2_sk_{{alnum:32}}_{{alnum:10}}
+gitlab glpat-{{alnum:20}} npm npm_{{alnum:36}} pypi pypi-{{b64:60}}
+slack hook https://hooks.slack.com/services/T{{upper:8}}/B{{upper:8}}/{{alnum:24}}
+db postgres://app:{{alnum:12}}@db.internal:5432/prod?sslmode=require
+db mongodb+srv://admin:{{alnum:12}}@cluster0.example.net/app
+db rediss://default:{{alnum:16}}@cache.example.com:6380
+any postgis://gis:{{alnum:12}}@gis.example.com/maps
+two on one line: ghp_{{alnum:36}} then AKIA{{upper:16}}.

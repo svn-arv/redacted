@@ -1,0 +1,12 @@
+Non-ASCII edges where Go and Rust regex semantics differ.
+éSK{{hex:32}} after a letter, éAC{{hex:32}}é wrapped
+nbsp postgis://u:{{alnum:10}} tail@host/db
+emspace postgis://u:{{alnum:10}} tail@host/db
+vtab postgis://u:{{alnum:10}}tail@host/db
+multibyte hint postgis://u:{{alnum:10}}@host/dbéèêë
+-----BEGIN RSA PRIVATE KEY-----
+{{b64:64}}
+-----END RSA PRIVATE KEY-----
+kelvin AWS_SECRET_ACCESS_KEY={{alnum:40}}
+long s awſ_secret_access_key={{alnum:40}}
+emoji 🔑 ghp_{{alnum:40}} 🔑

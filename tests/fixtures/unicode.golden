@@ -1,0 +1,12 @@
+Non-ASCII edges where Go and Rust regex semantics differ.
+é[REDACTED:twilio_api_key ...9ae6] after a letter, é[REDACTED:twilio_account_sid ...4484]é wrapped
+nbsp [REDACTED:credentialed_url ...t/db]
+emspace [REDACTED:credentialed_url ...t/db]
+vtab [REDACTED:credentialed_url ...t/db]
+multibyte hint [REDACTED:credentialed_url ...éèêë]
+-----BEGIN RSA PRIVATE KEY-----
+BLq84jpm1wz49lkcf3_Nx0K7dYeVZg6ivx_cVLlwMol9mAyQcv0_vnttqomE21k_
+-----END RSA PRIVATE KEY-----
+kelvin AWS_SECRET_ACCESS_KEY= [REDACTED ...GLiX]
+long s awſ_secret_access_key= [REDACTED ...40EL]
+emoji 🔑 [REDACTED:github_token ...8X7S] 🔑
