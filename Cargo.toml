@@ -1,0 +1,17 @@
+[package]
+name = "redacted"
+version = "0.7.1"
+edition = "2021"
+description = "Claude Code PostToolUse hook that scrubs secrets from tool output"
+license = "MIT"
+
+[[bin]]
+name = "redacted"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde_yaml = "0.9"
+regex = "1"
