@@ -1,4 +1,4 @@
-//! Synthetic secrets generated at runtime, ported from internal/testutil/fake.go.
+//! Synthetic secrets generated at runtime.
 //! Values match engine.yml but never sit in source, so push protection stays quiet.
 
 use std::cell::Cell;

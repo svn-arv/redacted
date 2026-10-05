@@ -1,4 +1,4 @@
-//! Claude Code PostToolUse protocol, ported from internal/hook/hook.go
+//! Claude Code PostToolUse protocol, ported from the Go 0.7 hook
 //! (the updatedToolOutput envelope from fix/46).
 
 use std::collections::BTreeMap;

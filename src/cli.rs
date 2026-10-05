@@ -1,4 +1,4 @@
-//! Commands: scrub, verify, stats, init, uninstall (ported from cmd/).
+//! Commands: scrub, verify, stats, init, uninstall.
 
 use std::collections::BTreeMap;
 use std::fs;

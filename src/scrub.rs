@@ -1,5 +1,5 @@
-//! Vendor-signature detection: the `patterns:` list in engine.yml plus user
-//! patterns, ported from internal/patterns/secrets.go.
+//! Detection tiers: vendor signatures (engine.yml `patterns:` plus user patterns),
+//! learned secrets, and the opt-in entropy heuristic.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

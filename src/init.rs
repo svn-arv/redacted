@@ -1,5 +1,5 @@
 //! `redacted init`: learn secrets from a .env file into the global config, then
-//! install the hook (the hook half ported from cmd/init.go).
+//! install the hook.
 
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(got.unwrap(), want.display().to_string());
     }
 
-    // Hook install, ported from cmd/init_test.go.
+    // Hook install.
 
     fn post_tool_use(path: &std::path::Path) -> Vec<Value> {
         let v: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
     }
 
-    // Hook removal, ported from cmd/uninstall_test.go.
+    // Hook removal.
 
     fn settings_file(tag: &str, v: Value) -> PathBuf {
         let path = tmp(tag).join("settings.json");

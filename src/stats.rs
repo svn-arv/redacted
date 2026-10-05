@@ -1,4 +1,4 @@
-//! Per-pattern redaction counts appended as JSONL, mirroring internal/stats.
+//! Per-pattern redaction counts appended as JSONL.
 //! Only pattern names and counts are stored, never values.
 
 use std::collections::BTreeMap;

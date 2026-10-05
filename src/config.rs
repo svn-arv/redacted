@@ -1,5 +1,5 @@
 //! App policy (config.yaml / .redacted.yaml) and engine overrides
-//! (engine.yml / .redacted.engine.yml), mirroring internal/config/config.go.
+//! (engine.yml / .redacted.engine.yml).
 
 use std::fs;
 use std::path::{Path, PathBuf};
