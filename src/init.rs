@@ -105,6 +105,10 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
         settings.display()
     );
     println!("Binary: {bin} scrub");
+    // Judged on the written config, so a re-run with no .env does not warn a user who has entries.
+    if crate::config::vendor_only(&crate::config::load(&home, "")) {
+        println!("\nNotice: {}", crate::config::VENDOR_ONLY_NOTICE);
+    }
     Ok(())
 }
 

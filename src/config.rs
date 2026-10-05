@@ -110,6 +110,13 @@ pub fn load(home: &str, cwd: &str) -> Config {
     }
 }
 
+pub const VENDOR_ONLY_NOTICE: &str = "vendor signatures only, no learned secrets, heuristic off; run `redacted init --env PATH` to learn yours";
+
+/// Only the vendor tier is active: nothing catches a secret without a known prefix.
+pub fn vendor_only(cfg: &Config) -> bool {
+    cfg.learned.is_empty() && !cfg.heuristic.enabled
+}
+
 /// Learned entries in <cwd>/.redacted.yaml, which `load` ignores; verify warns on them.
 pub fn project_learned_count(cwd: &str) -> usize {
     let (_, p) = paths("", cwd, "", ".redacted.yaml");
@@ -271,6 +278,25 @@ mod tests {
 
         fs::remove_file(home.join(".config/redacted/config.yaml")).unwrap();
         assert!(load(s(&home), s(&cwd)).learned.is_empty());
+    }
+
+    #[test]
+    fn vendor_only_means_no_learned_entries_and_heuristic_off() {
+        let one = Learned::default();
+        let heuristic_on = Heuristic {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(vendor_only(&Config::default()));
+        assert!(!vendor_only(&Config {
+            learned: vec![one],
+            ..Default::default()
+        }));
+        assert!(!vendor_only(&Config {
+            heuristic: heuristic_on,
+            ..Default::default()
+        }));
+        assert!(VENDOR_ONLY_NOTICE.contains("redacted init --env PATH"));
     }
 
     #[test]

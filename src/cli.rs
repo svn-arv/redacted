@@ -405,6 +405,13 @@ fn check_learned(cwd: &str) -> Vec<Check> {
         cfg.learned.len()
     );
     let mut out = vec![check("learned secrets", Status::Pass, detail)];
+    if config::vendor_only(&cfg) {
+        out.push(check(
+            "protection",
+            Status::Warn,
+            config::VENDOR_ONLY_NOTICE,
+        ));
+    }
     let n = config::project_learned_count(cwd);
     if n > 0 {
         let entries = if n == 1 { "entry" } else { "entries" };

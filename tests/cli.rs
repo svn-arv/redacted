@@ -193,6 +193,7 @@ fn verify_reports_checks_and_fails_without_a_hook() {
         "[PASS] patterns load - all patterns compiled",
         "[PASS] test scrub - caught 1 secret(s) in test input",
         "[PASS] learned secrets - config version 1, 0 learned, heuristic disabled",
+        "[WARN] protection - vendor signatures only, no learned secrets, heuristic off; run `redacted init --env PATH` to learn yours",
         "5 passed, 3 failed",
     ] {
         assert!(out.contains(line), "missing {line:?} in:\n{out}");
@@ -213,6 +214,7 @@ fn verify_reports_learned_config_and_warns_on_project_hashes() {
     )
     .unwrap();
     let out = stdout(&run(&dir, &["verify"], ""));
+    assert!(!out.contains("[WARN] protection"), "{out}");
     for line in [
         "[PASS] learned secrets - config version 2, 2 learned, heuristic enabled",
         "[WARN] project learned - .redacted.yaml has 1 learned entry, ignored: learned secrets belong in ~/.config/redacted/config.yaml",
