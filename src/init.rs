@@ -60,8 +60,11 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
             .map(|((k, v), l)| row(k, v, l))
             .collect();
         if !rows.is_empty() {
+            let defaults: Vec<usize> = (0..rows.len())
+                .filter(|&i| entries[i].is_ok() && preselect(&pairs[i].1))
+                .collect();
             let picked = MultiSelect::new("Secrets to learn:", rows)
-                .with_all_selected_by_default()
+                .with_default(&defaults)
                 .raw_prompt()
                 .map_err(|e| e.to_string())?;
             // Ticked rows that cannot be learned are skipped, not written.
@@ -208,12 +211,27 @@ pub fn learn(key: &str, value: &str) -> Result<Learned, &'static str> {
     if value.contains(char::is_whitespace) {
         return Err("cannot match (contains spaces)");
     }
+    if value.chars().count() < 8 {
+        return Err("too short");
+    }
     Ok(Learned {
         name: key.to_lowercase(),
         sha256: sha256_hex(value),
         len: value.len(),
         shape: derive_shape(value),
     })
+}
+
+/// Ticked by default only with 2+ of {lower, upper, digit, other}: `development`
+/// or `3000` are config, not secrets, and would redact everywhere.
+fn preselect(value: &str) -> bool {
+    let classes = [
+        value.chars().any(|c| c.is_lowercase()),
+        value.chars().any(|c| c.is_uppercase()),
+        value.chars().any(|c| c.is_ascii_digit()),
+        value.chars().any(|c| !c.is_alphanumeric()),
+    ];
+    classes.iter().filter(|&&has| has).count() >= 2
 }
 
 fn row(key: &str, value: &str, l: &Result<Learned, &str>) -> String {
@@ -427,6 +445,30 @@ mod tests {
         assert_eq!(l.sha256, crate::scrub::sha256_hex(&value));
         assert_eq!(l.len, value.len());
         assert_eq!(l.shape, derive_shape(&value));
+    }
+
+    #[test]
+    fn learn_rejects_values_under_eight_characters() {
+        // Learned values redact everywhere, so `PORT=3000` would hide every 3000 in output.
+        for v in ["3000", "true", "Pw9xQz7"] {
+            assert_eq!(learn("K", v).unwrap_err(), "too short", "{v}");
+        }
+        assert!(learn("K", "Pw9xQz7k").is_ok());
+        assert!(row("PORT", "3000", &learn("PORT", "3000")).contains("too short"));
+    }
+
+    #[test]
+    fn only_values_with_two_character_classes_are_preselected() {
+        let hex = "9f86d081884c7d659a2feaa0c55ad015";
+        for (v, want) in [
+            ("development", false),
+            ("DEVELOPMENT", false),
+            ("2024010112", false),
+            ("P@ssw0rd2024", true),
+            (hex, true),
+        ] {
+            assert_eq!(preselect(v), want, "{v}");
+        }
     }
 
     #[test]
