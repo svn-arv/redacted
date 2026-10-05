@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{Config, EngineConfig, Heuristic};
 
-const ENGINE_YML: &str = include_str!("../internal/patterns/engine.yml");
+const ENGINE_YML: &str = include_str!("engine.yml");
 
 // Built-in heuristic thresholds (engine.yml) that the includes_key guards still
 // use to tell a random segment from an identifier.
@@ -1236,10 +1236,7 @@ mod tests {
     }
 
     fn clean_corpus() -> Vec<(String, String)> {
-        let dir = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/internal/patterns/corpus/clean"
-        );
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/clean");
         let mut files: Vec<(String, String)> = std::fs::read_dir(dir)
             .unwrap()
             .map(|e| e.unwrap().path())
