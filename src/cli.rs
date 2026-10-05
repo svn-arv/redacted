@@ -1,4 +1,4 @@
-//! Commands: scrub, verify, stats, init (ported from cmd/).
+//! Commands: scrub, verify, stats, init, uninstall (ported from cmd/).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -44,6 +44,12 @@ enum Cmd {
         #[arg(long)]
         local: bool,
     },
+    /// Remove the redacted hook from Claude Code settings (keeps the config)
+    Uninstall {
+        /// Remove from .claude/settings.local.json only
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 /// Runs the CLI and returns the process exit code.
@@ -58,6 +64,7 @@ pub fn run() -> i32 {
         Some(Cmd::Verify) => verify(),
         Some(Cmd::Stats) => show_stats(),
         Some(Cmd::Init { env, local }) => init::run(env, local),
+        Some(Cmd::Uninstall { local }) => init::uninstall(local),
         None => {
             let _ = Cli::command().print_help();
             0

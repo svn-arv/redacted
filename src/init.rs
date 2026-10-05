@@ -331,6 +331,70 @@ fn install_hook_to_path(settings_path: &Path, bin: &str) -> Result<(), String> {
     fs::write(settings_path, out).map_err(|e| format!("writing {shown}: {e}"))
 }
 
+/// `redacted uninstall`: removes the hook from both settings files (or the local
+/// one only); the global config is kept so a reinstall keeps its learned secrets.
+pub fn uninstall(local: bool) -> i32 {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut paths = vec![cwd.join(".claude/settings.local.json")];
+    if !local {
+        paths.insert(0, Path::new(&home).join(".claude/settings.json"));
+    }
+    let (mut removed, mut code) = (0, 0);
+    for path in paths {
+        match remove_hook_from_path(&path) {
+            Ok(true) => {
+                println!("Removed redacted hook from {}", path.display());
+                removed += 1;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("uninstall: {e}");
+                code = 1;
+            }
+        }
+    }
+    if removed == 0 && code == 0 {
+        println!("No redacted hooks found.");
+    }
+    let config = Path::new(&home).join(".config/redacted/config.yaml");
+    if config.exists() {
+        println!("Config kept at {}", config.display());
+    }
+    code
+}
+
+/// Ok(false) when there is nothing to remove, including a missing file.
+fn remove_hook_from_path(settings_path: &Path) -> Result<bool, String> {
+    let shown = settings_path.display();
+    let mut settings: Value = match fs::read(settings_path) {
+        Ok(data) => serde_json::from_slice(&data).map_err(|e| format!("parsing {shown}: {e}"))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("reading {shown}: {e}")),
+    };
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    let Some(entries) = hooks.get_mut("PostToolUse").and_then(Value::as_array_mut) else {
+        return Ok(false);
+    };
+    let before = entries.len();
+    entries.retain(|e| !is_redacted_entry(e));
+    if entries.len() == before {
+        return Ok(false);
+    }
+    if entries.is_empty() {
+        hooks.remove("PostToolUse");
+    }
+    if hooks.is_empty() {
+        settings.as_object_mut().map(|o| o.remove("hooks"));
+    }
+    let out =
+        serde_json::to_string_pretty(&settings).map_err(|e| format!("marshal settings: {e}"))?;
+    fs::write(settings_path, out).map_err(|e| format!("writing {shown}: {e}"))?;
+    Ok(true)
+}
+
 fn is_redacted_entry(entry: &Value) -> bool {
     entry["hooks"].as_array().is_some_and(|hooks| {
         hooks.iter().any(|h| {
@@ -670,6 +734,92 @@ mod tests {
         let err = install_hook_to_path(&path, "/usr/local/bin/redacted").unwrap_err();
         assert!(err.contains("parsing"), "{err}");
         assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+    }
+
+    // Hook removal, ported from cmd/uninstall_test.go.
+
+    fn settings_file(tag: &str, v: Value) -> PathBuf {
+        let path = tmp(tag).join("settings.json");
+        fs::write(&path, v.to_string()).unwrap();
+        path
+    }
+
+    fn ours() -> Value {
+        json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/redacted scrub"}]})
+    }
+
+    #[test]
+    fn remove_hook_drops_the_entry_and_the_emptied_keys() {
+        let path = settings_file(
+            "rm-only",
+            json!({"theme": "dark", "hooks": {"PostToolUse": [ours()]}}),
+        );
+        assert_eq!(remove_hook_from_path(&path), Ok(true));
+        let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v, json!({"theme": "dark"}));
+    }
+
+    #[test]
+    fn remove_hook_keeps_other_hooks_and_settings() {
+        let other = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/other-hook", "timeout": 5}]});
+        let pre = json!([{"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/rtk"}]}]);
+        let path = settings_file(
+            "rm-keep",
+            json!({"theme": "dark", "hooks": {"PreToolUse": pre, "PostToolUse": [other, ours()]}}),
+        );
+        assert_eq!(remove_hook_from_path(&path), Ok(true));
+        let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["theme"], "dark");
+        assert_eq!(v["hooks"]["PreToolUse"], pre);
+        assert_eq!(v["hooks"]["PostToolUse"], json!([other]));
+    }
+
+    #[test]
+    fn remove_hook_reports_nothing_to_remove() {
+        let other = json!({"hooks": [{"type": "command", "command": "/usr/local/bin/other-hook"}]});
+        for (tag, v) in [
+            ("rm-none", json!({"hooks": {"PostToolUse": [other]}})),
+            ("rm-empty", json!({})),
+            ("rm-nohooks", json!({"theme": "dark"})),
+        ] {
+            let path = settings_file(tag, v.clone());
+            assert_eq!(remove_hook_from_path(&path), Ok(false), "{tag}");
+            let after: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(after, v, "{tag}: file must be untouched");
+        }
+        let missing = tmp("rm-missing").join("settings.json");
+        assert_eq!(remove_hook_from_path(&missing), Ok(false));
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn remove_hook_is_idempotent() {
+        let path = settings_file("rm-twice", json!({"hooks": {"PostToolUse": [ours()]}}));
+        assert_eq!(remove_hook_from_path(&path), Ok(true));
+        assert_eq!(remove_hook_from_path(&path), Ok(false));
+    }
+
+    #[test]
+    fn remove_hook_errors_on_invalid_json_and_leaves_it() {
+        let path = tmp("rm-bad").join("settings.json");
+        fs::write(&path, "not json").unwrap();
+        assert!(remove_hook_from_path(&path)
+            .unwrap_err()
+            .contains("parsing"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_hook_errors_when_the_file_cannot_be_rewritten() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = settings_file("rm-ro", json!({"hooks": {"PostToolUse": [ours()]}}));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        // Root ignores file modes, so the rewrite would succeed there.
+        if fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            return;
+        }
+        assert!(remove_hook_from_path(&path).is_err());
     }
 
     #[test]

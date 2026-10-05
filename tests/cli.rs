@@ -255,3 +255,69 @@ fn verify_passes_with_a_registered_hook() {
         "{out}"
     );
 }
+
+#[test]
+fn uninstall_removes_both_scopes_keeps_config_and_is_idempotent() {
+    let dir = sandbox("uninstall");
+    let ours = r#"{"hooks":[{"type":"command","command":"/opt/bin/redacted scrub"}]}"#;
+    let other = r#"{"hooks":[{"type":"command","command":"/opt/bin/other-hook"}]}"#;
+    let global = dir.join("home/.claude/settings.json");
+    let local = dir.join("proj/.claude/settings.local.json");
+    for (path, entries) in [
+        (&global, format!("{ours},{other}")),
+        (&local, ours.to_string()),
+    ] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            format!(r#"{{"hooks":{{"PostToolUse":[{entries}]}}}}"#),
+        )
+        .unwrap();
+    }
+    let config = dir.join("home/.config/redacted/config.yaml");
+    fs::write(&config, "version: 2\n").unwrap();
+
+    let o = run(&dir, &["uninstall"], "");
+    let out = stdout(&o);
+    assert!(o.status.success(), "{out}");
+    for line in [
+        format!("Removed redacted hook from {}", global.display()),
+        // current_dir() is canonical (/private/var on macOS).
+        format!(
+            "Removed redacted hook from {}",
+            local
+                .parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap()
+                .join("settings.local.json")
+                .display()
+        ),
+        format!("Config kept at {}", config.display()),
+    ] {
+        assert!(out.contains(&line), "missing {line:?} in:\n{out}");
+    }
+    assert!(fs::read_to_string(&global).unwrap().contains("other-hook"));
+    assert!(config.exists());
+
+    let out = stdout(&run(&dir, &["uninstall"], ""));
+    assert!(out.contains("No redacted hooks found."), "{out}");
+}
+
+#[test]
+fn uninstall_local_leaves_the_global_hook() {
+    let dir = sandbox("uninstall-local");
+    let settings = r#"{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"/opt/bin/redacted scrub"}]}]}}"#;
+    let global = dir.join("home/.claude/settings.json");
+    let local = dir.join("proj/.claude/settings.local.json");
+    for path in [&global, &local] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, settings).unwrap();
+    }
+    let o = run(&dir, &["uninstall", "--local"], "");
+    assert!(o.status.success());
+    assert_eq!(fs::read_to_string(&global).unwrap(), settings);
+    assert!(!fs::read_to_string(&local)
+        .unwrap()
+        .contains("redacted scrub"));
+}
