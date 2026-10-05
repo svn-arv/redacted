@@ -49,16 +49,9 @@ brew install redacted
 redacted init
 ```
 
-### Go
-
-```bash
-go install github.com/svn-arv/redacted@latest
-redacted init
-```
-
 ### Pre-built binaries
 
-Download from [GitHub Releases](https://github.com/svn-arv/redacted/releases) for Linux, macOS, and Windows (amd64/arm64).
+Download from [GitHub Releases](https://github.com/svn-arv/redacted/releases) for Linux and macOS (amd64/arm64) and Windows (amd64).
 
 ## Setup
 
@@ -72,7 +65,7 @@ redacted init
 redacted init --local
 ```
 
-Registers `redacted scrub` as a PostToolUse hook. Safe to run multiple times.
+Finds the `.env*` files in the current directory (or reads `--env PATH`), lets you pick which values to learn, prints the config it will write, and asks before writing it. Then registers `redacted scrub` as a PostToolUse hook. Safe to run multiple times: learned entries merge by name.
 
 | Flag       | Settings file                 | Scope        |
 | ---------- | ----------------------------- | ------------ |
@@ -84,16 +77,16 @@ Registers `redacted scrub` as a PostToolUse hook. Safe to run multiple times.
 `redacted scrub` reads a Claude-Code-style JSON payload on stdin and writes to stdout, so any hook-capable tool can wire it in:
 
 ```bash
-echo '{"tool_name":"Bash","tool_response":{"stdout":"DB_PASSWORD=SUPER-SECRETPASSWORD"}}' | redacted scrub
+echo '{"tool_name":"Bash","tool_response":{"stdout":"<command output>"}}' | redacted scrub
 ```
 
-Secrets found: a JSON response with `decision: "block"` and the redacted text. Nothing found: no output (pass-through). Bash stdout and stderr are scrubbed separately; other tools (Read, Grep, WebFetch) are scrubbed on the raw response.
+Secrets found: a JSON response with `decision: "block"`, a reason, and the redacted text in `hookSpecificOutput.updatedToolOutput`, which replaces the tool result the model reads. Nothing found: no output (pass-through). Anything that fails to parse or scrub is withheld, never passed through raw. Bash stdout and stderr are scrubbed separately; other tools (Read, Grep, WebFetch) are scrubbed on the raw response.
 
 ## What it detects
 
-Three tiers: vendor patterns, credential keywords, entropy heuristic.
+Three tiers: vendor signatures, learned secrets, and an opt-in entropy heuristic.
 
-### Vendor patterns
+### Vendor signatures
 
 | Pattern         | Example                                       |
 | --------------- | --------------------------------------------- |
@@ -123,41 +116,36 @@ Three tiers: vendor patterns, credential keywords, entropy heuristic.
 | Database URLs   | `postgres://`, `mysql://`, `mongodb://`, `redis://`, `amqp://` |
 | Credentialed URLs | `scheme://user:pass@host` for any scheme (e.g. `postgis://`) |
 
-### Credential keywords
+### Learned secrets
 
-Any env var whose name contains one of these gets its value redacted:
+`redacted init` reads your `.env` and learns the values you pick. For each one it stores the name, the value's sha256, its length, and, when the value starts with a literal prefix of 3+ characters (`sk_live_`, `ghp_`), a shape regex that also catches the rotated key. Never the value. Values under 8 characters or containing spaces are not learned.
 
-`SECRET`, `TOKEN`, `PASSWORD`, `API_KEY`, `CREDENTIAL`, `PRIVATE_KEY`, `ACCESS_KEY`, `ENCRYPTION_KEY`, `SIGNING_KEY`, `LICENSE_KEY`, `CLIENT_ID`, `DB_PASS`, `DB_URL`, `DATABASE_URL`, `REDIS_URL`, `_DSN`, `_SID`, `ACCOUNT_ID`, `AUTH_KEY`, `MASTER_KEY`, `SERVICE_KEY`
+A learned value is redacted wherever it shows up as a token, after `=` or `:`, or inside quotes: `[REDACTED:db_password ...2024]`. Learned entries live in the global config only; a project file never holds hashes.
 
-Works in env files (`SECRET_KEY=value`), shell exports, and YAML.
+### Entropy heuristic (opt-in)
 
-### Entropy heuristic
-
-Keywords can't name every secret-bearing variable. So any `KEY=value` / `key: value` assignment is also redacted when the value itself looks like a credential:
+Off by default. With `heuristic.enabled: true` in `config.yaml`, any `KEY=value` / `key: value` assignment is also redacted when the value looks like a credential:
 
 - 16–128 characters,
 - lowercase + uppercase + digits, and
 - high Shannon entropy (random, not structured).
 
-Strict on purpose. UUIDs, git SHAs, versions, and timestamps use a single case or skip a character class, so they pass. The trade-off is precision over recall: a single-case secret under an unknown key slips this tier; a vendor pattern or keyword still catches it. Thresholds live under `heuristic:` in `engine.yml`.
+Strict on purpose. UUIDs, git SHAs, versions, and timestamps use a single case or skip a character class, so they pass. Thresholds live under `heuristic:` in `config.yaml`.
+
+### Upgrading from 0.7
+
+Update the binary (same `install.sh` or `brew upgrade`), then run `redacted init`. A 0.7 config keeps working with vendor signatures only; until you run `init`, the hook says so the first time it redacts something in each session.
 
 ## Configuration
 
-Two files. Detection rules in `engine.yml`, operational policy in `config.yaml`. Each loads a global copy and a per-project copy. See `engine.example.yml`, `config.example.yaml`, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Two files. Vendor patterns in `engine.yml`; policy, learned secrets and the heuristic in `config.yaml`. Each loads a global copy and a per-project copy. See `engine.example.yml`, `config.example.yaml`, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### engine.yml (detection)
 
 Global `~/.config/redacted/engine.yml`, project `.redacted.engine.yml`.
 
 ```yaml
-# Tune the heuristic scorer. Omit a field to keep its default.
-heuristic:
-  min_entropy: 4.0 # stricter than the 3.5 default, fewer false positives
-  min_length: 16
-
-# Add env-name keywords and vendor patterns.
-keywords:
-  - MONGO
+# Add vendor patterns.
 patterns:
   - name: openai_key
     regex: 'sk-proj-[A-Za-z0-9_-]{20,}'
@@ -168,21 +156,28 @@ allow_values:
   - '^svc_[A-Za-z0-9]+$'
 ```
 
-Raising heuristic thresholds works at runtime. Lowering `min_length` below 16 needs a rebuild (the candidate regex floor is compiled in).
+`keywords` and `heuristic` from a 0.7 `engine.yml` are ignored.
 
 ### config.yaml (operational)
 
 Global `~/.config/redacted/config.yaml`, project `.redacted.yaml`.
 
 ```yaml
+version: 2
+learned: # written by `redacted init`, global file only
+  - name: db_password
+    sha256: <hex>
+    len: 12
+heuristic:
+  enabled: true # opt in to the entropy tier
 whitelist: # turn off built-in patterns by name
   - jwt
-allow: # keyword-matching names that aren't secrets
+allow: # names that aren't secrets
   - TWILIO_WORKFLOW_SID
   - APP_URL
 ```
 
-`override: true` in a project file ignores the global file. Patterns and keywords go in `engine.yml`, not here.
+`override: true` in a project file ignores the global file. Patterns go in `engine.yml`, not here.
 
 To scrub Bash output only:
 
@@ -192,8 +187,9 @@ ignore_internal_tools: true
 
 ## Known limitations
 
-- A URL with a port and a mixed-case path (`https://host:8080/FooBar`) can have the `:port/path` tail redacted; `host:port` parses as a key and value. Bare URLs without a port pass fine.
-- A high-entropy identifier that mixes case and digits (some tool or request IDs) may trip the heuristic. The 4-character hint makes these easy to spot.
+- Learned secrets match as whole tokens. One embedded mid-token, such as in a URL path, passes unless a vendor pattern catches it.
+- A learned shape also matches a non-secret with the same prefix and similar length. Check the shape `init` shows before confirming.
+- With the heuristic on, a high-entropy identifier that mixes case and digits (some tool or request IDs) may be redacted. The 4-character hint makes these easy to spot.
 - Every pattern scans the full output in sequence; multi-megabyte output adds noticeable per-call latency.
 
 ## Verify
@@ -202,7 +198,7 @@ ignore_internal_tools: true
 redacted verify
 ```
 
-Health checks: binary in PATH, hook registered, config loaded, patterns compiled, test scrub passes.
+Health checks: binary in PATH, hook registered, config loaded, patterns compiled, test scrub passes, learned secrets present.
 
 ## Stats
 
@@ -210,7 +206,7 @@ Health checks: binary in PATH, hook registered, config loaded, patterns compiled
 redacted stats
 ```
 
-Total redactions, per-pattern counts, and each pattern's confidence tier: `vendor` (near-zero false positives), `keyword` (credential-named keys), `heuristic` (entropy-only, where false positives concentrate). A high heuristic share flags patterns worth reviewing. Data lives at `~/.config/redacted/stats.jsonl`: pattern names and counts only, never values.
+Total redactions and per-pattern counts. Data lives at `~/.config/redacted/stats.jsonl`: pattern names and counts only, never values.
 
 ## Uninstall
 
@@ -218,40 +214,38 @@ Total redactions, per-pattern counts, and each pattern's confidence tier: `vendo
 redacted uninstall
 ```
 
-Removes hooks and deletes the binary. `--keep-binary` removes hooks only.
+Removes the hook from the global and project settings. `--local` removes the project one only. The binary and the config stay.
 
 ## Development
 
 ```bash
 git clone https://github.com/svn-arv/redacted.git
 cd redacted
-go build -o redacted .
-go test ./...
+cargo build --release
+cargo test
 ```
 
 ### Project structure
 
 ```
-main.go                         Entry point
-cmd/
-  root.go                       CLI root command + version
-  init.go                       `redacted init` (installs the hook)
-  scrub.go                      `redacted scrub` (the hook handler)
-  stats.go                      `redacted stats` (redaction analytics)
-  uninstall.go                  `redacted uninstall` (removes the hook)
-  verify.go                     `redacted verify` (checks installation)
-internal/
-  config/config.go              Config file loading (global + project)
-  hook/hook.go                  Hook protocol (JSON in/out, fail-closed)
-  patterns/secrets.go           Secret detection patterns + Scrubber
-  patterns/engine.yml        Pattern definitions (single source of truth)
-  stats/stats.go                Redaction stats (record + aggregate)
-  testutil/fake.go              Runtime secret generators for tests
+src/
+  main.rs                       Entry point
+  cli.rs                        Commands: scrub, verify, stats, init, uninstall
+  init.rs                       `redacted init` (learns secrets, installs the hook)
+  hook.rs                       Hook protocol (JSON in/out, fail-closed)
+  scrub.rs                      Scrubber: vendor, learned and heuristic tiers
+  engine.yml                    Vendor pattern definitions (compiled in)
+  config.rs                     Config file loading (global + project)
+  stats.rs                      Redaction stats (record + aggregate)
+  fake.rs                       Runtime secret generators for tests
+corpus/clean/                   Clean inputs for precision tests
+tests/                          CLI and golden-output tests
+scripts/migration-check.sh      Fresh, v1-upgrade and v2 install checks
 ```
 
 ### Releasing
 
-Tag and push. GoReleaser builds binaries for all platforms, creates the GitHub release, and updates the Homebrew tap.
+Bump `version` in `Cargo.toml` to match the tag (it is what `--version` prints), then tag and push. GoReleaser builds binaries for all platforms, creates the GitHub release, and updates the Homebrew tap.
 
 ```bash
 git tag vX.Y.Z
