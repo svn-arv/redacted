@@ -230,10 +230,8 @@ impl Scrubber {
                 run.match_indices(['=', ':'])
                     .map(|(i, _)| run_start + i + 1),
             );
-            // Sentence punctuation after a value is still inside the run, so also try without it.
-            let trimmed = run_start + run.trim_end_matches(['.', ':', '!', '?']).len();
             let hit = starts
-                .flat_map(|start| [(start, run_end), (start, trimmed)])
+                .flat_map(|start| unwrap_candidates(text, start, run_end))
                 .filter(|&(start, end)| start < end && self.exact_lens.contains(&(end - start)))
                 .find_map(|(start, end)| {
                     let name = self.exact.get(&sha256_hex(&text[start..end]))?;
@@ -341,6 +339,20 @@ impl Scrubber {
         };
         self.allow_values.iter().any(|re| re.is_match(&candidate))
     }
+}
+
+/// Punctuation and quotes around a value stay inside its run, so try each stage of
+/// peeling them: trailing `.:!?,;)}]`, then one matching quote pair, then trailing again.
+/// Every stage is a candidate, so a quoted value ending in `)` still matches.
+fn unwrap_candidates(text: &str, start: usize, end: usize) -> [(usize, usize); 4] {
+    const TRAIL: [char; 9] = ['.', ':', '!', '?', ',', ';', ')', '}', ']'];
+    let trailed = start + text[start..end].trim_end_matches(TRAIL).len();
+    let (qs, qe) = match text.as_bytes()[start..trailed] {
+        [q @ (b'"' | b'\''), .., l] if q == l => (start + 1, trailed - 1),
+        _ => (start, trailed),
+    };
+    let again = qs + text[qs..qe].trim_end_matches(TRAIL).len();
+    [(start, end), (start, trailed), (qs, qe), (qs, again)]
 }
 
 pub fn sha256_hex(s: &str) -> String {
@@ -985,6 +997,44 @@ mod tests {
             let r = s.scrub(&input);
             assert_eq!(r.text, want);
             assert_eq!(r.count, 1);
+        }
+    }
+
+    #[test]
+    fn learned_quoted_value_is_redacted_inside_its_quotes() {
+        // Env, JSON and YAML quote the value, so the candidate after `=`/`:` carries quotes.
+        let v = "P@ssw0rd2024";
+        let s = with_learned(vec![learned("db_password", v, None)]);
+        let m = "[REDACTED:db_password ...2024]";
+        for (input, want) in [
+            (format!("PASSWORD=\"{v}\""), format!("PASSWORD=\"{m}\"")),
+            (
+                format!("\"password\":\"{v}\","),
+                format!("\"password\":\"{m}\","),
+            ),
+            (format!("db_pass: '{v}'"), format!("db_pass: '{m}'")),
+            (format!("PASSWORD={v}"), format!("PASSWORD={m}")),
+        ] {
+            let r = s.scrub(&input);
+            assert_eq!(r.text, want);
+            assert_eq!(r.count, 1);
+        }
+        // A quoted value that ends in a strip character keeps it.
+        let v = "Pa55w0rd(x)";
+        let s = with_learned(vec![learned("db_password", v, None)]);
+        let r = s.scrub(&format!("KEY=\"{v}\""));
+        assert_eq!(r.text, "KEY=\"[REDACTED:db_password]\"");
+    }
+
+    #[test]
+    fn quoted_non_secret_is_untouched() {
+        let s = with_learned(vec![learned("db_password", "P@ssw0rd2024", None)]);
+        for input in [
+            "PASSWORD=\"N0t@Secret99\"",
+            "PASSWORD=\"P@ssw0rd2024x\"",
+            "\"P@ssw0rd2024x\",",
+        ] {
+            assert_eq!(s.scrub(input).text, input);
         }
     }
 
