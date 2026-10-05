@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,11 +40,11 @@ pub fn record(path: &Path, tool: &str, by_pattern: &BTreeMap<String, usize>) {
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(path);
+    let mut opts = OpenOptions::new();
+    opts.append(true).create(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let file = opts.open(path);
     if let Ok(mut f) = file {
         let _ = f.write_all(line.as_bytes());
     }
