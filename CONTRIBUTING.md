@@ -7,20 +7,21 @@ Thanks for helping improve `redacted`.
 ```bash
 git clone https://github.com/svn-arv/redacted.git
 cd redacted
-go build -o redacted .
-go test ./...
+cargo build
+cargo test
 ```
 
-`go vet ./...` and `gofmt -l .` should come back clean.
+`cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
+`sh scripts/migration-check.sh` should come back clean.
 
 ## Detection rules
 
-Detection patterns and the heuristic live in `internal/patterns/engine.yml`. Add
-or tune rules there, not in Go. A new pattern needs:
+Vendor patterns live in `src/engine.yml`. Add or tune rules there, not in Rust.
+A new pattern needs:
 
-- a synthetic generator in `internal/testutil/fake.go` (never commit a real key),
-- a recall case in `internal/patterns/corpus_test.go`, and
-- no regression in `TestCorpus_Precision` (the clean corpus stays clean).
+- a synthetic generator in `src/fake.rs` (never commit a real key),
+- a row in `builtin_rows` in `src/scrub.rs` (recall), and
+- no regression in the clean-corpus precision tests (`corpus/clean/` stays clean).
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the engine fits together.
 
@@ -28,5 +29,5 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the engine fits togethe
 
 - Branch off `main` (`feat/...`, `fix/...`, `chore/...`).
 - Use [Conventional Commits](https://www.conventionalcommits.org/).
-- CI (build, vet, test) must pass.
+- CI (fmt, clippy, test, migration check) must pass.
 - A maintainer reviews and merges; external PRs need a maintainer approval.

@@ -1,5 +1,5 @@
 # engine.yml — single source of truth for secret detection.
-# Consumed by Go (//go:embed at compile time) and TypeScript (read at runtime).
+# Compiled into the binary (include_str! in src/scrub.rs).
 #
 # Order matters: specific patterns run first, catch-alls last.
 # If a specific pattern redacts a value, the catch-all won't re-match it.

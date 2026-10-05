@@ -7,140 +7,153 @@ and function name so they stay accurate as line numbers move.
 ## Data flow
 
 ```
-tool output -> Claude Code PostToolUse hook -> `redacted scrub` (stdin JSON)
-            -> hook.ProcessSafely -> hook.Process -> patterns.Scrub
-            -> block JSON (redacted) | nothing (pass-through)
+tool output -> Claude Code PostToolUse hook -> `redacted scrub` (stdin)
+            -> hook::process_safely -> hook::process -> Scrubber::scrub
+            -> block JSON with updatedToolOutput (redacted) | nothing (pass-through)
 ```
 
-1. `main.go` calls `cmd.Execute` (`cmd/root.go`).
-2. `cmd/scrub.go` reads stdin, loads config, and decides test mode (raw text)
-   vs hook mode (JSON payload) via `looksLikeHookPayload`.
-3. `hook.ProcessSafely` (`internal/hook/hook.go`) runs `hook.Process`, which
-   parses the payload and calls `patterns.Scrub` on the tool output.
-4. If something was redacted it writes a `decision: "block"` response; if not it
-   writes nothing and the original output passes through.
+1. `src/main.rs` calls `cli::run`, which dispatches the subcommand.
+2. `cli::scrub` reads stdin, loads both config files, and builds a `Scrubber`.
+   `looks_like_hook_payload` picks hook mode (a JSON object) or raw-text mode
+   (anything else, scrubbed as text with a count on stderr; for manual testing).
+3. `hook::process_safely` (`src/hook.rs`) runs `hook::process`, which parses the
+   payload and calls `Scrubber::scrub` on the tool output.
+4. A hit writes the block envelope; no hit writes nothing and the original
+   output passes through.
 
-## Two config layers
-
-The split is by concern, so it stays clear what belongs where.
+## Config
 
 | File | Purpose | Fields | Loaded by |
 | --- | --- | --- | --- |
-| `engine.yml` | Detection rules (what is a secret) | `heuristic`, `keywords`, `patterns`, `value_safe_char` | embedded default + `config.LoadEngine` |
-| `config.yaml` / `.redacted.yaml` | App / operational policy | `whitelist`, `allow`, `ignore_internal_tools`, `override` | `config.Load` |
+| `engine.yml` / `.redacted.engine.yml` | Extra vendor patterns and allow rows | `patterns`, `allow_values`, `override` | built-in `src/engine.yml` + `config::load_engine` |
+| `config.yaml` / `.redacted.yaml` | Policy, learned secrets, heuristic | `version`, `learned`, `heuristic`, `whitelist`, `allow`, `ignore_internal_tools`, `override` | `config::load` |
 
-- The built-in `engine.yml` is embedded into the binary with `//go:embed`
-  (`internal/patterns/secrets.go`) and parsed once into `config` at package init.
-- A user `engine.yml` (global `~/.config/redacted/engine.yml`, project
-  `.redacted.engine.yml`) overrides the heuristic and adds keywords/patterns at
-  runtime, no rebuild. See `engine.example.yml`.
-- `config.yaml` / `.redacted.yaml` carry operational policy. See
-  `config.example.yaml`.
-- `cmd/scrub.go:buildScrubberFromConfig` composes both into a `Scrubber`.
+- The built-in `src/engine.yml` is compiled in with `include_str!` and parsed by
+  `Scrubber::new`. A user `engine.yml` adds patterns and allow rows at runtime.
+  0.7 keys (`keywords`, `heuristic`, `value_safe_char`) still parse and are ignored.
+- A project file merges list fields over the global one; `override: true` in a
+  project file drops the global file.
+- Config v2 is `version: 2` plus `learned:` and `heuristic:`. Both are read from
+  the global `~/.config/redacted/config.yaml` only, even under a project
+  `override`: a committed project file must not carry hashes. `verify` warns when
+  a project file has `learned` entries.
+- A global config without `version` is a 0.7 install: vendor tier only, and the
+  hook prepends a one-line "run `redacted init`" notice to the reason, once per
+  `session_id` (stamped in `notified.txt` beside the stats file).
 
-## The detection engine
+## Detection tiers
 
-`patterns.builtins` compiles the embedded patterns, then appends three
-catch-alls. `Scrubber.Scrub` runs every pattern in order; once a pattern redacts
-a span, later patterns can't re-match it. Three tiers, most specific first:
+`Scrubber::scrub` runs the tiers in order on the same text. Each tier sees the
+previous tier's markers, so a redacted span is never matched again.
 
-1. **Vendor signatures** (in `engine.yml`): one regex per provider (`AKIA...`,
-   `ghp_...`, `sk_live_...`, JWT `eyJ...`, `credentialed_url`, `database_url`).
-   Near-zero false positives.
-2. **Keyword catch-alls** (`env_secret`, `yaml_secret`, built by
-   `envSecretRegex` / `yamlSecretRegex`): redact `KEY=value` when the key
-   contains a keyword (`SECRET`, `TOKEN`, ...).
-3. **Heuristic** (`secret_value`, built by `heuristicAssignmentRegex`): redact
-   `KEY=value` when the value scores as random, whatever the key is named.
+1. **Vendor signatures**: one regex per provider in `src/engine.yml` (`AKIA...`,
+   `ghp_...`, `sk_live_...`, JWTs, `database_url`, `credentialed_url`) plus user
+   patterns. Literal `prefilters` skip a regex when its prefix is absent. Go RE2
+   syntax is translated by `go_regex` so the patterns keep their 0.7 meaning.
+2. **Learned secrets** (`scrub_learned`), from `config.yaml` `learned:`.
+3. **Entropy heuristic** (`secret_value`), only with `heuristic.enabled: true`.
+
+## Learned matching
+
+`init` (`src/init.rs`) parses a `.env`, and `learn` turns each picked value into
+`{name, sha256, len, shape}`; the value itself is never written. Values under 8
+characters or with whitespace are refused. `derive_shape` emits a shape only
+when the value has a literal prefix of 3+ characters ending in `_` or `-` within
+its first 12 characters: prefix + the rest's charset + a length band of ±4.
+
+`scrub_learned` matches in this order:
+
+1. Each shape regex, so a rotated key with the same prefix is caught.
+2. Exact hashes over candidate runs: runs of safe token characters, then (on the
+   rewritten text) whitespace-delimited runs, which catch values holding `@`,
+   `(` or quotes.
+3. Per run, `exact_spans` tries the run and every suffix after `=` or `:`, and
+   `unwrap_candidates` peels each one: trailing `.:!?,;)}]`, then one matching
+   pair of `"` or `'`, then trailing punctuation again. Every stage is a
+   candidate, so `"password":"value",` and `KEY="value(x)"` both match.
+4. A candidate is hashed only when its byte length equals some learned `len`.
+
+A hit becomes `[REDACTED:name ...hint]`; the 4-character hint is left out for
+values under 12 characters, where it would give away a third or more.
 
 ## The heuristic
 
-`Scrubber.secretLike` decides if a value looks like a random credential. All of
-these must hold (thresholds from `engine.yml`, overridable at runtime):
+`heuristic_regex` finds `KEY=value` / `key: value` candidates; `secret_like`
+keeps a value only when all hold (thresholds from `config.yaml` `heuristic:`,
+zero means the default):
 
-- length within `min_length`..`max_length`,
-- at least `min_char_classes` of {lowercase, uppercase, digit}. This is the main
-  discriminator: UUIDs and git SHAs are high-entropy but single-case, so they
-  fail here and pass through.
-- Shannon entropy (`shannonEntropy`) at least `min_entropy` bits per character.
+- length within `min_length`..`max_length` (16..128),
+- at least `min_char_classes` of {lowercase, uppercase, digit} (3). UUIDs and git
+  SHAs are single-case, so they pass through.
+- Shannon entropy at least `min_entropy` bits per character (3.5).
 
-Plus a guard: a value containing `://` is a URL, not a credential (real
-credentialed URLs are caught earlier by the `credentialed_url` vendor pattern).
-
-Thresholds are per-Scrubber (`Scrubber.heuristic`, set by `WithHeuristic`), so a
-user `engine.yml` can raise them. Lowering `min_length` below the built-in floor
-needs a rebuild, because the candidate regex floor is compiled in.
-
-## False-positive avoidance
-
-`Scrubber.skipMatch` drops a catch-all match when the value is allow-listed
-(`isAllowed`), is followed by `(` or `[` (a method call), is an identifier path
-(`looksLikeIdentifier`, e.g. `other_token`), or a code reference
-(`looksLikeCodeReference`, e.g. `ENV.fetch`). Two regex-level guards also help:
-`value_safe_char` keeps a match inside one token, and `excludeSlash` blocks a
-value that starts with `/` (a bare URL scheme).
-
-## Redaction
-
-`redact` produces `[REDACTED:type ...hint]` for vendor matches and
-`KEY= [REDACTED ...hint]` for catch-alls, preserving the key and the `=`/`:`
-separator. The last 4 characters are kept as a hint (`tail`) so you can tell
-which secret was hit without exposing it.
+`skip_match` drops a keyed match that is allow-listed, followed by `(` or `[`,
+an identifier or code reference, a URL, or under an identifier key such as `id`.
 
 ## Hook protocol
 
-`hook.Process` parses the payload and branches on `tool_name`. `processBash`
-scrubs stdout and stderr separately; `processGeneric` handles Read/Grep/WebFetch
-by walking the JSON for string leaves (`walkStrings`). `writeBlock` emits the
-block response.
+`hook::process` reads `tool_name` and `tool_response`. `process_bash` scrubs
+stdout and stderr separately; `process_generic` handles every other tool by
+scrubbing all string leaves and object keys (`walk_strings`, `scrub_json`).
 
-`hook.ProcessSafely` is the safety boundary: it buffers Process's output and, on
-any error or panic (`recoverToError`), withholds the output (`writeWithheld`)
-instead of letting raw, unscrubbed bytes through. PostToolUse is fail-open by
-nature, so the scrubber fails closed.
+A hit writes:
+
+```json
+{"decision":"block","reason":"[redacted] N secret(s) scrubbed from ... output.\n\n<redacted text>",
+ "hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":"<redacted output>"}}
+```
+
+`updatedToolOutput` replaces the tool result the model reads; for structured
+responses it is the scrubbed JSON, while `reason` may summarize.
+
+`hook::process_safely` is the safety boundary: any error or panic returns
+`withheld()`, a block envelope that carries no output at all. A user regex that
+fails to compile also withholds. PostToolUse is fail-open by nature, so the
+scrubber fails closed. `ignore_internal_tools` skips only a well-formed non-Bash
+`tool_name`; a missing or bad one still goes through and fails closed.
 
 ## Stats
 
-`Scrub` returns `Result.ByPattern` (per-pattern counts). The hook calls `record`
-through the `Recorder` function variable, which `cmd/scrub.go` wires to
-`stats.Record`. `Record` appends a JSONL line to `~/.config/redacted/stats.jsonl`.
-`redacted stats` calls `stats.Aggregate` and `stats.Tier` to show a per-pattern
-breakdown and a confidence tier (vendor / keyword / heuristic), where the
-heuristic share is the false-positive-risk proxy. Only pattern names and counts
-are stored, never values.
+`hook::process` passes per-pattern counts to `cli::record`, which calls
+`stats::record` to append `{t, tool, by}` as one JSONL line to
+`~/.config/redacted/stats.jsonl` (`REDACTED_STATS_FILE` overrides). Errors are
+swallowed so stats never break the hook. `redacted stats` prints totals and
+per-pattern counts (`stats::aggregate`, `stats::render`). Only pattern names and
+counts are stored, never values. Raw-text mode records nothing.
 
 ## Testing
 
-- `internal/testutil/fake.go` generates synthetic secrets at runtime, so no
-  real-looking secret is ever committed (which would trip push protection).
-- `TestScrub_BuiltinPatterns` (`secrets_test.go`) is a table test, one row per
-  pattern, asserting redaction, label, and hint.
-- The golden corpus (`corpus_test.go` + `corpus/clean/*.txt`) is the accuracy
-  benchmark: `TestCorpus_Precision` fails on any redaction of clean input,
-  `TestCorpus_Recall` fails on any missed synthetic secret. `knownResidualFPs`
-  is a tripwire that flags when a known false positive gets fixed.
-- `FuzzScrub` (`fuzz_test.go`) asserts Scrub never panics and keeps its
-  accounting consistent on arbitrary input.
-- `BenchmarkScrub` (`bench_test.go`) measures per-call latency.
-- `hook_safe_test.go` and `cmd/integration_test.go` cover fail-closed behavior
-  and the hook-to-stats wiring.
+- `src/fake.rs` generates synthetic secrets at runtime, so no real-looking
+  secret is ever committed (which would trip push protection).
+- Unit tests sit beside the code: one row per vendor pattern, learned matching,
+  shape derivation, config merge, hook envelope and fail-closed cases.
+- The clean corpus (`corpus/clean/*.txt`) is the accuracy benchmark: precision
+  fails on any redaction of clean input, recall fails on any missed synthetic
+  secret, both with and without learned entries loaded.
+- `tests/cli.rs` runs the binary end to end (raw mode, hook mode, stats,
+  verify, init without a terminal, uninstall, the 0.7 notice).
+- `tests/golden.rs` pins raw-mode output to goldens recorded from the Go 0.7
+  binary on seeded fixture templates in `tests/fixtures/`.
+- `scripts/migration-check.sh` checks a fresh install, a 0.7 upgrade and a v2
+  config in a throwaway HOME.
 
 ## File map
 
 ```
-main.go                          entry point
-cmd/
-  root.go                        CLI root + version
-  init.go / uninstall.go         install / remove the hook
-  scrub.go                       the hook handler; composes the Scrubber
-  stats.go                       `redacted stats`
-  verify.go                      `redacted verify`
-internal/
-  config/config.go               app config (Config) + engine config (EngineConfig)
-  hook/hook.go                    hook protocol, fail-closed wrapper, stats Recorder
-  patterns/secrets.go            Scrubber, tiers, heuristic, options
-  patterns/engine.yml            built-in detection rules (embedded default)
-  patterns/corpus/               golden corpus (clean inputs)
-  stats/stats.go                 redaction stats (record + aggregate + tiers)
-  testutil/fake.go               synthetic secret generators for tests
+src/
+  main.rs                        entry point
+  cli.rs                         commands: scrub, verify, stats, init, uninstall
+  init.rs                        `init` (learn + install hook), `uninstall`
+  hook.rs                        hook protocol, fail-closed wrapper
+  scrub.rs                       Scrubber: vendor, learned and heuristic tiers
+  engine.yml                     built-in vendor patterns (compiled in)
+  config.rs                      config.yaml and engine.yml loading
+  stats.rs                       redaction stats (record + aggregate)
+  fake.rs                        synthetic secret generators for tests
+corpus/clean/                    clean inputs for precision tests
+tests/
+  cli.rs                         end-to-end binary tests
+  golden.rs                      raw-mode golden test
+  fixtures/                      golden fixture templates and outputs
+scripts/migration-check.sh       install and upgrade scenarios
 ```
