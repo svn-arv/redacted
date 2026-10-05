@@ -174,10 +174,8 @@ fn deeply_nested_payload_is_withheld_not_treated_as_text() {
 fn version_matches_cobra_format() {
     let dir = sandbox("version");
     let o = run(&dir, &["--version"], "");
-    assert_eq!(
-        stdout(&o),
-        format!("redacted version {}\n", env!("CARGO_PKG_VERSION"))
-    );
+    // The release tag must match Cargo.toml; v1.0.0 is the Rust cutover.
+    assert_eq!(stdout(&o), "redacted version 1.0.0\n");
 }
 
 #[test]
