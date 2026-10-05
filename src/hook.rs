@@ -154,11 +154,17 @@ fn extract_text(raw: &Value) -> Result<(String, bool), String> {
     }
 }
 
-/// Every non-empty string leaf, object keys in sorted order (serde_json's map is sorted).
+/// Every non-empty string leaf and object key, keys in sorted order (serde_json's
+/// map is sorted). Keys count: a secret can arrive as one (e.g. Grep counts).
 fn walk_strings(v: &Value, dst: &mut Vec<String>) {
     match v {
         Value::String(s) if !s.is_empty() => dst.push(s.clone()),
-        Value::Object(m) => m.values().for_each(|x| walk_strings(x, dst)),
+        Value::Object(m) => m.iter().for_each(|(k, x)| {
+            if !k.is_empty() {
+                dst.push(k.clone());
+            }
+            walk_strings(x, dst)
+        }),
         Value::Array(a) => a.iter().for_each(|x| walk_strings(x, dst)),
         _ => {}
     }
@@ -169,7 +175,7 @@ fn scrub_json(v: &Value, scrub: Scrub) -> Value {
         Value::String(s) => Value::String(scrub(s).text),
         Value::Object(m) => Value::Object(
             m.iter()
-                .map(|(k, x)| (k.clone(), scrub_json(x, scrub)))
+                .map(|(k, x)| (scrub(k).text, scrub_json(x, scrub)))
                 .collect(),
         ),
         Value::Array(a) => Value::Array(a.iter().map(|x| scrub_json(x, scrub)).collect()),
@@ -332,6 +338,20 @@ mod tests {
         );
         let want = envelope(&reason, &updated).replace('\u{2028}', "\\u2028");
         assert_eq!(out, want);
+    }
+
+    #[test]
+    fn object_keys_are_scrubbed_in_the_replacement() {
+        let key = fake::aws_access_key();
+        let payload = format!(
+            r#"{{"tool_name":"Grep","tool_response":{{"counts":{{"{key}":1}},"mode":"count"}}}}"#
+        );
+        let (out, _) = run(&payload);
+        let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
+        let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- {marker}");
+        let updated = format!(r#"{{"counts":{{{}:1}},"mode":"count"}}"#, json(&marker));
+        assert_eq!(out, envelope(&reason, &updated));
+        assert!(!out.contains(&key));
     }
 
     #[test]
