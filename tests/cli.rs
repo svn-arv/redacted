@@ -222,6 +222,20 @@ fn verify_reports_learned_config_and_warns_on_project_hashes() {
 }
 
 #[test]
+fn init_refuses_without_a_terminal_and_writes_nothing() {
+    let dir = sandbox("init-notty");
+    fs::write(dir.join("proj/.env"), "A=1\n").unwrap();
+    let o = run(&dir, &["init", "--env", ".env", "--local"], "");
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&o.stderr),
+        "init needs an interactive terminal\n"
+    );
+    assert!(!dir.join("home/.config/redacted/config.yaml").exists());
+    assert!(!dir.join("proj/.claude").exists());
+}
+
+#[test]
 fn verify_passes_with_a_registered_hook() {
     let dir = sandbox("verify-ok");
     let bin = env!("CARGO_BIN_EXE_redacted");

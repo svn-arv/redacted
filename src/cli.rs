@@ -1,9 +1,9 @@
-//! Commands: scrub, verify, stats (ported from cmd/).
+//! Commands: scrub, verify, stats, init (ported from cmd/).
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::config::{self, Config, EngineConfig};
 use crate::scrub::Scrubber;
-use crate::{hook, stats};
+use crate::{hook, init, stats};
 
 #[derive(Parser)]
 #[command(
@@ -35,6 +35,15 @@ enum Cmd {
     Verify,
     /// Show how often each pattern has redacted secrets
     Stats,
+    /// Learn secrets from a .env file and install the hook
+    Init {
+        /// Env file to learn from (skips the .env* search in this directory)
+        #[arg(long)]
+        env: Option<PathBuf>,
+        /// Install to .claude/settings.local.json (this project only)
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 /// Runs the CLI and returns the process exit code.
@@ -48,6 +57,7 @@ pub fn run() -> i32 {
         Some(Cmd::Scrub) => scrub(),
         Some(Cmd::Verify) => verify(),
         Some(Cmd::Stats) => show_stats(),
+        Some(Cmd::Init { env, local }) => init::run(env, local),
         None => {
             let _ = Cli::command().print_help();
             0

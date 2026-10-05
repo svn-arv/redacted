@@ -3,6 +3,7 @@ mod config;
 #[cfg(test)]
 mod fake;
 mod hook;
+mod init;
 mod scrub;
 mod stats;
 
