@@ -154,6 +154,7 @@ enum Status {
     Pass,
     Fail,
     Skip,
+    Warn,
 }
 
 struct Check {
@@ -179,6 +180,7 @@ fn verify() -> i32 {
     checks.push(check_config(&cwd));
     checks.push(check_patterns(&cwd));
     checks.push(check_scrub());
+    checks.extend(check_learned(&cwd));
 
     let (mut passed, mut failed) = (0, 0);
     for c in &checks {
@@ -192,6 +194,7 @@ fn verify() -> i32 {
                 "FAIL"
             }
             Status::Skip => "SKIP",
+            Status::Warn => "WARN",
         };
         if c.detail.is_empty() {
             println!("  [{tag}] {}", c.name);
@@ -377,6 +380,29 @@ fn check_patterns(cwd: &str) -> Check {
             format!("failed to compile patterns: {e}"),
         ),
     }
+}
+
+fn check_learned(cwd: &str) -> Vec<Check> {
+    let cfg = config::load(&home(), cwd);
+    let heuristic = if cfg.heuristic.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    let detail = format!(
+        "config version {}, {} learned, heuristic {heuristic}",
+        cfg.version.max(1),
+        cfg.learned.len()
+    );
+    let mut out = vec![check("learned secrets", Status::Pass, detail)];
+    let n = config::project_learned_count(cwd);
+    if n > 0 {
+        let entries = if n == 1 { "entry" } else { "entries" };
+        out.push(check("project learned", Status::Warn, format!(
+            ".redacted.yaml has {n} learned {entries}, ignored: learned secrets belong in ~/.config/redacted/config.yaml"
+        )));
+    }
+    out
 }
 
 fn check_scrub() -> Check {

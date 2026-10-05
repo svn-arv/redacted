@@ -192,7 +192,30 @@ fn verify_reports_checks_and_fails_without_a_hook() {
         "[PASS] config files - none found (using built-in defaults)",
         "[PASS] patterns load - all patterns compiled",
         "[PASS] test scrub - caught 1 secret(s) in test input",
-        "4 passed, 3 failed",
+        "[PASS] learned secrets - config version 1, 0 learned, heuristic disabled",
+        "5 passed, 3 failed",
+    ] {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
+}
+
+#[test]
+fn verify_reports_learned_config_and_warns_on_project_hashes() {
+    let dir = sandbox("verify-learned");
+    fs::write(
+        dir.join("home/.config/redacted/config.yaml"),
+        "version: 2\nlearned: [{name: a, sha256: ab, len: 9}, {name: b, sha256: cd, len: 9}]\nheuristic: {enabled: true}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("proj/.redacted.yaml"),
+        "learned: [{name: c, sha256: ef, len: 9}]\n",
+    )
+    .unwrap();
+    let out = stdout(&run(&dir, &["verify"], ""));
+    for line in [
+        "[PASS] learned secrets - config version 2, 2 learned, heuristic enabled",
+        "[WARN] project learned - .redacted.yaml has 1 learned entry, ignored: learned secrets belong in ~/.config/redacted/config.yaml",
     ] {
         assert!(out.contains(line), "missing {line:?} in:\n{out}");
     }
