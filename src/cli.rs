@@ -117,12 +117,39 @@ fn scrub() -> i32 {
     if cfg.ignore_internal_tools && named_non_bash {
         return 0;
     }
-    let out = match scrubber {
+    let mut out = match scrubber {
         Ok(s) => hook::process_safely(&data, &|t| s.scrub(t), &mut record),
         Err(_) => hook::withheld(),
     };
+    // A global config without `version` is a v0.7.x install that has no learned secrets.
+    let v1 = cfg.version == 0
+        && Path::new(&home())
+            .join(".config/redacted/config.yaml")
+            .exists();
+    if v1 && !out.is_empty() && first_notice(&field("session_id")) {
+        out = hook::prepend_reason(&out, V1_NOTICE);
+    }
     let _ = io::stdout().write_all(&out);
     0
+}
+
+const V1_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
+
+/// Stamps `session` in a file next to the stats file; true if it was not there yet.
+/// A missing or unreadable file means notify.
+fn first_notice(session: &str) -> bool {
+    let Some(path) = stats::file_path().map(|p| p.with_file_name("notified.txt")) else {
+        return true;
+    };
+    let seen = fs::read_to_string(&path).unwrap_or_default();
+    if seen.lines().any(|l| l == session) {
+        return false;
+    }
+    let file = fs::OpenOptions::new().append(true).create(true).open(&path);
+    if let Ok(mut f) = file {
+        let _ = writeln!(f, "{session}");
+    }
+    true
 }
 
 fn record(tool: &str, by_pattern: &BTreeMap<String, usize>) {

@@ -321,3 +321,68 @@ fn uninstall_local_leaves_the_global_hook() {
         .unwrap()
         .contains("redacted scrub"));
 }
+
+const V1_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
+
+fn hook_output(dir: &Path, session: &str, stdout_text: &str) -> serde_json::Value {
+    let payload = serde_json::json!({
+        "session_id": session,
+        "tool_name": "Bash",
+        "tool_response": {"stdout": stdout_text, "stderr": ""},
+    });
+    let o = run(dir, &["scrub"], &payload.to_string());
+    serde_json::from_slice(&o.stdout).unwrap_or(serde_json::Value::Null)
+}
+
+fn reason(v: &serde_json::Value) -> &str {
+    v["reason"].as_str().unwrap_or("")
+}
+
+#[test]
+fn v1_config_notice_rides_the_reason_once_per_session() {
+    let dir = sandbox("v1-notice");
+    fs::write(
+        dir.join("home/.config/redacted/config.yaml"),
+        "whitelist: [jwt]\nallow: [FOO]\n",
+    )
+    .unwrap();
+    let hit = format!("k {}", aws_key());
+
+    // A clean call must not use up the session's one notice.
+    assert!(hook_output(&dir, "s1", "clean").is_null());
+    let first = hook_output(&dir, "s1", &hit);
+    assert!(
+        reason(&first).starts_with(&format!("{V1_NOTICE}\n[redacted] 1 secret(s)")),
+        "{first}"
+    );
+    let updated = first["hookSpecificOutput"]["updatedToolOutput"]
+        .as_str()
+        .unwrap();
+    assert!(!updated.contains("config is v1"), "{updated}");
+
+    let second = hook_output(&dir, "s1", &hit);
+    assert!(
+        reason(&second).starts_with("[redacted] 1 secret(s)"),
+        "{second}"
+    );
+    assert!(reason(&hook_output(&dir, "s2", &hit)).starts_with(V1_NOTICE));
+}
+
+#[test]
+fn v2_config_or_no_config_never_carries_the_notice() {
+    let dir = sandbox("v2-notice");
+    let hit = format!("k {}", aws_key());
+    let none = hook_output(&dir, "s1", &hit);
+    assert!(
+        reason(&none).starts_with("[redacted] 1 secret(s)"),
+        "{none}"
+    );
+
+    fs::write(
+        dir.join("home/.config/redacted/config.yaml"),
+        "version: 2\n",
+    )
+    .unwrap();
+    let v2 = hook_output(&dir, "s2", &hit);
+    assert!(reason(&v2).starts_with("[redacted] 1 secret(s)"), "{v2}");
+}

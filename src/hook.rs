@@ -69,6 +69,19 @@ pub fn withheld() -> Vec<u8> {
     .unwrap_or_default()
 }
 
+/// Puts `line` above an envelope's reason; `updatedToolOutput` is left alone
+/// because it stands in for the tool result the model reads.
+pub fn prepend_reason(out: &[u8], line: &str) -> Vec<u8> {
+    let Ok(mut v) = serde_json::from_slice::<Value>(out) else {
+        return out.to_vec();
+    };
+    let Some(reason) = v["reason"].as_str() else {
+        return out.to_vec();
+    };
+    v["reason"] = Value::String(format!("{line}\n{reason}"));
+    encode(&v).unwrap_or_else(|_| out.to_vec())
+}
+
 type Processed = (Vec<u8>, BTreeMap<String, usize>);
 
 // Go decodes into typed structs, so a wrong type is an error, null is "".
