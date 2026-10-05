@@ -523,6 +523,8 @@ mod tests {
 
     #[test]
     fn only_values_with_two_character_classes_are_preselected() {
+        // Listed in the picker, just not ticked by default.
+        assert!(learn("NODE_ENV", "development").is_ok());
         let hex = "9f86d081884c7d659a2feaa0c55ad015";
         for (v, want) in [
             ("development", false),
