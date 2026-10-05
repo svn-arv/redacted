@@ -259,21 +259,13 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// `redacted` on PATH, else this executable, made absolute (Go's LookPath order).
+/// This executable, never a `redacted` found on PATH: a writable PATH directory
+/// could otherwise register its own binary as the hook.
 fn bin_path() -> Result<String, String> {
-    let on_path = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("redacted"))
-            .find(|p| p.is_file())
-    });
-    let bin = match on_path {
-        Some(p) => p,
-        None => std::env::current_exe()
-            .map_err(|e| format!("cannot determine redacted binary path: {e}"))?,
-    };
-    std::path::absolute(&bin)
+    std::env::current_exe()
+        .and_then(|p| p.canonicalize())
         .map(|p| p.display().to_string())
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("cannot determine redacted binary path: {e}"))
 }
 
 /// Replaces any redacted entry in PostToolUse with one for `bin`; other entries
@@ -490,6 +482,21 @@ mod tests {
             0o600
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "a: 2\n");
+    }
+
+    #[test]
+    fn bin_path_ignores_a_redacted_file_on_path() {
+        // A writable PATH directory must not get its own binary registered as the hook.
+        let dir = tmp("path");
+        fs::write(dir.join("redacted"), "#!/bin/sh\n").unwrap();
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![dir.clone()];
+        paths.extend(std::env::split_paths(&old));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        let got = bin_path();
+        std::env::set_var("PATH", old);
+        let want = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(got.unwrap(), want.display().to_string());
     }
 
     // Hook install, ported from cmd/init_test.go.
