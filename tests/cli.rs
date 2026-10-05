@@ -118,6 +118,23 @@ fn ignore_internal_tools_from_the_payload_cwd_skips_non_bash() {
 }
 
 #[test]
+fn ignore_internal_tools_never_skips_a_missing_or_bad_tool_name() {
+    let dir = sandbox("ignore-bad");
+    fs::write(
+        dir.join("home/.config/redacted/config.yaml"),
+        "ignore_internal_tools: true\n",
+    )
+    .unwrap();
+    let bad = format!(r#"{{"tool_name":5,"tool_response":"k {}"}}"#, aws_key());
+    assert!(stdout(&run(&dir, &["scrub"], &bad)).contains("tool output withheld"));
+
+    let missing = format!(r#"{{"tool_response":"k {}"}}"#, aws_key());
+    let out = stdout(&run(&dir, &["scrub"], &missing));
+    assert!(out.contains("[REDACTED:aws_access_key"), "{out}");
+    assert!(!out.contains(&aws_key()));
+}
+
+#[test]
 fn bad_user_regex_fails_closed() {
     let dir = sandbox("badregex");
     fs::write(

@@ -95,7 +95,9 @@ fn scrub() -> i32 {
         return 0;
     }
 
-    if cfg.ignore_internal_tools && field("tool_name") != "Bash" {
+    // Only a well-formed non-Bash name skips; anything else goes on to fail closed.
+    let named_non_bash = matches!(header.get("tool_name"), Some(Value::String(t)) if t != "Bash");
+    if cfg.ignore_internal_tools && named_non_bash {
         return 0;
     }
     let out = match scrubber {
