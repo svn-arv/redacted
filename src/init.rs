@@ -53,7 +53,7 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
         let text =
             fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let pairs = parse_dotenv(&text);
-        let entries: Vec<Learned> = pairs.iter().map(|(k, v)| learn(k, v)).collect();
+        let entries: Vec<_> = pairs.iter().map(|(k, v)| learn(k, v)).collect();
         let rows: Vec<String> = pairs
             .iter()
             .zip(&entries)
@@ -64,7 +64,11 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
                 .with_all_selected_by_default()
                 .raw_prompt()
                 .map_err(|e| e.to_string())?;
-            let chosen: Vec<Learned> = picked.iter().map(|o| entries[o.index].clone()).collect();
+            // Ticked rows that cannot be learned are skipped, not written.
+            let chosen: Vec<Learned> = picked
+                .iter()
+                .filter_map(|o| entries[o.index].clone().ok())
+                .collect();
             let config_path = Path::new(&home).join(".config/redacted/config.yaml");
             let existing = match fs::read_to_string(&config_path) {
                 Ok(s) => s,
@@ -199,16 +203,24 @@ fn derive_shape(sample: &str) -> Option<String> {
     ))
 }
 
-pub fn learn(key: &str, value: &str) -> Learned {
-    Learned {
+/// Err is the reason the value cannot be learned, shown in the picker.
+pub fn learn(key: &str, value: &str) -> Result<Learned, &'static str> {
+    if value.contains(char::is_whitespace) {
+        return Err("cannot match (contains spaces)");
+    }
+    Ok(Learned {
         name: key.to_lowercase(),
         sha256: sha256_hex(value),
         len: value.len(),
         shape: derive_shape(value),
-    }
+    })
 }
 
-fn row(key: &str, value: &str, l: &Learned) -> String {
+fn row(key: &str, value: &str, l: &Result<Learned, &str>) -> String {
+    let l = match l {
+        Ok(l) => l,
+        Err(reason) => return format!("{key}  {reason}"),
+    };
     let hint = match learned_hint(value) {
         "" => "(short)".to_string(),
         h => format!("...{h}"),
@@ -410,11 +422,29 @@ mod tests {
     #[test]
     fn learn_hashes_the_value_and_lowercases_the_name() {
         let value = format!("sk_live_{}", "Ab1".repeat(8));
-        let l = learn("STRIPE_KEY", &value);
+        let l = learn("STRIPE_KEY", &value).unwrap();
         assert_eq!(l.name, "stripe_key");
         assert_eq!(l.sha256, crate::scrub::sha256_hex(&value));
         assert_eq!(l.len, value.len());
         assert_eq!(l.shape, derive_shape(&value));
+    }
+
+    #[test]
+    fn learn_rejects_a_value_with_spaces() {
+        // Candidates never span whitespace, so such a value could never be redacted.
+        assert_eq!(
+            learn("GREETING", "hello there world").unwrap_err(),
+            "cannot match (contains spaces)"
+        );
+        let r = row(
+            "GREETING",
+            "hello there world",
+            &learn("GREETING", "hello there world"),
+        );
+        assert!(
+            r.contains("cannot match (contains spaces)") && !r.contains("hello"),
+            "{r}"
+        );
     }
 
     #[test]

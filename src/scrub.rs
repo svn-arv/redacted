@@ -200,26 +200,48 @@ impl Scrubber {
         if self.exact.is_empty() {
             return;
         }
+        let runs: Vec<_> = self
+            .safe_run
+            .find_iter(&result.text)
+            .map(|m| (m.start(), m.end()))
+            .collect();
+        let spans = self.exact_spans(&result.text, runs);
+        replace_spans(result, spans);
+        // A value holding `@`, `(` or quotes spans several safe runs; whitespace-delimited
+        // runs catch it, on the rewritten text so a marker is never matched again.
+        let text = &result.text;
+        let runs: Vec<_> = text
+            .split_ascii_whitespace()
+            .map(|w| {
+                let start = w.as_ptr() as usize - text.as_ptr() as usize;
+                (start, start + w.len())
+            })
+            .collect();
+        let spans = self.exact_spans(text, runs);
+        replace_spans(result, spans);
+    }
+
+    fn exact_spans(&self, text: &str, runs: Vec<(usize, usize)>) -> Vec<(usize, usize, &str)> {
         let mut spans = Vec::new();
-        for run in self.safe_run.find_iter(&result.text) {
+        for (run_start, run_end) in runs {
+            let run = &text[run_start..run_end];
             // `KEY=value` is one run, so also try each suffix after `=` or `:`.
-            let starts = std::iter::once(run.start()).chain(
-                run.as_str()
-                    .match_indices(['=', ':'])
-                    .map(|(i, _)| run.start() + i + 1),
+            let starts = std::iter::once(run_start).chain(
+                run.match_indices(['=', ':'])
+                    .map(|(i, _)| run_start + i + 1),
             );
             // Sentence punctuation after a value is still inside the run, so also try without it.
-            let trimmed = run.start() + run.as_str().trim_end_matches(['.', ':', '!', '?']).len();
+            let trimmed = run_start + run.trim_end_matches(['.', ':', '!', '?']).len();
             let hit = starts
-                .flat_map(|start| [(start, run.end()), (start, trimmed)])
+                .flat_map(|start| [(start, run_end), (start, trimmed)])
                 .filter(|&(start, end)| start < end && self.exact_lens.contains(&(end - start)))
                 .find_map(|(start, end)| {
-                    let name = self.exact.get(&sha256_hex(&result.text[start..end]))?;
+                    let name = self.exact.get(&sha256_hex(&text[start..end]))?;
                     Some((start, end, name.as_str()))
                 });
             spans.extend(hit);
         }
-        replace_spans(result, spans);
+        spans
     }
 
     fn apply_pattern(&self, p: &Pattern, text: &mut String) -> usize {
@@ -950,6 +972,23 @@ mod tests {
     }
 
     #[test]
+    fn learned_value_with_characters_outside_the_token_set_is_redacted() {
+        // `@` splits the token rule's runs, so the whitespace-delimited run must catch it.
+        let v = "P@ssw0rd2024";
+        let s = with_learned(vec![learned("db_password", v, None)]);
+        let marker = "[REDACTED:db_password ...2024]";
+        for (input, want) in [
+            (format!("pw {v} here"), format!("pw {marker} here")),
+            (format!("DB_PASSWORD={v}"), format!("DB_PASSWORD={marker}")),
+            (format!("it is {v}."), format!("it is {marker}.")),
+        ] {
+            let r = s.scrub(&input);
+            assert_eq!(r.text, want);
+            assert_eq!(r.count, 1);
+        }
+    }
+
+    #[test]
     fn learned_shape_catches_a_rotated_value_and_wins_over_exact() {
         let v = format!("acme_{}", fake::alnum(24));
         let shape = r"\bacme_[a-zA-Z0-9]{20,28}\b";
@@ -1089,17 +1128,18 @@ mod tests {
         let exact = fake::alnum(24);
         let shaped = format!("acme_{}aZ9", fake::alnum(27));
         let entries = vec![
-            crate::init::learn("DB_PASS", &exact),
-            crate::init::learn("ACME_KEY", &shaped),
-            crate::init::learn("STRIPE_KEY", &fake::stripe_key("sk_live_")),
-            crate::init::learn("GH_TOKEN", &fake::github_token("ghp_")),
-            crate::init::learn("SLACK_TOKEN", &fake::slack_token("xoxb")),
-            crate::init::learn("HUBSPOT_KEY", &fake::hubspot_pat("na1")),
-            crate::init::learn("AWS_KEY", &fake::aws_access_key()),
+            crate::init::learn("DB_PASS", &exact).unwrap(),
+            crate::init::learn("ACME_KEY", &shaped).unwrap(),
+            crate::init::learn("STRIPE_KEY", &fake::stripe_key("sk_live_")).unwrap(),
+            crate::init::learn("GH_TOKEN", &fake::github_token("ghp_")).unwrap(),
+            crate::init::learn("SLACK_TOKEN", &fake::slack_token("xoxb")).unwrap(),
+            crate::init::learn("HUBSPOT_KEY", &fake::hubspot_pat("na1")).unwrap(),
+            crate::init::learn("AWS_KEY", &fake::aws_access_key()).unwrap(),
             crate::init::learn(
                 "DATABASE_URL",
                 &fake::database_url("postgres", "db.example.com"),
-            ),
+            )
+            .unwrap(),
         ];
         assert!(entries[1].shape.is_some() && entries[0].shape.is_none());
         (with_learned(entries), exact, shaped)
