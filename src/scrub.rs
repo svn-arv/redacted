@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::config::{Config, EngineConfig};
+use crate::config::{Config, EngineConfig, Heuristic};
 
 const ENGINE_YML: &str = include_str!("../internal/patterns/engine.yml");
 
@@ -41,6 +41,7 @@ struct Pattern {
     includes_key: bool,
     prefilters: Vec<String>,
     prefilters_fold: Vec<String>,
+    scored: bool,
 }
 
 pub struct Scrubber {
@@ -52,6 +53,8 @@ pub struct Scrubber {
     exact: HashMap<String, String>,
     exact_lens: HashSet<usize>,
     safe_run: Regex,
+    heuristic: Option<Pattern>,
+    thresholds: Heuristic,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +86,7 @@ impl Scrubber {
                 includes_key: p.includes_key,
                 prefilters: p.prefilters,
                 prefilters_fold: p.prefilters_fold,
+                scored: false,
             });
         }
         for p in &eng.patterns {
@@ -92,6 +96,7 @@ impl Scrubber {
                 includes_key: false,
                 prefilters: Vec::new(),
                 prefilters_fold: Vec::new(),
+                scored: false,
             });
         }
         let allow_values = engine
@@ -100,6 +105,22 @@ impl Scrubber {
             .chain(&eng.allow_values)
             .map(|e| compile(e))
             .collect::<Result<_, _>>()?;
+        let thresholds = with_defaults(&cfg.heuristic);
+        let heuristic = if thresholds.enabled {
+            Some(Pattern {
+                name: "secret_value".into(),
+                regex: compile(&heuristic_regex(
+                    thresholds.min_length,
+                    &engine.value_safe_char,
+                ))?,
+                includes_key: true,
+                prefilters: Vec::new(),
+                prefilters_fold: Vec::new(),
+                scored: true,
+            })
+        } else {
+            None
+        };
         let mut shapes = Vec::new();
         for l in &cfg.learned {
             if let Some(shape) = &l.shape {
@@ -119,6 +140,8 @@ impl Scrubber {
                 .collect(),
             exact_lens: cfg.learned.iter().map(|l| l.len).collect(),
             safe_run: compile(&format!("{}+", engine.value_safe_char))?,
+            heuristic,
+            thresholds,
         })
     }
 
@@ -154,6 +177,13 @@ impl Scrubber {
             }
         }
         self.scrub_learned(&mut result);
+        if let Some(p) = &self.heuristic {
+            let n = self.apply_pattern(p, &mut result.text);
+            if n > 0 {
+                *result.by_pattern.entry(p.name.clone()).or_default() += n;
+                result.count += n;
+            }
+        }
         result
     }
 
@@ -237,7 +267,36 @@ impl Scrubber {
         {
             return true;
         }
-        (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_lowercase())
+        if (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_lowercase()) {
+            return true;
+        }
+        p.scored && self.skip_scored(m, value, text, end)
+    }
+
+    /// Go's secret_value guards: identifier keys, URLs, and values that don't score as random.
+    fn skip_scored(&self, m: &str, value: &str, text: &str, end: usize) -> bool {
+        let key = key_of(m);
+        is_identifier_key(key)
+            || inside_url(text, end - m.len())
+            || (!self.secret_like(value) && !hex_under_key_suffix(key, value))
+    }
+
+    /// Lower + upper + digit together is what lets UUIDs, hashes and timestamps through.
+    fn secret_like(&self, v: &str) -> bool {
+        if v.contains("://") {
+            return false;
+        }
+        let decoded = percent_decode(v);
+        // Decoding that reveals a space or control byte means encoded prose.
+        if decoded != v.as_bytes() && decoded.iter().any(|&c| c < 0x21 || c == 0x7f) {
+            return false;
+        }
+        let v = String::from_utf8_lossy(&decoded);
+        let h = &self.thresholds;
+        let len = v.chars().count();
+        (h.min_length..=h.max_length).contains(&len)
+            && char_classes(&v) >= h.min_char_classes
+            && shannon_entropy(&v) >= h.min_entropy
     }
 
     fn is_allowed(&self, m: &str) -> bool {
@@ -382,6 +441,84 @@ fn go_regex(expr: &str) -> String {
             '-' if in_class && chars.peek() == Some(&'-') => out.push_str(r"\-"),
             _ => out.push(c),
         }
+    }
+    out
+}
+
+/// Zero thresholds take the engine.yml defaults, like Go.
+fn with_defaults(h: &Heuristic) -> Heuristic {
+    let or = |v: usize, d: usize| if v == 0 { d } else { v };
+    Heuristic {
+        enabled: h.enabled,
+        min_length: or(h.min_length, 16),
+        max_length: or(h.max_length, 128),
+        min_char_classes: or(h.min_char_classes, MIN_CHAR_CLASSES),
+        min_entropy: if h.min_entropy == 0.0 {
+            MIN_ENTROPY
+        } else {
+            h.min_entropy
+        },
+    }
+}
+
+/// KEY=value with a value of min_length+ chars that can't start with `/`, so a
+/// URL scheme isn't read as one.
+fn heuristic_regex(min_length: usize, safe_char: &str) -> String {
+    let first = match safe_char.strip_suffix(']') {
+        Some(class) if safe_char.starts_with("[^") => format!("{class}/]"),
+        _ => safe_char.to_string(),
+    };
+    format!(
+        r#"(?i)\b[A-Za-z0-9_\-]*[A-Za-z][A-Za-z0-9_\-]*["']?[ \t]*(?:=>?|:)[ \t]*["']?{first}{safe_char}{{{},}}"#,
+        min_length.max(1) - 1
+    )
+}
+
+fn hex_under_key_suffix(key: &str, value: &str) -> bool {
+    if key.len() < 4 || value.len() < 24 || !value.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    let upper = key.to_uppercase();
+    upper.ends_with("_KEY") || upper.ends_with("-KEY")
+}
+
+/// Whether the token holding `start` begins with a URL scheme (Go caps the walk at 2048).
+fn inside_url(text: &str, start: usize) -> bool {
+    let b = text.as_bytes();
+    let mut i = start;
+    while i > 0 && start - i < 2048 && !is_token_boundary(b[i - 1]) {
+        i -= 1;
+    }
+    b[i..start].windows(3).any(|w| w == b"://")
+}
+
+fn is_identifier_key(key: &str) -> bool {
+    let k = key.to_lowercase();
+    k == "id"
+        || k == "uuid"
+        || ["_id", "-id", "_uuid", "-uuid"]
+            .iter()
+            .any(|s| k.ends_with(s))
+        || key.ends_with("Id")
+        || key.ends_with("Uuid")
+}
+
+/// Each %XX becomes its byte; a malformed `%` stays literal and `+` is never a space.
+fn percent_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
     }
     out
 }
@@ -835,6 +972,76 @@ mod tests {
             ..Default::default()
         };
         assert!(Scrubber::new(&cfg, &EngineConfig::default()).is_err());
+    }
+
+    fn with_heuristic(h: crate::config::Heuristic) -> Scrubber {
+        let cfg = Config {
+            heuristic: h,
+            ..Default::default()
+        };
+        Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
+    }
+
+    fn heuristic_on() -> crate::config::Heuristic {
+        crate::config::Heuristic {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    const RANDOM_ASSIGNMENT: &str = "FOO_CONF=Xy7aB3kQ9mZ2pL5nR8tW";
+
+    #[test]
+    fn heuristic_is_off_by_default() {
+        assert_eq!(
+            default_scrubber().scrub(RANDOM_ASSIGNMENT).text,
+            RANDOM_ASSIGNMENT
+        );
+    }
+
+    #[test]
+    fn heuristic_enabled_redacts_a_random_value_under_any_key() {
+        let r = with_heuristic(heuristic_on()).scrub(RANDOM_ASSIGNMENT);
+        assert_eq!(r.text, "FOO_CONF= [REDACTED ...R8tW]");
+        assert_eq!(r.by_pattern.get("secret_value"), Some(&1));
+    }
+
+    #[test]
+    fn heuristic_thresholds_come_from_config() {
+        let strict = crate::config::Heuristic {
+            min_length: 50,
+            ..heuristic_on()
+        };
+        assert_eq!(
+            with_heuristic(strict).scrub(RANDOM_ASSIGNMENT).text,
+            RANDOM_ASSIGNMENT
+        );
+        let short = "GADGET=aB3xK9pQ7mZ2";
+        assert_eq!(with_heuristic(heuristic_on()).scrub(short).text, short);
+        let loose = crate::config::Heuristic {
+            min_length: 10,
+            ..heuristic_on()
+        };
+        assert!(with_heuristic(loose).scrub(short).redacted());
+    }
+
+    #[test]
+    fn heuristic_keeps_the_go_skip_guards() {
+        let s = with_heuristic(heuristic_on());
+        for input in [
+            "session_id=Xy7aB3kQ9mZ2pL5nR8tW",
+            "url=https://Xy7aB3kQ9mZ2pL5nR8tW.example.com/a",
+            "see https://host.example.com:8080/Xy7aB3kQ9mZ2pL5nR8tW",
+            "FOO_CONF=Xy7aB3kQ9mZ2pL5nR8tW(arg)",
+            "FOO_CONF=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e",
+            "MSG=Hello%20World%20From%20Abc123",
+        ] {
+            assert_eq!(s.scrub(input).text, input, "{input}");
+        }
+        // Hex under a *_KEY name still redacts though the scorer rejects 2-class hex.
+        assert!(s
+            .scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
+            .redacted());
     }
 
     #[test]
