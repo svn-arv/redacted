@@ -1,7 +1,5 @@
-//! Raw-text parity with the Go implementation. Fixtures are templates
-//! (`{{alnum:40}}`) expanded with a fixed seed, so no secret is committed; the
-//! goldens hold the Go binary's output and keep this test alive after Go is gone.
-//! Regenerate goldens with: REDACTED_BLESS=1 cargo test --test differential
+//! Raw-text output pinned to goldens recorded from the Go 0.7 binary. Fixtures are
+//! templates (`{{alnum:40}}`) expanded with a fixed seed, so no secret is committed.
 
 use std::fs;
 use std::io::Write;
@@ -22,7 +20,7 @@ fn fixtures() -> Vec<PathBuf> {
 }
 
 /// Expands `{{kind:n}}` placeholders with a PRNG seeded from the file name,
-/// so every run (and both binaries) sees the same bytes.
+/// so every run sees the same bytes.
 fn expand(path: &Path) -> Vec<u8> {
     let name = path.file_name().unwrap().to_str().unwrap();
     let mut state = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
@@ -98,40 +96,5 @@ fn raw_mode_matches_committed_goldens() {
             "stderr differs from golden for {}",
             path.display()
         );
-    }
-}
-
-#[test]
-fn raw_mode_matches_the_go_binary() {
-    if Command::new("go").arg("version").output().is_err() {
-        println!("skipped: `go` is not on PATH, so only the committed goldens were checked");
-        return;
-    }
-    let go_bin = Path::new(ROOT).join("target/redacted-go");
-    let built = Command::new("go")
-        .args(["build", "-o", go_bin.to_str().unwrap(), "."])
-        .current_dir(ROOT)
-        .status()
-        .unwrap();
-    assert!(built.success(), "go build failed");
-
-    let rust = Path::new(env!("CARGO_BIN_EXE_redacted"));
-    let bless = std::env::var_os("REDACTED_BLESS").is_some();
-    for path in fixtures() {
-        let input = expand(&path);
-        let go = scrub(&go_bin, &input);
-        if bless {
-            fs::write(golden(&path, "golden"), &go.0).unwrap();
-            fs::write(golden(&path, "stderr.golden"), &go.1).unwrap();
-        }
-        let rs = scrub(rust, &input);
-        assert!(
-            go.0 == rs.0,
-            "stdout differs for {}\n go: {}\n rs: {}",
-            path.display(),
-            String::from_utf8_lossy(&go.0),
-            String::from_utf8_lossy(&rs.0)
-        );
-        assert!(go.1 == rs.1, "stderr differs for {}", path.display());
     }
 }
