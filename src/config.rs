@@ -300,6 +300,19 @@ mod tests {
     }
 
     #[test]
+    fn engine_yml_from_0_7_with_keywords_and_heuristic_still_loads() {
+        // Upgraders keep their old engine.yml; the retired keys must not drop their patterns.
+        let (home, cwd) = dirs("engine-v1");
+        let old = "heuristic:\n  min_length: 16\n  min_entropy: 3.5\nkeywords:\n  - MONGO\nvalue_safe_char: '[^\\s]'\nallow_values: ['^svc_']\npatterns:\n  - {name: g, regex: 'g_x'}\n";
+        fs::write(home.join(".config/redacted/engine.yml"), old).unwrap();
+        let eng = load_engine(s(&home), s(&cwd));
+        assert_eq!(eng.patterns.len(), 1);
+        assert_eq!(eng.allow_values, ["^svc_"]);
+        let scrubber = crate::scrub::Scrubber::new(&Config::default(), &eng).unwrap();
+        assert_eq!(scrubber.scrub("MONGO_URI_PART=plainvalue").count, 0);
+    }
+
+    #[test]
     fn engine_patterns_and_allow_values_merge() {
         let (home, cwd) = dirs("engine");
         fs::write(
