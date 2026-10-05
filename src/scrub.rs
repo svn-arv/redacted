@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use regex::Regex;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::config::{Config, EngineConfig};
 
@@ -29,6 +30,7 @@ struct PatternDef {
 
 #[derive(Deserialize)]
 struct EngineFile {
+    value_safe_char: String,
     allow_values: Vec<String>,
     patterns: Vec<PatternDef>,
 }
@@ -46,6 +48,10 @@ pub struct Scrubber {
     whitelist: HashSet<String>,
     allow: Vec<String>,
     allow_values: Vec<Regex>,
+    shapes: Vec<(String, Regex)>,
+    exact: HashMap<String, String>,
+    exact_lens: HashSet<usize>,
+    safe_run: Regex,
 }
 
 #[derive(Debug, Default)]
@@ -94,11 +100,25 @@ impl Scrubber {
             .chain(&eng.allow_values)
             .map(|e| compile(e))
             .collect::<Result<_, _>>()?;
+        let mut shapes = Vec::new();
+        for l in &cfg.learned {
+            if let Some(shape) = &l.shape {
+                shapes.push((l.name.clone(), compile(shape)?));
+            }
+        }
         Ok(Scrubber {
             patterns,
             whitelist: cfg.whitelist.iter().cloned().collect(),
             allow: cfg.allow.iter().map(|a| a.to_uppercase()).collect(),
             allow_values,
+            shapes,
+            exact: cfg
+                .learned
+                .iter()
+                .map(|l| (l.sha256.clone(), l.name.clone()))
+                .collect(),
+            exact_lens: cfg.learned.iter().map(|l| l.len).collect(),
+            safe_run: compile(&format!("{}+", engine.value_safe_char))?,
         })
     }
 
@@ -133,7 +153,42 @@ impl Scrubber {
                 result.count += n;
             }
         }
+        self.scrub_learned(&mut result);
         result
+    }
+
+    /// Shapes first, then exact hashes on the rewritten text, so a span a shape
+    /// already redacted is a marker and cannot match again.
+    fn scrub_learned(&self, result: &mut ScrubResult) {
+        for (name, re) in &self.shapes {
+            let spans = re
+                .find_iter(&result.text)
+                .map(|m| (m.start(), m.end(), name.as_str()))
+                .collect();
+            replace_spans(result, spans);
+        }
+        if self.exact.is_empty() {
+            return;
+        }
+        let mut spans = Vec::new();
+        for run in self.safe_run.find_iter(&result.text) {
+            // `KEY=value` is one run, so also try each suffix after `=` or `:`.
+            let starts = std::iter::once(run.start()).chain(
+                run.as_str()
+                    .match_indices(['=', ':'])
+                    .map(|(i, _)| run.start() + i + 1),
+            );
+            let hit = starts
+                .filter(|&start| self.exact_lens.contains(&(run.end() - start)))
+                .find_map(|start| {
+                    let name = self
+                        .exact
+                        .get(&sha256_hex(&result.text[start..run.end()]))?;
+                    Some((start, run.end(), name.as_str()))
+                });
+            spans.extend(hit);
+        }
+        replace_spans(result, spans);
     }
 
     fn apply_pattern(&self, p: &Pattern, text: &mut String) -> usize {
@@ -204,6 +259,45 @@ impl Scrubber {
         };
         self.allow_values.iter().any(|re| re.is_match(&candidate))
     }
+}
+
+pub fn sha256_hex(s: &str) -> String {
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The 4-char hint, left out when it would be a third or more of the value.
+pub fn learned_hint(value: &str) -> &str {
+    if value.chars().count() < 12 {
+        return "";
+    }
+    tail(value, 4)
+}
+
+/// Rewrites sorted, non-overlapping spans as learned markers.
+fn replace_spans(result: &mut ScrubResult, spans: Vec<(usize, usize, &str)>) {
+    if spans.is_empty() {
+        return;
+    }
+    let text = &result.text;
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for &(start, end, name) in &spans {
+        out.push_str(&text[last..start]);
+        let hint = learned_hint(&text[start..end]);
+        if hint.is_empty() {
+            out.push_str(&format!("[REDACTED:{name}]"));
+        } else {
+            out.push_str(&format!("[REDACTED:{name} ...{hint}]"));
+        }
+        last = end;
+        *result.by_pattern.entry(name.to_string()).or_default() += 1;
+    }
+    out.push_str(&text[last..]);
+    result.count += spans.len();
+    result.text = out;
 }
 
 fn redact(name: &str, m: &str, includes_key: bool) -> String {
@@ -665,6 +759,82 @@ mod tests {
         assert_eq!(r.text, format!("é{}", value_only("twilio_api_key", &sid)));
         // Go's \s excludes NBSP, so it ends the PEM body match.
         assert_eq!(go_regex(r"[^\s]\s\b"), r"[^\t\n\f\r ][\t\n\f\r ](?-u:\b)");
+    }
+
+    fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::Learned {
+        crate::config::Learned {
+            name: name.into(),
+            sha256: sha256_hex(value),
+            len: value.len(),
+            shape: shape.map(Into::into),
+        }
+    }
+
+    fn with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
+        let cfg = Config {
+            learned: entries,
+            ..Default::default()
+        };
+        Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn learned_exact_value_is_redacted_as_a_token_or_assignment_value() {
+        let v = fake::alnum(24);
+        let s = with_learned(vec![learned("db_pass", &v, None)]);
+        let marker = value_only("db_pass", &v);
+        for (input, want) in [
+            (format!("pw {v} end"), format!("pw {marker} end")),
+            (format!("DB_PASS={v}"), format!("DB_PASS={marker}")),
+            (format!("\"DB_PASS={v}\""), format!("\"DB_PASS={marker}\"")),
+            (format!("db_pass: '{v}'"), format!("db_pass: '{marker}'")),
+            (format!("x:y={v}"), format!("x:y={marker}")),
+        ] {
+            let r = s.scrub(&input);
+            assert_eq!(r.text, want);
+            assert_eq!(r.by_pattern.get("db_pass"), Some(&1));
+        }
+        // A different value of the same length, or the value inside a longer token, is not it.
+        let other = fake::alnum(24);
+        assert_eq!(s.scrub(&other).text, other);
+        let longer = format!("{v}x");
+        assert_eq!(s.scrub(&longer).text, longer);
+    }
+
+    #[test]
+    fn learned_short_value_gets_no_hint() {
+        // The 4-char hint would be most or all of a short value.
+        let v = "Pw9xQz7k";
+        let s = with_learned(vec![learned("pin", v, None)]);
+        assert_eq!(s.scrub(&format!("PIN={v}")).text, "PIN=[REDACTED:pin]");
+    }
+
+    #[test]
+    fn learned_shape_catches_a_rotated_value_and_wins_over_exact() {
+        let v = format!("acme_{}", fake::alnum(24));
+        let shape = r"\bacme_[a-zA-Z0-9]{20,28}\b";
+        let s = with_learned(vec![learned("acme_key", &v, Some(shape))]);
+        let rotated = format!("acme_{}", fake::alnum(27));
+        let r = s.scrub(&format!("{v} {rotated}"));
+        assert_eq!(
+            r.text,
+            format!(
+                "{} {}",
+                value_only("acme_key", &v),
+                value_only("acme_key", &rotated)
+            )
+        );
+        assert_eq!(r.count, 2, "same span must not be redacted twice");
+        assert_eq!(r.by_pattern.get("acme_key"), Some(&2));
+    }
+
+    #[test]
+    fn bad_learned_shape_is_an_error() {
+        let cfg = Config {
+            learned: vec![learned("x", "abc_def", Some("("))],
+            ..Default::default()
+        };
+        assert!(Scrubber::new(&cfg, &EngineConfig::default()).is_err());
     }
 
     #[test]
