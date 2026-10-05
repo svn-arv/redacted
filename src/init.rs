@@ -297,7 +297,7 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
 /// could otherwise register its own binary as the hook.
 fn bin_path() -> Result<String, String> {
     std::env::current_exe()
-        .and_then(|p| p.canonicalize())
+        .and_then(std::path::absolute)
         .map(|p| p.display().to_string())
         .map_err(|e| format!("cannot determine redacted binary path: {e}"))
 }
@@ -637,7 +637,8 @@ mod tests {
         std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
         let got = bin_path();
         std::env::set_var("PATH", old);
-        let want = std::env::current_exe().unwrap().canonicalize().unwrap();
+        // Not canonicalized: a Homebrew symlink must stay, its Cellar target goes on upgrade.
+        let want = std::path::absolute(std::env::current_exe().unwrap()).unwrap();
         assert_eq!(got.unwrap(), want.display().to_string());
     }
 
