@@ -116,10 +116,11 @@ fn process_generic(response: &Value, tool_name: &str, scrub: Scrub) -> Result<Pr
         return Ok(Default::default());
     }
 
-    let content = if structured {
-        summarize_scrubbed(&result.text)
-    } else {
-        result.text.clone()
+    // The hit counts every string in the response; a Read envelope's reason still shows its content.
+    let content = match file_content(response) {
+        Some(c) => scrub(c).text,
+        None if structured => summarize_scrubbed(&result.text),
+        None => result.text.clone(),
     };
     // reason may summarize, the replacement may not: it stands in for the result.
     let updated = match response {
@@ -135,14 +136,6 @@ fn extract_text(raw: &Value) -> Result<(String, bool), String> {
     if let Value::String(s) = raw {
         return Ok((s.clone(), false));
     }
-    let file = raw.get("file").filter(|f| f.is_object());
-    if let (Some(Value::String(t)), Some(file)) = (raw.get("type"), file) {
-        if t == "text" {
-            if let Ok(content) = str_field(file, "content") {
-                return Ok((content, false));
-            }
-        }
-    }
     let mut parts = Vec::new();
     walk_strings(raw, &mut parts);
     if !parts.is_empty() {
@@ -152,6 +145,14 @@ fn extract_text(raw: &Value) -> Result<(String, bool), String> {
         Value::Null => Ok((String::new(), true)),
         other => Ok((to_go_json(other)?, true)),
     }
+}
+
+/// `file.content` of a Read `{"type":"text","file":{...}}` envelope.
+fn file_content(raw: &Value) -> Option<&str> {
+    if raw.get("type")?.as_str()? != "text" {
+        return None;
+    }
+    raw.get("file")?.get("content")?.as_str()
 }
 
 /// Every non-empty string leaf and object key, keys in sorted order (serde_json's
@@ -338,6 +339,23 @@ mod tests {
         );
         let want = envelope(&reason, &updated).replace('\u{2028}', "\\u2028");
         assert_eq!(out, want);
+    }
+
+    #[test]
+    fn read_file_envelope_secret_outside_content_is_redacted() {
+        let key = fake::aws_access_key();
+        let payload = format!(
+            r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/{key}.txt","content":"clean"}}}}}}"#
+        );
+        let (out, recorded) = run(&payload);
+        let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
+        let reason = "[redacted] 1 secret(s) scrubbed from Read output.\n\nclean";
+        let updated = format!(
+            r#"{{"file":{{"content":"clean","filePath":{}}},"type":"text"}}"#,
+            json(&format!("/a/{marker}.txt"))
+        );
+        assert_eq!(out, envelope(reason, &updated));
+        assert_eq!(recorded[0].1.get("aws_access_key"), Some(&1));
     }
 
     #[test]
