@@ -2,23 +2,18 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
-    - go test ./...
+    - cargo test --locked
 
+# Musl on Linux keeps the binaries static, as the Go CGO_ENABLED=0 builds were.
 builds:
-  - main: .
+  - builder: rust
     binary: redacted
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w -X github.com/svn-arv/redacted/cmd.Version={{.Version}}
+    targets:
+      - x86_64-unknown-linux-musl
+      - aarch64-unknown-linux-musl
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+      - x86_64-pc-windows-gnu
 
 archives:
   - formats:
