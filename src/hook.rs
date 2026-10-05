@@ -222,7 +222,9 @@ mod tests {
     use crate::fake;
     use crate::scrub::Scrubber;
 
-    fn run(payload: &str) -> (String, Vec<(String, BTreeMap<String, usize>)>) {
+    type Recorded = Vec<(String, BTreeMap<String, usize>)>;
+
+    fn run(payload: &str) -> (String, Recorded) {
         let s = Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap();
         let mut recorded = Vec::new();
         let out = process_safely(payload.as_bytes(), &|t| s.scrub(t), &mut |tool, by| {
