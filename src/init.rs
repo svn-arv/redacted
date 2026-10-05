@@ -195,7 +195,7 @@ fn derive_shape(sample: &str) -> Option<String> {
     ))
 }
 
-fn learn(key: &str, value: &str) -> Learned {
+pub fn learn(key: &str, value: &str) -> Learned {
     Learned {
         name: key.to_lowercase(),
         sha256: sha256_hex(value),

@@ -1080,6 +1080,57 @@ mod tests {
         }
     }
 
+    /// Learned entries derived the way `init` derives them, from synthetic values:
+    /// one exact-only, one custom-prefix shape (all three classes, so the band is stable).
+    fn learned_corpus_scrubber() -> (Scrubber, String, String) {
+        let exact = fake::alnum(24);
+        let shaped = format!("acme_{}aZ9", fake::alnum(27));
+        let entries = vec![
+            crate::init::learn("DB_PASS", &exact),
+            crate::init::learn("ACME_KEY", &shaped),
+            crate::init::learn("STRIPE_KEY", &fake::stripe_key("sk_live_")),
+            crate::init::learn("GH_TOKEN", &fake::github_token("ghp_")),
+            crate::init::learn("SLACK_TOKEN", &fake::slack_token("xoxb")),
+            crate::init::learn("HUBSPOT_KEY", &fake::hubspot_pat("na1")),
+            crate::init::learn("AWS_KEY", &fake::aws_access_key()),
+            crate::init::learn(
+                "DATABASE_URL",
+                &fake::database_url("postgres", "db.example.com"),
+            ),
+        ];
+        assert!(entries[1].shape.is_some() && entries[0].shape.is_none());
+        (with_learned(entries), exact, shaped)
+    }
+
+    #[test]
+    fn corpus_precision_holds_with_learned_secrets_loaded() {
+        let (s, _, _) = learned_corpus_scrubber();
+        for (name, data) in clean_corpus() {
+            let r = s.scrub(&data);
+            assert!(
+                !r.redacted(),
+                "false positive in {name}: {:?}",
+                r.by_pattern
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_recall_learned_exact_and_shape_including_a_rotated_key() {
+        let (s, exact, shaped) = learned_corpus_scrubber();
+        // Rotated: same prefix, 3 characters longer than the sample.
+        let rotated = format!("acme_{}", fake::alnum(33));
+        for (name, data) in clean_corpus() {
+            let planted = format!("{data}\nDB_PASS={exact}\nkey: {shaped}\nnew {rotated}\n");
+            let r = s.scrub(&planted);
+            assert_eq!(r.by_pattern.get("db_pass"), Some(&1), "{name}");
+            assert_eq!(r.by_pattern.get("acme_key"), Some(&2), "{name}");
+            for secret in [&exact, &shaped, &rotated] {
+                assert!(!r.text.contains(secret.as_str()), "leaked in {name}");
+            }
+        }
+    }
+
     fn pattern_is_keyed(name: &str) -> bool {
         matches!(
             name,
