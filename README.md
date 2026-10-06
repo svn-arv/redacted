@@ -335,7 +335,7 @@ printf 'key AKIAEXAMPLEKEYID0001\n' | redacted scrub
 | Cursor | Hooks can replace MCP tool output only. |
 | Windsurf, Cline, Roo Code, Kiro, Zed | No hook can replace tool output. |
 
-`plugins/opencode` does not work with 1.0.0. It is a TypeScript port that loads `internal/patterns/patterns.yaml`, a file the Rust build removed. It will be rewritten as a thin call to the `redacted` binary.
+The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 removes it: the `redacted` binary is the only scrubber. An OpenCode adapter that calls the binary is planned.
 
 ## Known limitations
 
