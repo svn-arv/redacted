@@ -103,7 +103,7 @@ fn run_scrub() -> Result<(), String> {
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
         .map(Path::new);
-    let home_dir = config::home();
+    let home_dir = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
     let config = config::load(home_dir, cwd);
@@ -128,8 +128,8 @@ fn run_scrub() -> Result<(), String> {
     };
     record_stats(&payload_string("tool_name"), &counts_by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
-    let is_pre_v2_config =
-        config.version == 0 && home_dir.is_some_and(|home| config::global_path(home).exists());
+    let is_pre_v2_config = config.version == 0
+        && home_dir.is_some_and(|home| config::global_config_path(home).exists());
     if is_pre_v2_config && !out.is_empty() && mark_session_notified(&payload_string("session_id")) {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }

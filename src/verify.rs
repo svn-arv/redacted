@@ -46,7 +46,7 @@ fn check(name: &'static str, status: Status, detail: impl Into<String>) -> Check
 
 /// `redacted verify`: prints one line per check and fails if any check failed.
 pub fn run() -> Result<(), String> {
-    let home_dir = config::home();
+    let home_dir = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
     let cwd = std::env::current_dir().ok();
@@ -162,7 +162,7 @@ fn check_config(
     eng: &EngineConfig,
 ) -> Check {
     let files = [
-        ("global config", home_dir.map(config::global_path)),
+        ("global config", home_dir.map(config::global_config_path)),
         ("project config", cwd.map(|c| c.join(".redacted.yaml"))),
         (
             "global engine",
@@ -188,8 +188,8 @@ fn check_config(
     }
     let mut detail = format!("{} loaded", sources.join(", "));
     let extras: Vec<String> = [
-        (cfg.whitelist.len(), "whitelisted"),
-        (cfg.allow.len(), "allowed vars"),
+        (cfg.disabled_patterns.len(), "whitelisted"),
+        (cfg.allowed_keys.len(), "allowed vars"),
         (eng.patterns.len(), "custom patterns"),
     ]
     .iter()
@@ -226,7 +226,7 @@ fn check_learned(cwd: Option<&Path>, cfg: &Config) -> Vec<Check> {
         cfg.learned.len()
     );
     let mut out = vec![check("learned secrets", Status::Pass, detail)];
-    if config::vendor_only(cfg) {
+    if config::is_vendor_only(cfg) {
         out.push(check(
             "protection",
             Status::Warn,

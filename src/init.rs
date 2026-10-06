@@ -11,7 +11,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use inquire::{Confirm, MultiSelect, Select};
 
-use crate::config::{self, Learned};
+use crate::config::{self, LearnedSecret};
 use crate::scrub::{learned_value_hint, sha256_hex};
 use crate::settings;
 
@@ -25,7 +25,7 @@ pub fn run(env: Option<PathBuf>, local: bool) -> Result<(), String> {
 }
 
 fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
-    let home = config::home().ok_or("cannot determine home directory".to_string())?;
+    let home = config::home_dir().ok_or("cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
     let env_file = match env {
@@ -74,11 +74,11 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
         .raw_prompt()
         .map_err(|e| e.to_string())?;
     // Ticked rows that cannot be learned are skipped, not written.
-    let chosen: Vec<Learned> = picked
+    let chosen: Vec<LearnedSecret> = picked
         .iter()
         .filter_map(|o| entries[o.index].clone().ok())
         .collect();
-    let config_path = config::global_path(home);
+    let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
         Ok(s) => s,
         Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -121,7 +121,7 @@ fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
     println!("Binary: {bin} scrub");
     // Judged on the written global config alone (no cwd), so a re-run with no .env
     // does not warn a user who has entries.
-    if config::vendor_only(&config::load(Some(home), None)) {
+    if config::is_vendor_only(&config::load(Some(home), None)) {
         println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
     Ok(())
@@ -223,17 +223,17 @@ fn derive_shape(sample: &str) -> Option<String> {
 }
 
 /// Err is the reason the value cannot be learned, shown in the picker.
-pub fn learn(key: &str, value: &str) -> Result<Learned, &'static str> {
+pub fn learn(key: &str, value: &str) -> Result<LearnedSecret, &'static str> {
     if value.contains(char::is_whitespace) {
         return Err("cannot match (contains spaces)");
     }
     if value.chars().count() < 8 {
         return Err("too short");
     }
-    Ok(Learned {
+    Ok(LearnedSecret {
         name: key.to_lowercase(),
         sha256: sha256_hex(value),
-        len: value.len(),
+        byte_len: value.len(),
         shape: derive_shape(value),
     })
 }
@@ -250,7 +250,7 @@ fn preselect(value: &str) -> bool {
     classes.iter().filter(|&&has| has).count() >= 2
 }
 
-fn row(key: &str, value: &str, learned: &Result<Learned, &str>) -> String {
+fn row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String {
     let entry = match learned {
         Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),
@@ -266,7 +266,7 @@ fn row(key: &str, value: &str, learned: &Result<Learned, &str>) -> String {
 }
 
 /// Merges `entries` by name into the config text, keeping every other field.
-fn merge_config(existing: &str, entries: &[Learned]) -> Result<String, String> {
+fn merge_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, String> {
     let mut doc = if existing.trim().is_empty() {
         serde_yaml::Value::Mapping(Default::default())
     } else {
@@ -275,7 +275,7 @@ fn merge_config(existing: &str, entries: &[Learned]) -> Result<String, String> {
     let map = doc
         .as_mapping_mut()
         .ok_or("config is not a YAML mapping".to_string())?;
-    let mut learned: Vec<Learned> = match map.get("learned") {
+    let mut learned: Vec<LearnedSecret> = match map.get("learned") {
         Some(v) => {
             serde_yaml::from_value(v.clone()).map_err(|e| format!("parsing learned: {e}"))?
         }
@@ -324,7 +324,7 @@ fn bin_path() -> Result<String, String> {
 /// one only); the global config is kept so a reinstall keeps its learned secrets.
 /// A file that fails is reported and skipped, so the other one is still cleaned.
 pub fn uninstall(local: bool) -> Result<(), String> {
-    let home = config::home();
+    let home = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home = home.as_deref();
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -352,7 +352,7 @@ pub fn uninstall(local: bool) -> Result<(), String> {
         println!("No redacted hooks found.");
     }
     if let Some(home) = home {
-        let config_path = config::global_path(home);
+        let config_path = config::global_config_path(home);
         if config_path.exists() {
             println!("Config kept at {}", config_path.display());
         }
@@ -367,7 +367,7 @@ pub fn uninstall(local: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Learned;
+    use crate::config::LearnedSecret;
     use std::fs;
     use std::path::PathBuf;
 
@@ -465,7 +465,7 @@ mod tests {
         let l = learn("STRIPE_KEY", &value).unwrap();
         assert_eq!(l.name, "stripe_key");
         assert_eq!(l.sha256, crate::scrub::sha256_hex(&value));
-        assert_eq!(l.len, value.len());
+        assert_eq!(l.byte_len, value.len());
         assert_eq!(l.shape, derive_shape(&value));
     }
 
@@ -532,16 +532,16 @@ mod tests {
     #[test]
     fn merge_config_keeps_other_fields_and_merges_by_name() {
         let existing = "whitelist: [jwt]\nfuture_field: {a: 1}\nlearned:\n- {name: keep, sha256: aa, len: 1}\n- {name: stripe_key, sha256: old, len: 1}\n";
-        let new = Learned {
+        let new = LearnedSecret {
             name: "stripe_key".into(),
             sha256: "new".into(),
-            len: 32,
+            byte_len: 32,
             shape: Some("s".into()),
         };
-        let added = Learned {
+        let added = LearnedSecret {
             name: "db_pass".into(),
             sha256: "bb".into(),
-            len: 9,
+            byte_len: 9,
             shape: None,
         };
         let out = merge_config(existing, &[new.clone(), added.clone()]).unwrap();
@@ -549,7 +549,7 @@ mod tests {
         assert_eq!(doc["version"], serde_yaml::Value::from(2));
         assert_eq!(doc["whitelist"][0], serde_yaml::Value::from("jwt"));
         assert_eq!(doc["future_field"]["a"], serde_yaml::Value::from(1));
-        let learned: Vec<Learned> = serde_yaml::from_value(doc["learned"].clone()).unwrap();
+        let learned: Vec<LearnedSecret> = serde_yaml::from_value(doc["learned"].clone()).unwrap();
         let names: Vec<_> = learned.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["keep", "stripe_key", "db_pass"]);
         assert_eq!(learned[1], new);

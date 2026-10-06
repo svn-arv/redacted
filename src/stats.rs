@@ -123,7 +123,7 @@ pub fn file_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("REDACTED_STATS_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    let home = crate::config::home()?;
+    let home = crate::config::home_dir()?;
     Some(home.join(".config/redacted/stats.jsonl"))
 }
 

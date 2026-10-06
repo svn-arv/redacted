@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::config::{Config, EngineConfig, Heuristic};
+use crate::config::{Config, EngineConfig, HeuristicConfig};
 use go_regex::go_to_rust_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use learned::{learned_value_hint, sha256_hex};
@@ -79,7 +79,7 @@ pub struct Scrubber {
     /// For values holding `@`, `(` or quotes, which split a `value_char_run`.
     non_whitespace_run: Regex,
     heuristic_pattern: Option<Pattern>,
-    heuristic_thresholds: Heuristic,
+    heuristic_thresholds: HeuristicConfig,
 }
 
 /// The rewritten text plus how many redactions each pattern made.
@@ -147,8 +147,12 @@ impl Scrubber {
         }
         Ok(Scrubber {
             patterns,
-            disabled_patterns: config.whitelist.iter().cloned().collect(),
-            allowed_keys_upper: config.allow.iter().map(|a| a.to_uppercase()).collect(),
+            disabled_patterns: config.disabled_patterns.iter().cloned().collect(),
+            allowed_keys_upper: config
+                .allowed_keys
+                .iter()
+                .map(|a| a.to_uppercase())
+                .collect(),
             allow_values,
             learned_shapes,
             learned_name_by_hash: config
@@ -156,7 +160,11 @@ impl Scrubber {
                 .iter()
                 .map(|learned| (learned.sha256.clone(), learned.name.clone()))
                 .collect(),
-            learned_byte_lengths: config.learned.iter().map(|learned| learned.len).collect(),
+            learned_byte_lengths: config
+                .learned
+                .iter()
+                .map(|learned| learned.byte_len)
+                .collect(),
             value_char_run: compile_go_regex(&format!("{}+", builtin.value_safe_char))?,
             non_whitespace_run: compile_go_regex(r"[^ \t\n\x0C\r]+")?,
             heuristic_pattern,
@@ -251,7 +259,10 @@ fn last_chars(text: &str, count: usize) -> &str {
 }
 
 /// The opt-in entropy pattern, or None while the heuristic is off.
-fn compile_heuristic(heuristic: &Heuristic, safe_char: &str) -> Result<Option<Pattern>, String> {
+fn compile_heuristic(
+    heuristic: &HeuristicConfig,
+    safe_char: &str,
+) -> Result<Option<Pattern>, String> {
     if !heuristic.enabled {
         return Ok(None);
     }
@@ -492,7 +503,7 @@ mod tests {
     #[test]
     fn whitelist_skips_a_pattern_by_name() {
         let cfg = Config {
-            whitelist: vec!["aws_access_key".into()],
+            disabled_patterns: vec!["aws_access_key".into()],
             ..Default::default()
         };
         let key = fake_secrets::aws_access_key();
@@ -505,7 +516,7 @@ mod tests {
     #[test]
     fn allow_skips_matches_containing_the_name_case_insensitively() {
         let cfg = Config {
-            allow: vec!["aws_secret_access_key".into()],
+            allowed_keys: vec!["aws_secret_access_key".into()],
             ..Default::default()
         };
         let input = format!("AWS_SECRET_ACCESS_KEY={}", fake_secrets::aws_secret_key());
@@ -554,7 +565,7 @@ mod tests {
         assert!(Scrubber::new(&Config::default(), &eng).is_err());
     }
 
-    pub(super) fn scrubber_with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
+    pub(super) fn scrubber_with_learned(entries: Vec<crate::config::LearnedSecret>) -> Scrubber {
         let cfg = Config {
             learned: entries,
             ..Default::default()
@@ -562,16 +573,16 @@ mod tests {
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    pub(super) fn scrubber_with_heuristic(h: crate::config::Heuristic) -> Scrubber {
+    pub(super) fn scrubber_with_heuristic(heuristic: crate::config::HeuristicConfig) -> Scrubber {
         let cfg = Config {
-            heuristic: h,
+            heuristic,
             ..Default::default()
         };
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    pub(super) fn enabled_heuristic() -> crate::config::Heuristic {
-        crate::config::Heuristic {
+    pub(super) fn enabled_heuristic() -> crate::config::HeuristicConfig {
+        crate::config::HeuristicConfig {
             enabled: true,
             ..Default::default()
         }
@@ -596,7 +607,7 @@ mod tests {
 
     #[test]
     fn heuristic_thresholds_come_from_config() {
-        let strict = crate::config::Heuristic {
+        let strict = crate::config::HeuristicConfig {
             min_length: 50,
             ..enabled_heuristic()
         };
@@ -613,18 +624,18 @@ mod tests {
                 .text,
             short
         );
-        let loose = crate::config::Heuristic {
+        let loose = crate::config::HeuristicConfig {
             min_length: 10,
             ..enabled_heuristic()
         };
         assert!(scrubber_with_heuristic(loose).scrub(short).has_redactions());
         // Only an absent threshold takes its default; an explicit 0 is honored.
-        let zero: crate::config::Heuristic =
+        let zero: crate::config::HeuristicConfig =
             serde_yaml::from_str("{enabled: true, min_length: 0}").unwrap();
         assert!(scrubber_with_heuristic(zero).scrub(short).has_redactions());
         // A lowercase-only value has one character class, so it passes only at 0.
         let one_class = "FOO_CONF=qwertyuiopasdfghjk";
-        let zero: crate::config::Heuristic =
+        let zero: crate::config::HeuristicConfig =
             serde_yaml::from_str("{enabled: true, min_char_classes: 0}").unwrap();
         assert!(
             scrubber_with_heuristic(zero)

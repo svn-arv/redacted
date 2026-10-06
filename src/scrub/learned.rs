@@ -140,11 +140,11 @@ mod tests {
     use crate::fake_secrets;
     use crate::scrub::tests::{scrubber_with_learned, value_only_marker};
 
-    fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::Learned {
-        crate::config::Learned {
+    fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::LearnedSecret {
+        crate::config::LearnedSecret {
             name: name.into(),
             sha256: sha256_hex(value),
-            len: value.len(),
+            byte_len: value.len(),
             shape: shape.map(Into::into),
         }
     }

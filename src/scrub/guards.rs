@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::{Pattern, Scrubber};
-use crate::config::{MIN_CHAR_CLASSES, MIN_ENTROPY};
+use crate::config::{DEFAULT_MIN_CHAR_CLASSES, DEFAULT_MIN_ENTROPY};
 
 impl Scrubber {
     pub(super) fn should_skip_match(
@@ -238,10 +238,9 @@ fn looks_like_code_reference(value: &str) -> bool {
 }
 
 fn has_random_segment(value: &str) -> bool {
-    value
-        .split(['.', ':'])
-        .filter(|s| !s.is_empty())
-        .any(|s| char_class_count(s) >= MIN_CHAR_CLASSES && shannon_entropy(s) >= MIN_ENTROPY)
+    value.split(['.', ':']).filter(|s| !s.is_empty()).any(|s| {
+        char_class_count(s) >= DEFAULT_MIN_CHAR_CLASSES && shannon_entropy(s) >= DEFAULT_MIN_ENTROPY
+    })
 }
 
 fn char_class_count(value: &str) -> usize {
