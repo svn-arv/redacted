@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::scrub::ScrubResult;
 
-/// The bytes to print and the per-pattern hit counts to record.
-pub const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
+/// Printed in place of the tool output when scrubbing failed.
+const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
 
 // Typed structs rather than `json!`: serde_json sorts `json!` keys, and the
 // envelope's key order is pinned byte for byte. `'a` lets fields borrow strings.
@@ -29,6 +29,9 @@ struct HookSpecificOutput<'a> {
     #[serde(rename = "updatedToolOutput", skip_serializing_if = "str::is_empty")]
     updated_tool_output: &'a str,
 }
+
+/// The bytes to print and the per-pattern hit counts to record.
+type Processed = (Vec<u8>, BTreeMap<String, usize>);
 
 /// Scrubs the tool output in a PostToolUse payload. No hit returns no bytes so
 /// the original passes through; a hit returns the block envelope.
@@ -79,8 +82,6 @@ pub fn prepend_reason(out: &[u8], line: &str) -> Vec<u8> {
     v["reason"] = Value::String(format!("{line}\n{reason}"));
     encode(&v).unwrap_or_else(|_| out.to_vec())
 }
-
-type Processed = (Vec<u8>, BTreeMap<String, usize>);
 
 // Go decodes into typed structs, so a wrong type is an error, null is "".
 fn str_field(v: &Value, key: &str) -> Result<String, String> {
