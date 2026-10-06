@@ -255,7 +255,7 @@ Prints one line per check and exits 1 when any check fails.
 
 | Check | Result |
 | --- | --- |
-| `binary in PATH` | Path of the running binary. |
+| `binary` | Path of the running binary. |
 | `global hook`, `local hook` | FAIL when the settings file is missing or invalid JSON, has no `redacted scrub` entry, or the entry's binary is gone. When one passes, the other shows SKIP. |
 | `hook registered` | FAIL when neither file has the hook. |
 | `config files` | Which of the four files exist. |

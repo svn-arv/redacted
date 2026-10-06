@@ -213,7 +213,7 @@ fn verify_reports_checks_and_fails_without_a_hook() {
     );
     for line in [
         no_hooks.as_str(),
-        "[PASS] binary in PATH",
+        "[PASS] binary - ",
         "[FAIL] hook registered",
         "[PASS] config files - none found (using built-in defaults)",
         "[PASS] patterns load - all patterns compiled",

@@ -79,12 +79,8 @@ pub fn run() -> Result<(), String> {
 
 fn check_binary() -> Check {
     match std::env::current_exe() {
-        Ok(p) => check("binary in PATH", Status::Pass, p.display().to_string()),
-        Err(_) => check(
-            "binary in PATH",
-            Status::Fail,
-            "not found, reinstall redacted",
-        ),
+        Ok(p) => check("binary", Status::Pass, p.display().to_string()),
+        Err(_) => check("binary", Status::Fail, "not found, reinstall redacted"),
     }
 }
 
