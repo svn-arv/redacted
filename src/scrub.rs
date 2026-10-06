@@ -556,6 +556,12 @@ mod tests {
         let zero: crate::config::Heuristic =
             serde_yaml::from_str("{enabled: true, min_length: 0}").unwrap();
         assert!(with_heuristic(zero).scrub(short).redacted());
+        // A lowercase-only value has one character class, so it passes only at 0.
+        let one_class = "FOO_CONF=qwertyuiopasdfghjk";
+        let zero: crate::config::Heuristic =
+            serde_yaml::from_str("{enabled: true, min_char_classes: 0}").unwrap();
+        assert!(with_heuristic(zero).scrub(one_class).redacted());
+        assert!(!with_heuristic(heuristic_on()).scrub(one_class).redacted());
     }
 
     #[test]
