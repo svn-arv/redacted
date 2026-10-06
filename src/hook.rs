@@ -1,5 +1,5 @@
-//! Claude Code PostToolUse protocol, ported from the Go 0.7 hook
-//! (the updatedToolOutput envelope from fix/46).
+//! Claude Code PostToolUse protocol, ported from the Go 0.7 hook. The
+//! updatedToolOutput replacement mirrors the tool_response shape (issue #46).
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -26,8 +26,10 @@ struct HookOutput<'a> {
 struct HookSpecificOutput<'a> {
     #[serde(rename = "hookEventName")]
     hook_event_name: &'a str,
-    #[serde(rename = "updatedToolOutput", skip_serializing_if = "str::is_empty")]
-    updated_tool_output: &'a str,
+    // A Value, not a string: Claude Code applies the replacement only when it
+    // matches the tool's output schema (an object for Bash, Read, Grep, ...).
+    #[serde(rename = "updatedToolOutput", skip_serializing_if = "Value::is_null")]
+    updated_tool_output: Value,
 }
 
 /// The bytes to print and the per-pattern hit counts to record.
@@ -54,20 +56,41 @@ pub fn scrub_payload_or_withhold(data: &[u8], scrub: &dyn Fn(&str) -> ScrubResul
     // the panic may have left half-written is used afterwards: it is all dropped.
     match panic::catch_unwind(AssertUnwindSafe(|| scrub_payload(data, scrub))) {
         Ok(Ok(hook_result)) => hook_result,
-        _ => (withheld_output(), BTreeMap::new()),
+        _ => (withheld_output(data), BTreeMap::new()),
     }
 }
 
-pub fn withheld_output() -> Vec<u8> {
+/// The fail-closed envelope. Its replacement mirrors `tool_response` with every
+/// string withheld; unparsable input or no `tool_response` gets the bare sentence.
+pub fn withheld_output(data: &[u8]) -> Vec<u8> {
+    let payload: Value = serde_json::from_slice(data).unwrap_or(Value::Null);
+    let updated = match payload.get("tool_response") {
+        None | Some(Value::Null) => Value::String(WITHHELD.into()),
+        Some(response) => withhold_strings(response),
+    };
     encode(&HookOutput {
         decision: "block",
         reason: WITHHELD,
         hook_specific_output: HookSpecificOutput {
             hook_event_name: "PostToolUse",
-            updated_tool_output: WITHHELD,
+            updated_tool_output: updated,
         },
     })
-    .expect("static envelope serializes")
+    .expect("a parsed Value always serializes")
+}
+
+/// Same shape, every string leaf replaced by the WITHHELD sentence.
+fn withhold_strings(value: &Value) -> Value {
+    match value {
+        Value::String(_) => Value::String(WITHHELD.into()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, child)| (key.clone(), withhold_strings(child)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(withhold_strings).collect()),
+        other => other.clone(),
+    }
 }
 
 /// Puts `line` above an envelope's reason; `updatedToolOutput` is left alone
@@ -99,9 +122,8 @@ fn scrub_bash_response(
     if !(response.is_object() || response.is_null()) {
         return Err("parse hook payload: tool_response is not an object".into());
     }
-    let stderr = string_field_or_empty(response, "stderr")?;
     let stdout_result = scrub(&string_field_or_empty(response, "stdout")?);
-    let stderr_result = scrub(&stderr);
+    let stderr_result = scrub(&string_field_or_empty(response, "stderr")?);
     if !stdout_result.has_redactions() && !stderr_result.has_redactions() {
         return Ok((Vec::new(), BTreeMap::new()));
     }
@@ -110,17 +132,23 @@ fn scrub_bash_response(
     if stderr_result.has_redactions() {
         reason += &format!("\n[stderr]\n{}", stderr_result.text);
     }
-    // The replacement keeps a clean stderr too: the model still needs it.
-    let mut updated = stdout_result.text.clone();
-    if !stderr.is_empty() {
-        updated += &format!("\n[stderr]\n{}", stderr_result.text);
+    // Only fields that came in as strings are replaced: no key is invented.
+    let mut updated = response.clone();
+    for (key, scrubbed) in [
+        ("stdout", &stdout_result.text),
+        ("stderr", &stderr_result.text),
+    ] {
+        // `slot @ Value::String(_)` binds the matched value so it can be overwritten.
+        if let Some(slot @ Value::String(_)) = updated.get_mut(key) {
+            *slot = Value::String(scrubbed.clone());
+        }
     }
 
     let block = block_output(
         stdout_result.count + stderr_result.count,
         "command",
         &reason,
-        &updated,
+        updated,
     )?;
     let mut counts = stdout_result.counts_by_pattern;
     for (pattern, count) in stderr_result.counts_by_pattern {
@@ -149,10 +177,10 @@ fn scrub_tool_response(
     };
     // reason may summarize, the replacement may not: it stands in for the result.
     let updated = match response {
-        Value::String(_) => result.text.clone(),
-        other => to_go_json(&scrub_json(other, scrub))?,
+        Value::String(_) => Value::String(result.text.clone()),
+        other => scrub_json(other, scrub),
     };
-    let block = block_output(result.count, tool_name, &content, &updated)?;
+    let block = block_output(result.count, tool_name, &content, updated)?;
     Ok((block, result.counts_by_pattern))
 }
 
@@ -233,7 +261,7 @@ fn block_output(
     count: usize,
     source: &str,
     reason: &str,
-    updated: &str,
+    updated: Value,
 ) -> Result<Vec<u8>, String> {
     encode(&HookOutput {
         decision: "block",
@@ -279,11 +307,12 @@ mod tests {
         serde_json::to_string(s).unwrap()
     }
 
-    fn expected_envelope(reason: &str, updated: &str) -> String {
+    /// `updated_json` is raw JSON: the replacement is a string only for a string response.
+    fn expected_envelope(reason: &str, updated_json: &str) -> String {
         format!(
             "{{\"decision\":\"block\",\"reason\":{},\"hookSpecificOutput\":{{\"hookEventName\":\"PostToolUse\",\"updatedToolOutput\":{}}}}}\n",
             json_string(reason),
-            json_string(updated)
+            updated_json
         )
     }
 
@@ -299,7 +328,11 @@ mod tests {
         );
         let (out, counts) = run_hook(&payload);
         let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\nk {marker}");
-        assert_eq!(out, expected_envelope(&reason, &format!("k {marker}")));
+        let updated = format!(
+            r#"{{"exitCode":0,"stderr":"","stdout":{}}}"#,
+            json_string(&format!("k {marker}"))
+        );
+        assert_eq!(out, expected_envelope(&reason, &updated));
         assert_eq!(counts, BTreeMap::from([("aws_access_key".to_string(), 1)]));
     }
 
@@ -315,8 +348,31 @@ mod tests {
             fake_secrets::last_four_chars(&key)
         );
         let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\n{marker}");
-        let updated = format!("{marker}\n[stderr]\nwarning: retrying once");
+        let updated = format!(
+            r#"{{"stderr":"warning: retrying once","stdout":{}}}"#,
+            json_string(&marker)
+        );
         assert_eq!(out, expected_envelope(&reason, &updated));
+    }
+
+    #[test]
+    fn bash_replacement_keeps_the_response_shape_so_claude_code_applies_it() {
+        // Claude Code drops a replacement that does not match the tool's output schema.
+        let key = fake_secrets::npm_token();
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_response":{{"stdout":"{key}","interrupted":false,"isImage":false}}}}"#
+        );
+        let (out, _) = run_hook(&payload);
+        let envelope: Value = serde_json::from_str(&out).unwrap();
+        let marker = format!(
+            "[REDACTED:npm_token ...{}]",
+            fake_secrets::last_four_chars(&key)
+        );
+        // No stderr key in, none out: an invented field could break the schema match.
+        assert_eq!(
+            envelope["hookSpecificOutput"]["updatedToolOutput"],
+            serde_json::json!({"stdout": marker, "interrupted": false, "isImage": false})
+        );
     }
 
     #[test]
@@ -344,7 +400,7 @@ mod tests {
             fake_secrets::last_four_chars(&key)
         );
         let reason = format!("[redacted] 1 secret(s) scrubbed from Read output.\n\n{text}");
-        assert_eq!(out, expected_envelope(&reason, &text));
+        assert_eq!(out, expected_envelope(&reason, &json_string(&text)));
         assert_eq!(counts.get("jwt"), Some(&1));
     }
 
@@ -358,6 +414,7 @@ mod tests {
         let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
         let reason =
             format!("[redacted] 1 secret(s) scrubbed from Read output.\n\nA=1\nT={marker}");
+        // An object, not a string of JSON: Claude Code ignores a replacement of the wrong type.
         let updated = format!(
             r#"{{"file":{{"content":{},"filePath":"/a/.env","numLines":2,"startLine":1}},"type":"text"}}"#,
             json_string(&format!("A=1\nT={marker}"))
@@ -431,10 +488,31 @@ mod tests {
             "{not json",
             r#"{"tool_name":5}"#,
             r#"{"tool_name":"Bash","tool_response":"not-an-object"}"#,
-            r#"{"tool_name":"Bash","tool_response":{"stdout":7}}"#,
         ] {
             assert_eq!(run_hook(payload).0, expected, "{payload}");
         }
+    }
+
+    #[test]
+    fn malformed_bash_fields_are_withheld_but_the_shape_is_kept() {
+        let payload = r#"{"tool_name":"Bash","tool_response":{"stdout":7,"stderr":"leak?"}}"#;
+        let updated = format!(r#"{{"stderr":{},"stdout":7}}"#, json_string(WITHHELD));
+        assert_eq!(run_hook(payload).0, expected_envelope(WITHHELD, &updated));
+    }
+
+    #[test]
+    fn withheld_bash_output_keeps_the_shape_so_raw_output_cannot_slip_through() {
+        // A string replacement is ignored on Bash, so a failure would leak the raw output.
+        let payload = r#"{"tool_name":"Bash","tool_response":{"stdout":"raw","stderr":"","interrupted":false,"isImage":false}}"#;
+        let (out, _) = scrub_payload_or_withhold(payload.as_bytes(), &|_| panic!("boom"));
+        let withheld = json_string(WITHHELD);
+        let updated = format!(
+            r#"{{"interrupted":false,"isImage":false,"stderr":{withheld},"stdout":{withheld}}}"#
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            expected_envelope(WITHHELD, &updated)
+        );
     }
 
     #[test]
@@ -445,6 +523,6 @@ mod tests {
     }
 
     fn withheld_line() -> String {
-        expected_envelope(WITHHELD, WITHHELD)
+        expected_envelope(WITHHELD, &json_string(WITHHELD))
     }
 }

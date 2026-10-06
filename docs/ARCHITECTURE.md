@@ -165,14 +165,15 @@ Before the picker, `init::with_url_passwords` expands the parsed pairs:
 A hit prints one line:
 
 ```json
-{"decision":"block","reason":"[redacted] N secret(s) scrubbed from <command|tool_name> output.\n\n<text>","hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":"<scrubbed output>"}}
+{"decision":"block","reason":"[redacted] N secret(s) scrubbed from <command|tool_name> output.\n\n<text>","hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":<tool_response with its strings scrubbed>}}
 ```
 
-- `updatedToolOutput` replaces the tool result the model reads. For structured responses it is the scrubbed JSON with the same shape.
+- `updatedToolOutput` replaces the tool result the model reads. It mirrors the `tool_response` shape, because Claude Code applies it only when it matches the tool's output schema (a string is ignored on Bash).
+- Bash: the incoming object with `stdout` and `stderr` replaced by their scrubbed text. Other fields (`interrupted`, `isImage`) stay. Other tools: the scrubbed JSON value, or the scrubbed string for a string response.
 - `reason` may summarize: lines holding a marker, prefixed `- `.
 - Key order and escaping match the Go 0.7 encoder: typed `Serialize` structs, U+2028 and U+2029 escaped, trailing newline.
 - No hit: nothing is printed and Claude Code keeps the original output.
-- Fail closed: a parse error, a wrong field type, a scrubber that failed to build, or a panic (`catch_unwind` in `scrub_payload_or_withhold`) prints `withheld_output()`, an envelope whose `reason` and `updatedToolOutput` carry no tool output.
+- Fail closed: a parse error, a wrong field type, a scrubber that failed to build, or a panic (`catch_unwind` in `scrub_payload_or_withhold`) prints `withheld_output(stdin)`, an envelope whose `reason` and `updatedToolOutput` carry no tool output. `updatedToolOutput` mirrors `tool_response` with every string leaf withheld (object keys are kept); unparsable input or no `tool_response` gets the bare `WITHHELD` sentence.
 - `ignore_internal_tools` skips only a `tool_name` that is a string other than `"Bash"`. A missing or bad name is still scrubbed or fails closed.
 - Exit code: always 0 once stdin is read. Only a failed stdin read exits 1.
 - Pre-v2 notice: when the global config exists with no `version`, the first hit in each `session_id` gets `[redacted] config is v1: run `redacted init` to learn your secrets.` above its `reason` (`hook::prepend_reason`). Seen sessions are stored in `notified.txt` next to the stats file.

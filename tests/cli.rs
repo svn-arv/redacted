@@ -81,9 +81,9 @@ fn payload_mode_blocks_and_records_stats() {
     );
     let output = run_redacted(&dir, &["scrub"], &payload);
     assert!(output.status.success());
-    assert!(
-        stdout(&output).contains(r#""updatedToolOutput":"k [REDACTED:aws_access_key ...Q7Q7]""#)
-    );
+    assert!(stdout(&output).contains(
+        r#""updatedToolOutput":{"stderr":"","stdout":"k [REDACTED:aws_access_key ...Q7Q7]"}"#
+    ));
     let stats = fs::read_to_string(dir.join("stats.jsonl")).unwrap();
     assert!(stats.ends_with("\"tool\":\"Bash\",\"by\":{\"aws_access_key\":1}}\n"));
 
@@ -401,7 +401,7 @@ fn v1_config_notice_rides_the_reason_once_per_session() {
         reason(&first).starts_with(&format!("{PRE_V2_NOTICE}\n[redacted] 1 secret(s)")),
         "{first}"
     );
-    let updated = first["hookSpecificOutput"]["updatedToolOutput"]
+    let updated = first["hookSpecificOutput"]["updatedToolOutput"]["stdout"]
         .as_str()
         .unwrap();
     assert!(!updated.contains("config is v1"), "{updated}");
