@@ -3,22 +3,22 @@
 /// Rewrites Go RE2 syntax so it matches the same text under Rust's regex:
 /// Go's \s \d \w \b are ASCII-only (\s without \v), and Go reads `[`, `&&`,
 /// `--`, `~~` inside a class as literals where Rust nests or combines sets.
-pub(super) fn go_regex(expr: &str) -> String {
+pub(super) fn go_to_rust_regex(expr: &str) -> String {
     let mut out = String::with_capacity(expr.len() + 16);
     let mut chars = expr.chars().peekable();
     let mut in_class = false;
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
-                let Some(n) = chars.next() else {
+                let Some(escaped) = chars.next() else {
                     out.push('\\');
                     break;
                 };
-                match translate_escape(n, in_class) {
+                match translate_escape(escaped, in_class) {
                     Some(ascii) => out.push_str(ascii),
                     None => {
                         out.push('\\');
-                        out.push(n);
+                        out.push(escaped);
                     }
                 }
             }
@@ -61,8 +61,8 @@ pub(super) fn go_regex(expr: &str) -> String {
 
 /// The ASCII-only Rust spelling of Go's `\s` `\d` `\w` `\b` (or `\S` `\D` `\W`), given
 /// the letter after the backslash; bare ranges inside `[...]`. None: both read it alike.
-fn translate_escape(n: char, in_class: bool) -> Option<&'static str> {
-    let ascii = match (n, in_class) {
+fn translate_escape(escaped: char, in_class: bool) -> Option<&'static str> {
+    let ascii = match (escaped, in_class) {
         ('s', false) => r"[\t\n\f\r ]",
         ('s', true) => r"\t\n\f\r ",
         ('S', _) => r"[^\t\n\f\r ]",
@@ -85,15 +85,18 @@ mod tests {
     use crate::scrub::tests::{default_scrubber, value_only_marker};
 
     #[test]
-    fn go_perl_classes_stay_ascii() {
+    fn go_shorthand_classes_match_ascii_only() {
         // Go's \b is ASCII-only, so a letter like é before SK is still a boundary.
         let sid = fake_secrets::twilio_sid("SK");
-        let r = default_scrubber().scrub(&format!("é{sid}"));
+        let result = default_scrubber().scrub(&format!("é{sid}"));
         assert_eq!(
-            r.text,
+            result.text,
             format!("é{}", value_only_marker("twilio_api_key", &sid))
         );
         // Go's \s excludes NBSP, so it ends the PEM body match.
-        assert_eq!(go_regex(r"[^\s]\s\b"), r"[^\t\n\f\r ][\t\n\f\r ](?-u:\b)");
+        assert_eq!(
+            go_to_rust_regex(r"[^\s]\s\b"),
+            r"[^\t\n\f\r ][\t\n\f\r ](?-u:\b)"
+        );
     }
 }

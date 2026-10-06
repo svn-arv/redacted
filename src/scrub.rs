@@ -13,7 +13,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::config::{Config, EngineConfig, Heuristic};
-use go_regex::go_regex;
+use go_regex::go_to_rust_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use learned::{learned_value_hint, sha256_hex};
 
@@ -108,7 +108,7 @@ impl ScrubResult {
 }
 
 fn compile_go_regex(expr: &str) -> Result<Regex, String> {
-    Regex::new(&go_regex(expr)).map_err(|e| format!("invalid regex {expr:?}: {e}"))
+    Regex::new(&go_to_rust_regex(expr)).map_err(|e| format!("invalid regex {expr:?}: {e}"))
 }
 
 impl Scrubber {
