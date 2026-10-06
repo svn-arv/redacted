@@ -8,6 +8,8 @@ mod scrub;
 mod settings;
 mod stats;
 
-fn main() {
-    std::process::exit(cli::run());
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    cli::run()
 }

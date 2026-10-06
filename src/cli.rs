@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
@@ -51,14 +52,15 @@ enum Cmd {
     },
 }
 
-/// Runs the CLI and returns the process exit code.
-pub fn run() -> i32 {
+/// Runs the CLI. Commands return `Err(message)` on failure; this is the one
+/// place that prints it and turns it into exit code 1.
+pub fn run() -> ExitCode {
     let cli = Cli::parse();
     if cli.version {
         println!("redacted version {}", env!("CARGO_PKG_VERSION"));
-        return 0;
+        return ExitCode::SUCCESS;
     }
-    match cli.command {
+    let result = match cli.command {
         Some(Cmd::Scrub) => scrub(),
         Some(Cmd::Verify) => verify(),
         Some(Cmd::Stats) => show_stats(),
@@ -66,7 +68,14 @@ pub fn run() -> i32 {
         Some(Cmd::Uninstall { local }) => init::uninstall(local),
         None => {
             let _ = Cli::command().print_help();
-            0
+            Ok(())
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -75,12 +84,13 @@ fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
-fn scrub() -> i32 {
+/// Hook mode always succeeds, so Claude Code never sees a failed hook; only
+/// raw-text mode, run by hand, can fail.
+fn scrub() -> Result<(), String> {
     let mut data = Vec::new();
-    if let Err(e) = io::stdin().read_to_end(&mut data) {
-        eprintln!("scrub: read stdin: {e}");
-        return 1;
-    }
+    io::stdin()
+        .read_to_end(&mut data)
+        .map_err(|e| format!("scrub: read stdin: {e}"))?;
     let payload_mode = looks_like_hook_payload(&data);
     let header: Value = serde_json::from_slice(&data).unwrap_or(Value::Null);
     let field = |k: &str| {
@@ -96,25 +106,19 @@ fn scrub() -> i32 {
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !payload_mode {
-        let scrubber = match scrubber {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("scrub: {e}");
-                return 1;
-            }
-        };
+        let scrubber = scrubber.map_err(|e| format!("scrub: {e}"))?;
         let result = scrubber.scrub(&String::from_utf8_lossy(&data));
         let _ = io::stdout().write_all(result.text.as_bytes());
         if result.redacted() {
             eprintln!("[redacted] {} secret(s) scrubbed", result.count);
         }
-        return 0;
+        return Ok(());
     }
 
     // Only a well-formed non-Bash name skips; anything else goes on to fail closed.
     let named_non_bash = matches!(header.get("tool_name"), Some(Value::String(t)) if t != "Bash");
     if cfg.ignore_internal_tools && named_non_bash {
-        return 0;
+        return Ok(());
     }
     let (mut out, by_pattern) = match scrubber {
         Ok(s) => hook::process_safely(&data, &|t| s.scrub(t)),
@@ -130,7 +134,7 @@ fn scrub() -> i32 {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
     let _ = io::stdout().write_all(&out);
-    0
+    Ok(())
 }
 
 const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
@@ -176,21 +180,11 @@ fn looks_like_hook_payload(data: &[u8]) -> bool {
     }
 }
 
-fn show_stats() -> i32 {
-    let Some(path) = stats::file_path() else {
-        eprintln!("stats: cannot determine home directory");
-        return 1;
-    };
-    match stats::aggregate(&path) {
-        Ok(s) => {
-            print!("{}", stats::render(&s));
-            0
-        }
-        Err(e) => {
-            eprintln!("stats: {e}");
-            1
-        }
-    }
+fn show_stats() -> Result<(), String> {
+    let path = stats::file_path().ok_or("stats: cannot determine home directory".to_string())?;
+    let summary = stats::aggregate(&path).map_err(|e| format!("stats: {e}"))?;
+    print!("{}", stats::render(&summary));
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -216,7 +210,7 @@ fn check(name: &'static str, status: Status, detail: impl Into<String>) -> Check
     }
 }
 
-fn verify() -> i32 {
+fn verify() -> Result<(), String> {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -249,10 +243,9 @@ fn verify() -> i32 {
     }
     println!("\n{passed} passed, {failed} failed");
     if failed > 0 {
-        eprintln!("Error: {failed} check(s) failed");
-        return 1;
+        return Err(format!("Error: {failed} check(s) failed"));
     }
-    0
+    Ok(())
 }
 
 fn check_binary() -> Check {

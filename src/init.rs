@@ -16,18 +16,11 @@ use crate::scrub::{learned_hint, sha256_hex};
 use crate::settings;
 
 /// The only function that prompts; everything it calls is tested without a TTY.
-pub fn run(env: Option<PathBuf>, local: bool) -> i32 {
+pub fn run(env: Option<PathBuf>, local: bool) -> Result<(), String> {
     if !io::stdin().is_terminal() {
-        eprintln!("init needs an interactive terminal");
-        return 1;
+        return Err("init needs an interactive terminal".to_string());
     }
-    match prompt_and_install(env, local) {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("init: {e}");
-            1
-        }
-    }
+    prompt_and_install(env, local).map_err(|e| format!("init: {e}"))
 }
 
 fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
@@ -317,14 +310,16 @@ fn bin_path() -> Result<String, String> {
 
 /// `redacted uninstall`: removes the hook from both settings files (or the local
 /// one only); the global config is kept so a reinstall keeps its learned secrets.
-pub fn uninstall(local: bool) -> i32 {
+/// A file that fails is reported and skipped, so the other one is still cleaned.
+pub fn uninstall(local: bool) -> Result<(), String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut paths = vec![cwd.join(".claude/settings.local.json")];
     if !local {
         paths.insert(0, Path::new(&home).join(".claude/settings.json"));
     }
-    let (mut removed, mut code) = (0, 0);
+    let mut removed = 0;
+    let mut errors = Vec::new();
     for path in paths {
         match settings::remove_hook(&path) {
             Ok(true) => {
@@ -332,20 +327,21 @@ pub fn uninstall(local: bool) -> i32 {
                 removed += 1;
             }
             Ok(false) => {}
-            Err(e) => {
-                eprintln!("uninstall: {e}");
-                code = 1;
-            }
+            Err(e) => errors.push(format!("uninstall: {e}")),
         }
     }
-    if removed == 0 && code == 0 {
+    if removed == 0 && errors.is_empty() {
         println!("No redacted hooks found.");
     }
     let config = Path::new(&home).join(".config/redacted/config.yaml");
     if config.exists() {
         println!("Config kept at {}", config.display());
     }
-    code
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 
 #[cfg(test)]
