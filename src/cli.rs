@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -80,10 +80,6 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn home() -> String {
-    std::env::var("HOME").unwrap_or_default()
-}
-
 /// Hook mode always succeeds, so Claude Code never sees a failed hook; only
 /// raw-text mode, run by hand, can fail.
 fn scrub() -> Result<(), String> {
@@ -101,8 +97,9 @@ fn scrub() -> Result<(), String> {
             .to_string()
     };
     let cwd = field("cwd");
-    let cfg = config::load(&home(), &cwd);
-    let scrubber = Scrubber::new(&cfg, &config::load_engine(&home(), &cwd));
+    let home_dir = config::home();
+    let cfg = config::load(home_dir.as_deref(), &cwd);
+    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir.as_deref(), &cwd));
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !payload_mode {
@@ -123,9 +120,9 @@ fn scrub() -> Result<(), String> {
     record(&field("tool_name"), &by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
     let is_pre_v2_config = cfg.version == 0
-        && Path::new(&home())
-            .join(".config/redacted/config.yaml")
-            .exists();
+        && home_dir
+            .as_deref()
+            .is_some_and(|home| config::global_path(home).exists());
     if is_pre_v2_config && !out.is_empty() && first_notice(&field("session_id")) {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }

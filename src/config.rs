@@ -30,15 +30,22 @@ pub struct Learned {
     pub shape: Option<String>,
 }
 
-/// Opt-in entropy tier; zero thresholds fall back to the built-in defaults.
+/// Opt-in entropy tier. An absent `min_length` means 16; the other thresholds
+/// still read zero as "use the default", like Go 0.7.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct Heuristic {
     pub enabled: bool,
-    pub min_length: usize,
+    pub min_length: Option<usize>,
     pub max_length: usize,
     pub min_char_classes: usize,
     pub min_entropy: f64,
+}
+
+impl Heuristic {
+    pub fn min_length_or_default(&self) -> usize {
+        self.min_length.unwrap_or(16)
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -65,12 +72,25 @@ fn read<T: serde::de::DeserializeOwned>(path: PathBuf) -> Option<T> {
     serde_yaml::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-fn paths(home: &str, cwd: &str, global: &str, project: &str) -> (Option<PathBuf>, Option<PathBuf>) {
-    let g = if home.is_empty() {
-        None
-    } else {
-        Some(Path::new(home).join(".config/redacted").join(global))
-    };
+/// $HOME, or None when it is unset or empty, so no path is built under the cwd.
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+}
+
+/// ~/.config/redacted/config.yaml, the only file that holds learned secrets.
+pub fn global_path(home: &Path) -> PathBuf {
+    home.join(".config/redacted/config.yaml")
+}
+
+fn paths(
+    home: Option<&Path>,
+    cwd: &str,
+    global: &str,
+    project: &str,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let g = home.map(|h| h.join(".config/redacted").join(global));
     let p = if cwd.is_empty() {
         None
     } else {
@@ -81,7 +101,7 @@ fn paths(home: &str, cwd: &str, global: &str, project: &str) -> (Option<PathBuf>
 
 /// Global ~/.config/redacted/config.yaml merged with <cwd>/.redacted.yaml;
 /// a project `override: true` drops the global file. Unreadable files are skipped.
-pub fn load(home: &str, cwd: &str) -> Config {
+pub fn load(home: Option<&Path>, cwd: &str) -> Config {
     let (g, p) = paths(home, cwd, "config.yaml", ".redacted.yaml");
     let global: Option<Config> = g.and_then(read);
     let project: Option<Config> = p.and_then(read);
@@ -121,12 +141,12 @@ pub fn vendor_only(cfg: &Config) -> bool {
 
 /// Learned entries in <cwd>/.redacted.yaml, which `load` ignores; verify warns on them.
 pub fn project_learned_count(cwd: &str) -> usize {
-    let (_, p) = paths("", cwd, "", ".redacted.yaml");
-    p.and_then(read::<Config>).map_or(0, |c| c.learned.len())
+    let project: Option<Config> = read(Path::new(cwd).join(".redacted.yaml"));
+    project.map_or(0, |c| c.learned.len())
 }
 
 /// Global engine.yml merged with <cwd>/.redacted.engine.yml, same override rule.
-pub fn load_engine(home: &str, cwd: &str) -> EngineConfig {
+pub fn load_engine(home: Option<&Path>, cwd: &str) -> EngineConfig {
     let (g, p) = paths(home, cwd, "engine.yml", ".redacted.engine.yml");
     let global: Option<EngineConfig> = g.and_then(read);
     let project: Option<EngineConfig> = p.and_then(read);
@@ -164,9 +184,9 @@ mod tests {
     #[test]
     fn missing_files_give_defaults() {
         let (home, cwd) = dirs("none");
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert!(cfg.whitelist.is_empty() && cfg.allow.is_empty() && !cfg.ignore_internal_tools);
-        assert!(load_engine(s(&home), s(&cwd)).patterns.is_empty());
+        assert!(load_engine(Some(&home), s(&cwd)).patterns.is_empty());
     }
 
     #[test]
@@ -182,7 +202,7 @@ mod tests {
             "allow: [B]\nignore_internal_tools: true\n",
         )
         .unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert_eq!(cfg.whitelist, ["jwt"]);
         assert_eq!(cfg.allow, ["A", "B"]);
         assert!(cfg.ignore_internal_tools);
@@ -197,7 +217,7 @@ mod tests {
         )
         .unwrap();
         fs::write(cwd.join(".redacted.yaml"), "override: true\nallow: [B]\n").unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert!(cfg.whitelist.is_empty());
         assert_eq!(cfg.allow, ["B"]);
     }
@@ -211,7 +231,7 @@ mod tests {
         )
         .unwrap();
         fs::write(cwd.join(".redacted.yaml"), "whitelist: {not: a list}\n").unwrap();
-        assert_eq!(load(s(&home), s(&cwd)).whitelist, ["jwt"]);
+        assert_eq!(load(Some(&home), s(&cwd)).whitelist, ["jwt"]);
     }
 
     #[test]
@@ -222,7 +242,7 @@ mod tests {
             "whitelist: [jwt]\n",
         )
         .unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert_eq!(cfg.version, 0);
         assert!(cfg.learned.is_empty() && !cfg.heuristic.enabled);
         assert_eq!(cfg.whitelist, ["jwt"]);
@@ -234,7 +254,7 @@ mod tests {
     fn v2_global_file_loads_learned_and_heuristic() {
         let (home, cwd) = dirs("v2");
         fs::write(home.join(".config/redacted/config.yaml"), V2).unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert_eq!(cfg.version, 2);
         assert_eq!(
             cfg.learned[0],
@@ -248,10 +268,8 @@ mod tests {
         assert_eq!(cfg.learned[1].shape, None);
         let h = &cfg.heuristic;
         assert!(h.enabled);
-        assert_eq!(
-            (h.min_length, h.max_length, h.min_char_classes),
-            (20, 64, 2)
-        );
+        assert_eq!(h.min_length, Some(20));
+        assert_eq!((h.max_length, h.min_char_classes), (64, 2));
         assert_eq!(h.min_entropy, 3.0);
     }
 
@@ -262,7 +280,7 @@ mod tests {
         fs::write(home.join(".config/redacted/config.yaml"), V2).unwrap();
         let project = "learned: [{name: leak, sha256: ff, len: 2}]\nheuristic: {enabled: false}\n";
         fs::write(cwd.join(".redacted.yaml"), project).unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         let names: Vec<_> = cfg.learned.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["stripe_key", "db_pass"]);
         assert!(cfg.heuristic.enabled);
@@ -273,12 +291,12 @@ mod tests {
             format!("override: true\n{project}"),
         )
         .unwrap();
-        let cfg = load(s(&home), s(&cwd));
+        let cfg = load(Some(&home), s(&cwd));
         assert_eq!(cfg.learned.len(), 2);
         assert!(cfg.heuristic.enabled);
 
         fs::remove_file(home.join(".config/redacted/config.yaml")).unwrap();
-        assert!(load(s(&home), s(&cwd)).learned.is_empty());
+        assert!(load(Some(&home), s(&cwd)).learned.is_empty());
     }
 
     #[test]
@@ -306,7 +324,7 @@ mod tests {
         let (home, cwd) = dirs("engine-v1");
         let old = "heuristic:\n  min_length: 16\n  min_entropy: 3.5\nkeywords:\n  - MONGO\nvalue_safe_char: '[^\\s]'\nallow_values: ['^svc_']\npatterns:\n  - {name: g, regex: 'g_x'}\n";
         fs::write(home.join(".config/redacted/engine.yml"), old).unwrap();
-        let eng = load_engine(s(&home), s(&cwd));
+        let eng = load_engine(Some(&home), s(&cwd));
         assert_eq!(eng.patterns.len(), 1);
         assert_eq!(eng.allow_values, ["^svc_"]);
         let scrubber = crate::scrub::Scrubber::new(&Config::default(), &eng).unwrap();
@@ -326,7 +344,7 @@ mod tests {
             "allow_values: ['^ok']\npatterns: [{name: p, regex: 'p_x'}]\n",
         )
         .unwrap();
-        let eng = load_engine(s(&home), s(&cwd));
+        let eng = load_engine(Some(&home), s(&cwd));
         let names: Vec<_> = eng.patterns.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["g", "p"]);
         assert_eq!(eng.allow_values, ["^ok"]);
@@ -336,6 +354,6 @@ mod tests {
             "override: true\npatterns: [{name: p, regex: 'p_x'}]\n",
         )
         .unwrap();
-        assert_eq!(load_engine(s(&home), s(&cwd)).patterns.len(), 1);
+        assert_eq!(load_engine(Some(&home), s(&cwd)).patterns.len(), 1);
     }
 }

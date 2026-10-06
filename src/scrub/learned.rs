@@ -107,11 +107,12 @@ fn replace_spans(result: &mut ScrubResult, spans: Vec<(usize, usize, &str)>) {
             out.push_str(&format!("[REDACTED:{name} ...{hint}]"));
         }
         last = end;
-        *result.by_pattern.entry(name.to_string()).or_default() += 1;
     }
     out.push_str(&text[last..]);
-    result.count += spans.len();
     result.text = out;
+    for (_, _, name) in spans {
+        result.add(name, 1);
+    }
 }
 
 #[cfg(test)]

@@ -376,6 +376,37 @@ fn v1_config_notice_rides_the_reason_once_per_session() {
 }
 
 #[test]
+fn an_empty_home_never_reads_config_under_the_working_directory() {
+    // HOME="" once turned ~/.config/redacted/config.yaml into a path under the cwd.
+    let dir = sandbox("no-home");
+    fs::create_dir_all(dir.join("proj/.config/redacted")).unwrap();
+    fs::write(
+        dir.join("proj/.config/redacted/config.yaml"),
+        "allow: [FOO]\n",
+    )
+    .unwrap();
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_response": {"stdout": format!("k {}", aws_key()), "stderr": ""},
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_redacted"))
+        .arg("scrub")
+        .current_dir(dir.join("proj"))
+        .env("HOME", "")
+        .env("REDACTED_STATS_FILE", dir.join("stats.jsonl"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(payload.to_string().as_bytes()).unwrap();
+    drop(stdin);
+    let out: serde_json::Value =
+        serde_json::from_slice(&child.wait_with_output().unwrap().stdout).unwrap();
+    assert!(reason(&out).starts_with("[redacted] 1 secret(s)"), "{out}");
+}
+
+#[test]
 fn v2_config_or_no_config_never_carries_the_notice() {
     let dir = sandbox("v2-notice");
     let hit = format!("k {}", aws_key());

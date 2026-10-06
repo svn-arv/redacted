@@ -46,15 +46,17 @@ fn check(name: &'static str, status: Status, detail: impl Into<String>) -> Check
 
 /// `redacted verify`: prints one line per check and fails if any check failed.
 pub fn run() -> Result<(), String> {
-    let home_dir = std::env::var("HOME").unwrap_or_default();
+    let home_dir = config::home();
+    // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
+    let home_dir = home_dir.as_deref();
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    let cfg = config::load(&home_dir, &cwd);
-    let eng = config::load_engine(&home_dir, &cwd);
+    let cfg = config::load(home_dir, &cwd);
+    let eng = config::load_engine(home_dir, &cwd);
     let mut checks = vec![check_binary()];
-    checks.extend(check_hooks(&home_dir, &cwd));
-    checks.push(check_config(&home_dir, &cwd, &cfg, &eng));
+    checks.extend(check_hooks(home_dir, &cwd));
+    checks.push(check_config(home_dir, &cwd, &cfg, &eng));
     checks.push(check_patterns(&cfg, &eng));
     checks.push(check_scrub());
     checks.extend(check_learned(&cwd, &cfg));
@@ -87,10 +89,16 @@ fn check_binary() -> Check {
     }
 }
 
-fn check_hooks(home_dir: &str, cwd: &str) -> Vec<Check> {
-    let global_path = Path::new(home_dir).join(".claude/settings.json");
+fn check_hooks(home_dir: Option<&Path>, cwd: &str) -> Vec<Check> {
+    let mut global = match home_dir {
+        Some(home) => check_settings_file(&home.join(".claude/settings.json"), "global hook"),
+        None => check(
+            "global hook",
+            Status::Fail,
+            "cannot determine home directory",
+        ),
+    };
     let local_path = Path::new(cwd).join(".claude/settings.local.json");
-    let mut global = check_settings_file(&global_path, "global hook");
     let mut local = check_settings_file(&local_path, "local hook");
 
     // One registration is enough; the missing other is a skip, not a failure.
@@ -157,27 +165,31 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
     check(label, Status::Pass, shown.to_string())
 }
 
-fn check_config(home_dir: &str, cwd: &str, cfg: &Config, eng: &EngineConfig) -> Check {
+fn check_config(home_dir: Option<&Path>, cwd: &str, cfg: &Config, eng: &EngineConfig) -> Check {
+    // The global paths are None without a HOME.
     let files = [
+        ("global config", home_dir.map(config::global_path)),
         (
-            "global config",
-            Path::new(home_dir).join(".config/redacted/config.yaml"),
+            "project config",
+            Some(Path::new(cwd).join(".redacted.yaml")),
         ),
-        ("project config", Path::new(cwd).join(".redacted.yaml")),
         (
             "global engine",
-            Path::new(home_dir).join(".config/redacted/engine.yml"),
+            home_dir.map(|h| h.join(".config/redacted/engine.yml")),
         ),
         (
             "project engine",
-            Path::new(cwd).join(".redacted.engine.yml"),
+            Some(Path::new(cwd).join(".redacted.engine.yml")),
         ),
     ];
-    let sources: Vec<&str> = files
-        .iter()
-        .filter(|(_, p)| p.exists())
-        .map(|(label, _)| *label)
-        .collect();
+    let mut sources = Vec::new();
+    for (label, path) in &files {
+        if let Some(path) = path {
+            if path.exists() {
+                sources.push(*label);
+            }
+        }
+    }
     if sources.is_empty() {
         return check(
             "config files",

@@ -59,7 +59,7 @@ impl Scrubber {
         let v = String::from_utf8_lossy(&decoded);
         let h = &self.thresholds;
         let len = v.chars().count();
-        (h.min_length..=h.max_length).contains(&len)
+        (h.min_length_or_default()..=h.max_length).contains(&len)
             && char_classes(&v) >= h.min_char_classes
             && shannon_entropy(&v) >= h.min_entropy
     }

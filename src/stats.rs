@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 struct Event {
     t: String,
     tool: String,
-    by: BTreeMap<String, i64>,
+    by: BTreeMap<String, u64>,
 }
 
 /// Best-effort append: every error is swallowed so stats can never break the hook.
@@ -33,7 +33,7 @@ pub fn record(path: &Path, tool: &str, by_pattern: &BTreeMap<String, usize>) {
         tool: tool.to_string(),
         by: by_pattern
             .iter()
-            .map(|(k, &v)| (k.clone(), v as i64))
+            .map(|(k, &v)| (k.clone(), v as u64))
             .collect(),
     };
     let Ok(mut line) = serde_json::to_string(&event) else {
@@ -55,9 +55,9 @@ pub fn record(path: &Path, tool: &str, by_pattern: &BTreeMap<String, usize>) {
 
 #[derive(Debug, Default)]
 pub struct Summary {
-    pub events: i64,
-    pub total: i64,
-    pub by_pattern: BTreeMap<String, i64>,
+    pub events: u64,
+    pub total: u64,
+    pub by_pattern: BTreeMap<String, u64>,
 }
 
 /// A missing file is an empty summary; malformed lines are skipped.
@@ -123,8 +123,8 @@ pub fn file_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("REDACTED_STATS_FILE").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
-    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(home).join(".config/redacted/stats.jsonl"))
+    let home = crate::config::home()?;
+    Some(home.join(".config/redacted/stats.jsonl"))
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use inquire::{Confirm, MultiSelect, Select};
 
-use crate::config::Learned;
+use crate::config::{self, Learned};
 use crate::scrub::{learned_hint, sha256_hex};
 use crate::settings;
 
@@ -25,7 +25,7 @@ pub fn run(env: Option<PathBuf>, local: bool) -> Result<(), String> {
 }
 
 fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot determine home directory".to_string())?;
+    let home = config::home().ok_or("cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
     let env = match env {
@@ -54,7 +54,7 @@ fn pick_env_file(cwd: &Path) -> Result<Option<PathBuf>, String> {
 
 /// Lets the user tick the secrets in `path`, shows the merged global config and
 /// writes it only after a confirm.
-fn learn_from_env(path: &Path, home: &str) -> Result<(), String> {
+fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     let text = fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let pairs = parse_dotenv(&text);
     if pairs.is_empty() {
@@ -78,7 +78,7 @@ fn learn_from_env(path: &Path, home: &str) -> Result<(), String> {
         .iter()
         .filter_map(|o| entries[o.index].clone().ok())
         .collect();
-    let config_path = Path::new(home).join(".config/redacted/config.yaml");
+    let config_path = config::global_path(home);
     let existing = match fs::read_to_string(&config_path) {
         Ok(s) => s,
         Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -105,12 +105,12 @@ fn learn_from_env(path: &Path, home: &str) -> Result<(), String> {
 
 /// Registers the hook globally or for this project, then warns when only the
 /// vendor tier would be active.
-fn install(local: bool, cwd: &Path, home: &str) -> Result<(), String> {
+fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
     let bin = bin_path()?;
     let settings_path = if local {
         cwd.join(".claude/settings.local.json")
     } else {
-        Path::new(home).join(".claude/settings.json")
+        home.join(".claude/settings.json")
     };
     settings::install_hook(&settings_path, &bin)?;
     let scope = if local { "local" } else { "global" };
@@ -120,8 +120,8 @@ fn install(local: bool, cwd: &Path, home: &str) -> Result<(), String> {
     );
     println!("Binary: {bin} scrub");
     // Judged on the written config, so a re-run with no .env does not warn a user who has entries.
-    if crate::config::vendor_only(&crate::config::load(home, "")) {
-        println!("\nNotice: {}", crate::config::VENDOR_ONLY_NOTICE);
+    if config::vendor_only(&config::load(Some(home), "")) {
+        println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
     Ok(())
 }
@@ -322,12 +322,16 @@ fn bin_path() -> Result<String, String> {
 /// one only); the global config is kept so a reinstall keeps its learned secrets.
 /// A file that fails is reported and skipped, so the other one is still cleaned.
 pub fn uninstall(local: bool) -> Result<(), String> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = config::home();
     let cwd = std::env::current_dir().unwrap_or_default();
-    let mut paths = vec![cwd.join(".claude/settings.local.json")];
+    let mut paths = Vec::new();
+    // Without a HOME there is no global file, only the local one.
     if !local {
-        paths.insert(0, Path::new(&home).join(".claude/settings.json"));
+        if let Some(home) = &home {
+            paths.push(home.join(".claude/settings.json"));
+        }
     }
+    paths.push(cwd.join(".claude/settings.local.json"));
     let mut removed = 0;
     let mut errors = Vec::new();
     for path in paths {
@@ -343,9 +347,11 @@ pub fn uninstall(local: bool) -> Result<(), String> {
     if removed == 0 && errors.is_empty() {
         println!("No redacted hooks found.");
     }
-    let config = Path::new(&home).join(".config/redacted/config.yaml");
-    if config.exists() {
-        println!("Config kept at {}", config.display());
+    if let Some(home) = &home {
+        let config_path = config::global_path(home);
+        if config_path.exists() {
+            println!("Config kept at {}", config_path.display());
+        }
     }
     if errors.is_empty() {
         Ok(())

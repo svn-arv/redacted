@@ -50,6 +50,20 @@ struct Pattern {
     is_heuristic: bool,
 }
 
+impl Pattern {
+    /// No key handling and no prefilters, as user patterns from engine.yml run.
+    fn plain(name: String, regex: Regex) -> Self {
+        Pattern {
+            name,
+            regex,
+            includes_key: false,
+            prefilters: Vec::new(),
+            prefilters_fold: Vec::new(),
+            is_heuristic: false,
+        }
+    }
+}
+
 pub struct Scrubber {
     patterns: Vec<Pattern>,
     whitelist: HashSet<String>,
@@ -75,6 +89,17 @@ impl ScrubResult {
     pub fn redacted(&self) -> bool {
         self.count > 0
     }
+
+    /// Counts `n` hits for `name`; zero adds nothing, so a pattern that never
+    /// matched stays out of `by_pattern`.
+    fn add(&mut self, name: &str, n: usize) {
+        if n == 0 {
+            return;
+        }
+        // entry() finds or inserts the key; or_default() starts a new count at 0.
+        *self.by_pattern.entry(name.to_string()).or_default() += n;
+        self.count += n;
+    }
 }
 
 fn compile(expr: &str) -> Result<Regex, String> {
@@ -97,14 +122,7 @@ impl Scrubber {
             });
         }
         for p in &eng.patterns {
-            patterns.push(Pattern {
-                name: p.name.clone(),
-                regex: compile(&p.regex)?,
-                includes_key: false,
-                prefilters: Vec::new(),
-                prefilters_fold: Vec::new(),
-                is_heuristic: false,
-            });
+            patterns.push(Pattern::plain(p.name.clone(), compile(&p.regex)?));
         }
         let allow_values = engine
             .allow_values
@@ -114,16 +132,14 @@ impl Scrubber {
             .collect::<Result<_, _>>()?;
         let thresholds = with_defaults(&cfg.heuristic);
         let heuristic = if thresholds.enabled {
+            let regex = compile(&heuristic_regex(
+                thresholds.min_length_or_default(),
+                &engine.value_safe_char,
+            ))?;
             Some(Pattern {
-                name: "secret_value".into(),
-                regex: compile(&heuristic_regex(
-                    thresholds.min_length,
-                    &engine.value_safe_char,
-                ))?,
                 includes_key: true,
-                prefilters: Vec::new(),
-                prefilters_fold: Vec::new(),
                 is_heuristic: true,
+                ..Pattern::plain("secret_value".into(), regex)
             })
         } else {
             None
@@ -180,18 +196,12 @@ impl Scrubber {
                 }
             }
             let n = self.apply_pattern(p, &mut result.text);
-            if n > 0 {
-                *result.by_pattern.entry(p.name.clone()).or_default() += n;
-                result.count += n;
-            }
+            result.add(&p.name, n);
         }
         self.scrub_learned(&mut result);
         if let Some(p) = &self.heuristic {
             let n = self.apply_pattern(p, &mut result.text);
-            if n > 0 {
-                *result.by_pattern.entry(p.name.clone()).or_default() += n;
-                result.count += n;
-            }
+            result.add(&p.name, n);
         }
         result
     }
@@ -234,12 +244,13 @@ fn tail(s: &str, n: usize) -> &str {
     }
 }
 
-/// Zero thresholds take the engine.yml defaults, like Go.
+/// Zero thresholds take the engine.yml defaults, like Go 0.7; `min_length`
+/// resolves its own default.
 fn with_defaults(h: &Heuristic) -> Heuristic {
     let or = |v: usize, d: usize| if v == 0 { d } else { v };
     Heuristic {
         enabled: h.enabled,
-        min_length: or(h.min_length, 16),
+        min_length: h.min_length,
         max_length: or(h.max_length, 128),
         min_char_classes: or(h.min_char_classes, MIN_CHAR_CLASSES),
         min_entropy: if h.min_entropy == 0.0 {
@@ -514,7 +525,7 @@ mod tests {
     #[test]
     fn heuristic_thresholds_come_from_config() {
         let strict = crate::config::Heuristic {
-            min_length: 50,
+            min_length: Some(50),
             ..heuristic_on()
         };
         assert_eq!(
@@ -524,10 +535,14 @@ mod tests {
         let short = "GADGET=aB3xK9pQ7mZ2";
         assert_eq!(with_heuristic(heuristic_on()).scrub(short).text, short);
         let loose = crate::config::Heuristic {
-            min_length: 10,
+            min_length: Some(10),
             ..heuristic_on()
         };
         assert!(with_heuristic(loose).scrub(short).redacted());
+        // Only an absent min_length takes the default; an explicit 0 is honored.
+        let zero: crate::config::Heuristic =
+            serde_yaml::from_str("{enabled: true, min_length: 0}").unwrap();
+        assert!(with_heuristic(zero).scrub(short).redacted());
     }
 
     #[test]
