@@ -297,7 +297,10 @@ mod tests {
     }
 
     pub(super) fn value_only_marker(name: &str, secret: &str) -> String {
-        format!("[REDACTED:{name} ...{}]", fake_secrets::hint(secret))
+        format!(
+            "[REDACTED:{name} ...{}]",
+            fake_secrets::last_four_chars(secret)
+        )
     }
 
     /// One engine.yml pattern: an input, its exact expected output, and the
@@ -414,7 +417,7 @@ mod tests {
             let expected = format!(
                 "{key}{} [REDACTED ...{}]",
                 sep.trim_end(),
-                fake_secrets::hint(&value)
+                fake_secrets::last_four_chars(&value)
             );
             cases.push(PatternCase {
                 name,

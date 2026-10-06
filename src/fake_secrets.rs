@@ -11,14 +11,14 @@ const BASE64URL: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 // Each test thread gets its own PRNG state; `Cell` allows updating it through
 // the shared reference `with` hands out.
 thread_local! {
-    static STATE: Cell<u64> = Cell::new(
+    static PRNG_STATE: Cell<u64> = Cell::new(
         SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1,
     );
 }
 
 // xorshift64*: enough randomness for fixtures, no crate needed.
-fn next() -> u64 {
-    STATE.with(|s| {
+fn next_random() -> u64 {
+    PRNG_STATE.with(|s| {
         let mut x = s.get();
         x ^= x >> 12;
         x ^= x << 25;
@@ -28,35 +28,35 @@ fn next() -> u64 {
     })
 }
 
-fn from_charset(charset: &str, n: usize) -> String {
-    let b = charset.as_bytes();
+fn random_from_charset(charset: &str, n: usize) -> String {
+    let charset_bytes = charset.as_bytes();
     (0..n)
-        .map(|_| b[(next() % b.len() as u64) as usize] as char)
+        .map(|_| charset_bytes[(next_random() % charset_bytes.len() as u64) as usize] as char)
         .collect()
 }
 
 pub fn alnum(n: usize) -> String {
-    from_charset(ALNUM, n)
+    random_from_charset(ALNUM, n)
 }
 
 pub fn hex(n: usize) -> String {
-    from_charset("0123456789abcdef", n)
+    random_from_charset("0123456789abcdef", n)
 }
 
 pub fn digits(n: usize) -> String {
-    from_charset("0123456789", n)
+    random_from_charset("0123456789", n)
 }
 
 pub fn upper_alnum(n: usize) -> String {
-    from_charset(UPPER_ALNUM, n)
+    random_from_charset(UPPER_ALNUM, n)
 }
 
 pub fn base64url(n: usize) -> String {
-    from_charset(BASE64URL, n)
+    random_from_charset(BASE64URL, n)
 }
 
-pub fn hint(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
+pub fn last_four_chars(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     chars[chars.len().saturating_sub(4)..].iter().collect()
 }
 

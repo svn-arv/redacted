@@ -290,7 +290,10 @@ mod tests {
     #[test]
     fn bash_hit_emits_the_envelope_and_counts() {
         let key = fake_secrets::aws_access_key();
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
+        let marker = format!(
+            "[REDACTED:aws_access_key ...{}]",
+            fake_secrets::last_four_chars(&key)
+        );
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"k {key}","stderr":"","exitCode":0}}}}"#
         );
@@ -307,7 +310,10 @@ mod tests {
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"{key}","stderr":"warning: retrying once"}}}}"#
         );
         let (out, _) = run_hook(&payload);
-        let marker = format!("[REDACTED:npm_token ...{}]", fake_secrets::hint(&key));
+        let marker = format!(
+            "[REDACTED:npm_token ...{}]",
+            fake_secrets::last_four_chars(&key)
+        );
         let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\n{marker}");
         let updated = format!("{marker}\n[stderr]\nwarning: retrying once");
         assert_eq!(out, expected_envelope(&reason, &updated));
@@ -335,7 +341,7 @@ mod tests {
         let (out, counts) = run_hook(&payload);
         let text = format!(
             "line1\ntoken [REDACTED:jwt ...{}]",
-            fake_secrets::hint(&key)
+            fake_secrets::last_four_chars(&key)
         );
         let reason = format!("[redacted] 1 secret(s) scrubbed from Read output.\n\n{text}");
         assert_eq!(out, expected_envelope(&reason, &text));
@@ -349,7 +355,7 @@ mod tests {
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/.env","content":"A=1\nT={key}","numLines":2,"startLine":1}}}}}}"#
         );
         let (out, _) = run_hook(&payload);
-        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::hint(&key));
+        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
         let reason =
             format!("[redacted] 1 secret(s) scrubbed from Read output.\n\nA=1\nT={marker}");
         let updated = format!(
@@ -366,7 +372,7 @@ mod tests {
             "{{\"tool_name\":\"Grep\",\"tool_response\":{{\"mode\":\"content\",\"numLines\":2.50,\"content\":\"<a>&b\u{2028}\\nx {key}\",\"filenames\":[\"a.txt\",null,true]}}}}"
         );
         let (out, _) = run_hook(&payload);
-        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::hint(&key));
+        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
         let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- x {marker}");
         // Go escapes U+2028 even with HTML escaping off, and keeps number literals verbatim.
         let content =
@@ -385,7 +391,10 @@ mod tests {
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/{key}.txt","content":"clean"}}}}}}"#
         );
         let (out, counts) = run_hook(&payload);
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
+        let marker = format!(
+            "[REDACTED:aws_access_key ...{}]",
+            fake_secrets::last_four_chars(&key)
+        );
         let reason = "[redacted] 1 secret(s) scrubbed from Read output.\n\nclean";
         let updated = format!(
             r#"{{"file":{{"content":"clean","filePath":{}}},"type":"text"}}"#,
@@ -402,7 +411,10 @@ mod tests {
             r#"{{"tool_name":"Grep","tool_response":{{"counts":{{"{key}":1}},"mode":"count"}}}}"#
         );
         let (out, _) = run_hook(&payload);
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
+        let marker = format!(
+            "[REDACTED:aws_access_key ...{}]",
+            fake_secrets::last_four_chars(&key)
+        );
         let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- {marker}");
         let updated = format!(
             r#"{{"counts":{{{}:1}},"mode":"count"}}"#,
