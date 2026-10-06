@@ -107,11 +107,7 @@ fn scrub() -> Result<(), String> {
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !payload_mode {
         let scrubber = scrubber.map_err(|e| format!("scrub: {e}"))?;
-        let result = scrubber.scrub(&String::from_utf8_lossy(&data));
-        let _ = io::stdout().write_all(result.text.as_bytes());
-        if result.redacted() {
-            eprintln!("[redacted] {} secret(s) scrubbed", result.count);
-        }
+        scrub_raw_text(&data, &scrubber);
         return Ok(());
     }
 
@@ -135,6 +131,15 @@ fn scrub() -> Result<(), String> {
     }
     let _ = io::stdout().write_all(&out);
     Ok(())
+}
+
+/// Prints the scrubbed text, and the hit count on stderr, for a person testing by hand.
+fn scrub_raw_text(data: &[u8], scrubber: &Scrubber) {
+    let result = scrubber.scrub(&String::from_utf8_lossy(data));
+    let _ = io::stdout().write_all(result.text.as_bytes());
+    if result.redacted() {
+        eprintln!("[redacted] {} secret(s) scrubbed", result.count);
+    }
 }
 
 const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";

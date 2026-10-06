@@ -15,7 +15,8 @@ use crate::config::Learned;
 use crate::scrub::{learned_hint, sha256_hex};
 use crate::settings;
 
-/// The only function that prompts; everything it calls is tested without a TTY.
+/// Prompting happens only here and in the steps below; every function they call
+/// is tested without a TTY.
 pub fn run(env: Option<PathBuf>, local: bool) -> Result<(), String> {
     if !io::stdin().is_terminal() {
         return Err("init needs an interactive terminal".to_string());
@@ -28,79 +29,88 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
     let env = match env {
-        Some(p) => Some(p),
-        None => {
-            let mut files = find_env_files(&cwd);
-            match files.len() {
-                0 => None,
-                1 => files.pop(),
-                _ => {
-                    let names: Vec<String> =
-                        files.iter().map(|p| p.display().to_string()).collect();
-                    let pick = Select::new("Which env file?", names)
-                        .raw_prompt()
-                        .map_err(|e| e.to_string())?;
-                    Some(files.swap_remove(pick.index))
-                }
-            }
-        }
+        Some(path) => Some(path),
+        None => pick_env_file(&cwd)?,
     };
-
-    if let Some(path) = env {
-        let text =
-            fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-        let pairs = parse_dotenv(&text);
-        let entries: Vec<_> = pairs.iter().map(|(k, v)| learn(k, v)).collect();
-        let rows: Vec<String> = pairs
-            .iter()
-            .zip(&entries)
-            .map(|((k, v), l)| row(k, v, l))
-            .collect();
-        if !rows.is_empty() {
-            let defaults: Vec<usize> = (0..rows.len())
-                .filter(|&i| entries[i].is_ok() && preselect(&pairs[i].1))
-                .collect();
-            let picked = MultiSelect::new("Secrets to learn:", rows)
-                .with_default(&defaults)
-                .raw_prompt()
-                .map_err(|e| e.to_string())?;
-            // Ticked rows that cannot be learned are skipped, not written.
-            let chosen: Vec<Learned> = picked
-                .iter()
-                .filter_map(|o| entries[o.index].clone().ok())
-                .collect();
-            let config_path = Path::new(&home).join(".config/redacted/config.yaml");
-            let existing = match fs::read_to_string(&config_path) {
-                Ok(s) => s,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(format!("reading {}: {e}", config_path.display())),
-            };
-            let merged = merge_config(&existing, &chosen)?;
-            println!("\n{} will contain:\n\n{merged}", config_path.display());
-            let ok = Confirm::new("Write it?")
-                .with_default(false)
-                .prompt()
-                .map_err(|e| e.to_string())?;
-            if !ok {
-                return Err("nothing written".into());
-            }
-            write_config(&config_path, &merged)
-                .map_err(|e| format!("writing {}: {e}", config_path.display()))?;
-            println!(
-                "Learned {} secret(s) in {}",
-                chosen.len(),
-                config_path.display()
-            );
-        }
-    } else {
-        println!("No .env file found; installing the hook only.");
+    match env {
+        Some(path) => learn_from_env(&path, &home)?,
+        None => println!("No .env file found; installing the hook only."),
     }
+    install(local, &cwd, &home)
+}
 
+/// The only `.env*` file in `cwd`, or the user's pick when there are several.
+fn pick_env_file(cwd: &Path) -> Result<Option<PathBuf>, String> {
+    let mut files = find_env_files(cwd);
+    if files.len() <= 1 {
+        return Ok(files.pop());
+    }
+    let names: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+    let pick = Select::new("Which env file?", names)
+        .raw_prompt()
+        .map_err(|e| e.to_string())?;
+    Ok(Some(files.swap_remove(pick.index)))
+}
+
+/// Lets the user tick the secrets in `path`, shows the merged global config and
+/// writes it only after a confirm.
+fn learn_from_env(path: &Path, home: &str) -> Result<(), String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let pairs = parse_dotenv(&text);
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let entries: Vec<_> = pairs.iter().map(|(k, v)| learn(k, v)).collect();
+    let rows: Vec<String> = pairs
+        .iter()
+        .zip(&entries)
+        .map(|((k, v), l)| row(k, v, l))
+        .collect();
+    let defaults: Vec<usize> = (0..rows.len())
+        .filter(|&i| entries[i].is_ok() && preselect(&pairs[i].1))
+        .collect();
+    let picked = MultiSelect::new("Secrets to learn:", rows)
+        .with_default(&defaults)
+        .raw_prompt()
+        .map_err(|e| e.to_string())?;
+    // Ticked rows that cannot be learned are skipped, not written.
+    let chosen: Vec<Learned> = picked
+        .iter()
+        .filter_map(|o| entries[o.index].clone().ok())
+        .collect();
+    let config_path = Path::new(home).join(".config/redacted/config.yaml");
+    let existing = match fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("reading {}: {e}", config_path.display())),
+    };
+    let merged = merge_config(&existing, &chosen)?;
+    println!("\n{} will contain:\n\n{merged}", config_path.display());
+    let ok = Confirm::new("Write it?")
+        .with_default(false)
+        .prompt()
+        .map_err(|e| e.to_string())?;
+    if !ok {
+        return Err("nothing written".into());
+    }
+    write_config(&config_path, &merged)
+        .map_err(|e| format!("writing {}: {e}", config_path.display()))?;
+    println!(
+        "Learned {} secret(s) in {}",
+        chosen.len(),
+        config_path.display()
+    );
+    Ok(())
+}
+
+/// Registers the hook globally or for this project, then warns when only the
+/// vendor tier would be active.
+fn install(local: bool, cwd: &Path, home: &str) -> Result<(), String> {
     let bin = bin_path()?;
     let settings_path = if local {
         cwd.join(".claude/settings.local.json")
     } else {
-        Path::new(&home).join(".claude/settings.json")
+        Path::new(home).join(".claude/settings.json")
     };
     settings::install_hook(&settings_path, &bin)?;
     let scope = if local { "local" } else { "global" };
@@ -110,7 +120,7 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
     );
     println!("Binary: {bin} scrub");
     // Judged on the written config, so a re-run with no .env does not warn a user who has entries.
-    if crate::config::vendor_only(&crate::config::load(&home, "")) {
+    if crate::config::vendor_only(&crate::config::load(home, "")) {
         println!("\nNotice: {}", crate::config::VENDOR_ONLY_NOTICE);
     }
     Ok(())
