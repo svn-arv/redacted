@@ -325,11 +325,13 @@ fn bin_path() -> Result<String, String> {
 /// A file that fails is reported and skipped, so the other one is still cleaned.
 pub fn uninstall(local: bool) -> Result<(), String> {
     let home = config::home();
+    // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
+    let home = home.as_deref();
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut paths = Vec::new();
     // Without a HOME there is no global file, only the local one.
     if !local {
-        if let Some(home) = &home {
+        if let Some(home) = home {
             paths.push(home.join(".claude/settings.json"));
         }
     }
@@ -349,7 +351,7 @@ pub fn uninstall(local: bool) -> Result<(), String> {
     if removed == 0 && errors.is_empty() {
         println!("No redacted hooks found.");
     }
-    if let Some(home) = &home {
+    if let Some(home) = home {
         let config_path = config::global_path(home);
         if config_path.exists() {
             println!("Config kept at {}", config_path.display());

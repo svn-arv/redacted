@@ -104,8 +104,10 @@ fn scrub() -> Result<(), String> {
         .filter(|c| !c.is_empty())
         .map(Path::new);
     let home_dir = config::home();
-    let cfg = config::load(home_dir.as_deref(), cwd);
-    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir.as_deref(), cwd));
+    // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
+    let home_dir = home_dir.as_deref();
+    let cfg = config::load(home_dir, cwd);
+    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir, cwd));
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !payload_mode {
@@ -125,10 +127,8 @@ fn scrub() -> Result<(), String> {
     };
     record(&field("tool_name"), &by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
-    let is_pre_v2_config = cfg.version == 0
-        && home_dir
-            .as_deref()
-            .is_some_and(|home| config::global_path(home).exists());
+    let is_pre_v2_config =
+        cfg.version == 0 && home_dir.is_some_and(|home| config::global_path(home).exists());
     if is_pre_v2_config && !out.is_empty() && first_notice(&field("session_id")) {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
