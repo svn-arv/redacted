@@ -4,8 +4,8 @@
 // Child modules add `impl Scrubber` blocks and read its private fields; what this
 // file calls from them (and the shared test helpers) is marked `pub(super)`.
 mod go_regex;
+mod guards;
 mod learned;
-mod skip;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -269,14 +269,14 @@ fn heuristic_regex(min_length: usize, safe_char: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake;
+    use crate::fake_secrets;
 
     pub(super) fn default_scrubber() -> Scrubber {
         Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap()
     }
 
     pub(super) fn value_only(name: &str, secret: &str) -> String {
-        format!("[REDACTED:{name} ...{}]", fake::hint(secret))
+        format!("[REDACTED:{name} ...{}]", fake_secrets::hint(secret))
     }
 
     /// One engine.yml pattern: an input, its exact expected output, and the
@@ -298,57 +298,94 @@ mod tests {
                 secret,
             });
         };
-        bare("aws_access_key", fake::aws_access_key());
-        bare("github_fine_grained", fake::github_fine_grained());
-        bare("github_token", fake::github_token("ghp_"));
-        bare("github_oauth", fake::github_token("gho_"));
-        bare("github_refresh", fake::github_token("ghr_"));
-        bare("stripe_live", fake::stripe_key("sk_live_"));
-        bare("stripe_test", fake::stripe_key("pk_test_"));
-        bare("twilio_api_key", fake::twilio_sid("SK"));
-        bare("twilio_account_sid", fake::twilio_sid("AC"));
-        bare("digitalocean_token", fake::digitalocean_token());
-        bare("sentry_dsn", fake::sentry_dsn());
-        bare("slack_token", fake::slack_token("xoxb"));
-        bare("sendgrid_key", fake::sendgrid_key());
-        bare("hubspot_key", fake::hubspot_pat("na1"));
-        bare("private_key", fake::private_key("RSA "));
-        bare("private_key_truncated", fake::private_key_truncated(""));
-        bare("jwt", fake::jwt());
-        bare("anthropic_key", format!("sk-ant-{}", fake::alnum(90)));
-        bare("circleci_token", format!("CCIPAT_{}", fake::alnum(30)));
-        bare("sentry_user_token", format!("sntryu_{}", fake::alnum(40)));
-        bare("rubygems_key", format!("rubygems_{}", fake::alnum(30)));
-        bare("newrelic_key", format!("NRAK-{}", fake::alnum(27)));
-        bare("openai_key", format!("sk-proj-{}", fake::alnum(48)));
-        bare("openai_classic_key", format!("sk-{}", fake::alnum(48)));
-        bare("google_api_key", format!("AIza{}", fake::base64url(35)));
-        bare("google_api_key_v2", format!("AQ.{}", fake::base64url(50)));
+        bare("aws_access_key", fake_secrets::aws_access_key());
+        bare("github_fine_grained", fake_secrets::github_fine_grained());
+        bare("github_token", fake_secrets::github_token("ghp_"));
+        bare("github_oauth", fake_secrets::github_token("gho_"));
+        bare("github_refresh", fake_secrets::github_token("ghr_"));
+        bare("stripe_live", fake_secrets::stripe_key("sk_live_"));
+        bare("stripe_test", fake_secrets::stripe_key("pk_test_"));
+        bare("twilio_api_key", fake_secrets::twilio_sid("SK"));
+        bare("twilio_account_sid", fake_secrets::twilio_sid("AC"));
+        bare("digitalocean_token", fake_secrets::digitalocean_token());
+        bare("sentry_dsn", fake_secrets::sentry_dsn());
+        bare("slack_token", fake_secrets::slack_token("xoxb"));
+        bare("sendgrid_key", fake_secrets::sendgrid_key());
+        bare("hubspot_key", fake_secrets::hubspot_pat("na1"));
+        bare("private_key", fake_secrets::private_key("RSA "));
+        bare(
+            "private_key_truncated",
+            fake_secrets::private_key_truncated(""),
+        );
+        bare("jwt", fake_secrets::jwt());
+        bare(
+            "anthropic_key",
+            format!("sk-ant-{}", fake_secrets::alnum(90)),
+        );
+        bare(
+            "circleci_token",
+            format!("CCIPAT_{}", fake_secrets::alnum(30)),
+        );
+        bare(
+            "sentry_user_token",
+            format!("sntryu_{}", fake_secrets::alnum(40)),
+        );
+        bare(
+            "rubygems_key",
+            format!("rubygems_{}", fake_secrets::alnum(30)),
+        );
+        bare("newrelic_key", format!("NRAK-{}", fake_secrets::alnum(27)));
+        bare("openai_key", format!("sk-proj-{}", fake_secrets::alnum(48)));
+        bare(
+            "openai_classic_key",
+            format!("sk-{}", fake_secrets::alnum(48)),
+        );
+        bare(
+            "google_api_key",
+            format!("AIza{}", fake_secrets::base64url(35)),
+        );
+        bare(
+            "google_api_key_v2",
+            format!("AQ.{}", fake_secrets::base64url(50)),
+        );
         bare(
             "stripe_webhook_secret",
-            format!("whsec_{}", fake::alnum(32)),
+            format!("whsec_{}", fake_secrets::alnum(32)),
         );
-        bare("huggingface_token", format!("hf_{}", fake::alnum(34)));
-        bare("groq_key", format!("gsk_{}", fake::alnum(52)));
-        bare("openrouter_key", format!("sk-or-v1-{}", fake::hex(64)));
-        bare("xai_key", format!("xai-{}", fake::alnum(80)));
-        bare("perplexity_key", format!("pplx-{}", fake::alnum(48)));
-        bare("tavily_key", format!("tvly-{}", fake::alnum(32)));
+        bare(
+            "huggingface_token",
+            format!("hf_{}", fake_secrets::alnum(34)),
+        );
+        bare("groq_key", format!("gsk_{}", fake_secrets::alnum(52)));
+        bare(
+            "openrouter_key",
+            format!("sk-or-v1-{}", fake_secrets::hex(64)),
+        );
+        bare("xai_key", format!("xai-{}", fake_secrets::alnum(80)));
+        bare(
+            "perplexity_key",
+            format!("pplx-{}", fake_secrets::alnum(48)),
+        );
+        bare("tavily_key", format!("tvly-{}", fake_secrets::alnum(32)));
         bare(
             "langsmith_key",
-            format!("lsv2_pt_{}_{}", fake::alnum(32), fake::alnum(10)),
+            format!(
+                "lsv2_pt_{}_{}",
+                fake_secrets::alnum(32),
+                fake_secrets::alnum(10)
+            ),
         );
-        bare("gitlab_pat", format!("glpat-{}", fake::alnum(20)));
-        bare("npm_token", fake::npm_token());
-        bare("slack_webhook", fake::slack_webhook());
-        bare("pypi_token", format!("pypi-{}", fake::alnum(60)));
+        bare("gitlab_pat", format!("glpat-{}", fake_secrets::alnum(20)));
+        bare("npm_token", fake_secrets::npm_token());
+        bare("slack_webhook", fake_secrets::slack_webhook());
+        bare("pypi_token", format!("pypi-{}", fake_secrets::alnum(60)));
         bare(
             "database_url",
-            fake::database_url("postgres", "db.example.com"),
+            fake_secrets::database_url("postgres", "db.example.com"),
         );
         bare(
             "credentialed_url",
-            fake::database_url("postgis", "db.example.com"),
+            fake_secrets::database_url("postgis", "db.example.com"),
         );
 
         // includes_key patterns keep the key and separator and drop the label.
@@ -356,7 +393,7 @@ mod tests {
             let want = format!(
                 "{key}{} [REDACTED ...{}]",
                 sep.trim_end(),
-                fake::hint(&value)
+                fake_secrets::hint(&value)
             );
             rows.push(Row {
                 name,
@@ -369,27 +406,27 @@ mod tests {
             "aws_secret_key",
             "aws_secret_access_key",
             "=",
-            fake::aws_secret_key(),
+            fake_secrets::aws_secret_key(),
         );
         keyed(
             "digitalocean_spaces",
             "SPACES_SECRET_KEY",
             "=",
-            fake::digitalocean_spaces_value(),
+            fake_secrets::digitalocean_spaces_value(),
         );
         keyed(
             "gcp_sa_key_id",
             r#""private_key_id""#,
             ": ",
-            format!("\"{}\"", fake::hex(40)),
+            format!("\"{}\"", fake_secrets::hex(40)),
         );
         keyed(
             "auth_header",
             "Authorization",
             ": ",
-            format!("Bearer {}", fake::alnum(32)),
+            format!("Bearer {}", fake_secrets::alnum(32)),
         );
-        let gcp = fake::gcp_private_key_field();
+        let gcp = fake_secrets::gcp_private_key_field();
         let value = gcp.trim_start_matches(r#""private_key": "#).to_string();
         keyed("gcp_sa_private_key", r#""private_key""#, ": ", value);
         rows
@@ -442,7 +479,7 @@ mod tests {
             whitelist: vec!["aws_access_key".into()],
             ..Default::default()
         };
-        let key = fake::aws_access_key();
+        let key = fake_secrets::aws_access_key();
         let r = Scrubber::new(&cfg, &EngineConfig::default())
             .unwrap()
             .scrub(&key);
@@ -455,7 +492,7 @@ mod tests {
             allow: vec!["aws_secret_access_key".into()],
             ..Default::default()
         };
-        let input = format!("AWS_SECRET_ACCESS_KEY={}", fake::aws_secret_key());
+        let input = format!("AWS_SECRET_ACCESS_KEY={}", fake_secrets::aws_secret_key());
         let r = Scrubber::new(&cfg, &EngineConfig::default())
             .unwrap()
             .scrub(&input);
@@ -594,19 +631,19 @@ mod tests {
     /// Learned entries derived the way `init` derives them, from synthetic values:
     /// one exact-only, one custom-prefix shape (all three classes, so the band is stable).
     fn learned_corpus_scrubber() -> (Scrubber, String, String) {
-        let exact = fake::alnum(24);
-        let shaped = format!("acme_{}aZ9", fake::alnum(27));
+        let exact = fake_secrets::alnum(24);
+        let shaped = format!("acme_{}aZ9", fake_secrets::alnum(27));
         let entries = vec![
             crate::init::learn("DB_PASS", &exact).unwrap(),
             crate::init::learn("ACME_KEY", &shaped).unwrap(),
-            crate::init::learn("STRIPE_KEY", &fake::stripe_key("sk_live_")).unwrap(),
-            crate::init::learn("GH_TOKEN", &fake::github_token("ghp_")).unwrap(),
-            crate::init::learn("SLACK_TOKEN", &fake::slack_token("xoxb")).unwrap(),
-            crate::init::learn("HUBSPOT_KEY", &fake::hubspot_pat("na1")).unwrap(),
-            crate::init::learn("AWS_KEY", &fake::aws_access_key()).unwrap(),
+            crate::init::learn("STRIPE_KEY", &fake_secrets::stripe_key("sk_live_")).unwrap(),
+            crate::init::learn("GH_TOKEN", &fake_secrets::github_token("ghp_")).unwrap(),
+            crate::init::learn("SLACK_TOKEN", &fake_secrets::slack_token("xoxb")).unwrap(),
+            crate::init::learn("HUBSPOT_KEY", &fake_secrets::hubspot_pat("na1")).unwrap(),
+            crate::init::learn("AWS_KEY", &fake_secrets::aws_access_key()).unwrap(),
             crate::init::learn(
                 "DATABASE_URL",
-                &fake::database_url("postgres", "db.example.com"),
+                &fake_secrets::database_url("postgres", "db.example.com"),
             )
             .unwrap(),
         ];
@@ -631,7 +668,7 @@ mod tests {
     fn corpus_recall_learned_exact_and_shape_including_a_rotated_key() {
         let (s, exact, shaped) = learned_corpus_scrubber();
         // Rotated: same prefix, 3 characters longer than the sample.
-        let rotated = format!("acme_{}", fake::alnum(33));
+        let rotated = format!("acme_{}", fake_secrets::alnum(33));
         for (name, data) in clean_corpus() {
             let planted = format!("{data}\nDB_PASS={exact}\nkey: {shaped}\nnew {rotated}\n");
             let r = s.scrub(&planted);

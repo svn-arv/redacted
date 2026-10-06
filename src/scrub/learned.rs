@@ -118,7 +118,7 @@ fn replace_spans(result: &mut ScrubResult, spans: Vec<(usize, usize, &str)>) {
 mod tests {
     use super::*;
     use crate::config::{Config, EngineConfig};
-    use crate::fake;
+    use crate::fake_secrets;
     use crate::scrub::tests::{value_only, with_learned};
 
     fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::Learned {
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn learned_exact_value_is_redacted_as_a_token_or_assignment_value() {
-        let v = fake::alnum(24);
+        let v = fake_secrets::alnum(24);
         let s = with_learned(vec![learned("db_pass", &v, None)]);
         let marker = value_only("db_pass", &v);
         for (input, want) in [
@@ -149,7 +149,7 @@ mod tests {
             assert_eq!(r.by_pattern.get("db_pass"), Some(&1));
         }
         // A different value of the same length, or the value inside a longer token, is not it.
-        let other = fake::alnum(24);
+        let other = fake_secrets::alnum(24);
         assert_eq!(s.scrub(&other).text, other);
         let longer = format!("{v}x");
         assert_eq!(s.scrub(&longer).text, longer);
@@ -225,10 +225,10 @@ mod tests {
 
     #[test]
     fn learned_shape_catches_a_rotated_value_and_wins_over_exact() {
-        let v = format!("acme_{}", fake::alnum(24));
+        let v = format!("acme_{}", fake_secrets::alnum(24));
         let shape = r"\bacme_[a-zA-Z0-9]{20,28}\b";
         let s = with_learned(vec![learned("acme_key", &v, Some(shape))]);
-        let rotated = format!("acme_{}", fake::alnum(27));
+        let rotated = format!("acme_{}", fake_secrets::alnum(27));
         let r = s.scrub(&format!("{v} {rotated}"));
         assert_eq!(
             r.text,

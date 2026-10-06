@@ -30,7 +30,7 @@ pub struct Learned {
     pub shape: Option<String>,
 }
 
-// Built-in heuristic thresholds. The includes_key guards in scrub/skip.rs use
+// Built-in heuristic thresholds. The includes_key guards in scrub/guards.rs use
 // MIN_CHAR_CLASSES and MIN_ENTROPY as fixed values on purpose, whatever the
 // config says, to tell a random segment from an identifier.
 pub const MIN_LENGTH: usize = 16;

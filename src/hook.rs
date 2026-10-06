@@ -252,7 +252,7 @@ fn to_go_json<T: Serialize>(v: &T) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::config::{Config, EngineConfig};
-    use crate::fake;
+    use crate::fake_secrets;
     use crate::scrub::Scrubber;
 
     fn run(payload: &str) -> (String, BTreeMap<String, usize>) {
@@ -275,8 +275,8 @@ mod tests {
 
     #[test]
     fn bash_hit_emits_the_envelope_and_counts() {
-        let key = fake::aws_access_key();
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
+        let key = fake_secrets::aws_access_key();
+        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"k {key}","stderr":"","exitCode":0}}}}"#
         );
@@ -288,12 +288,12 @@ mod tests {
 
     #[test]
     fn bash_replacement_keeps_clean_stderr_but_reason_does_not() {
-        let key = fake::npm_token();
+        let key = fake_secrets::npm_token();
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"{key}","stderr":"warning: retrying once"}}}}"#
         );
         let (out, _) = run(&payload);
-        let marker = format!("[REDACTED:npm_token ...{}]", fake::hint(&key));
+        let marker = format!("[REDACTED:npm_token ...{}]", fake_secrets::hint(&key));
         let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\n{marker}");
         let updated = format!("{marker}\n[stderr]\nwarning: retrying once");
         assert_eq!(out, envelope(&reason, &updated));
@@ -312,10 +312,13 @@ mod tests {
 
     #[test]
     fn read_string_response_replaces_with_bare_text() {
-        let key = fake::jwt();
+        let key = fake_secrets::jwt();
         let payload = format!(r#"{{"tool_name":"Read","tool_response":"line1\ntoken {key}"}}"#);
         let (out, counts) = run(&payload);
-        let text = format!("line1\ntoken [REDACTED:jwt ...{}]", fake::hint(&key));
+        let text = format!(
+            "line1\ntoken [REDACTED:jwt ...{}]",
+            fake_secrets::hint(&key)
+        );
         let reason = format!("[redacted] 1 secret(s) scrubbed from Read output.\n\n{text}");
         assert_eq!(out, envelope(&reason, &text));
         assert_eq!(counts.get("jwt"), Some(&1));
@@ -323,12 +326,12 @@ mod tests {
 
     #[test]
     fn read_file_envelope_reason_is_full_content_and_shape_is_kept() {
-        let key = fake::jwt();
+        let key = fake_secrets::jwt();
         let payload = format!(
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/.env","content":"A=1\nT={key}","numLines":2,"startLine":1}}}}}}"#
         );
         let (out, _) = run(&payload);
-        let marker = format!("[REDACTED:jwt ...{}]", fake::hint(&key));
+        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::hint(&key));
         let reason =
             format!("[redacted] 1 secret(s) scrubbed from Read output.\n\nA=1\nT={marker}");
         let updated = format!(
@@ -340,12 +343,12 @@ mod tests {
 
     #[test]
     fn grep_structured_reason_summarizes_and_replacement_keeps_shape() {
-        let key = fake::jwt();
+        let key = fake_secrets::jwt();
         let payload = format!(
             "{{\"tool_name\":\"Grep\",\"tool_response\":{{\"mode\":\"content\",\"numLines\":2.50,\"content\":\"<a>&b\u{2028}\\nx {key}\",\"filenames\":[\"a.txt\",null,true]}}}}"
         );
         let (out, _) = run(&payload);
-        let marker = format!("[REDACTED:jwt ...{}]", fake::hint(&key));
+        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::hint(&key));
         let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- x {marker}");
         // Go escapes U+2028 even with HTML escaping off, and keeps number literals verbatim.
         let content = json(&format!("<a>&b\u{2028}\nx {marker}")).replace('\u{2028}', "\\u2028");
@@ -358,12 +361,12 @@ mod tests {
 
     #[test]
     fn read_file_envelope_secret_outside_content_is_redacted() {
-        let key = fake::aws_access_key();
+        let key = fake_secrets::aws_access_key();
         let payload = format!(
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/{key}.txt","content":"clean"}}}}}}"#
         );
         let (out, counts) = run(&payload);
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
+        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
         let reason = "[redacted] 1 secret(s) scrubbed from Read output.\n\nclean";
         let updated = format!(
             r#"{{"file":{{"content":"clean","filePath":{}}},"type":"text"}}"#,
@@ -375,12 +378,12 @@ mod tests {
 
     #[test]
     fn object_keys_are_scrubbed_in_the_replacement() {
-        let key = fake::aws_access_key();
+        let key = fake_secrets::aws_access_key();
         let payload = format!(
             r#"{{"tool_name":"Grep","tool_response":{{"counts":{{"{key}":1}},"mode":"count"}}}}"#
         );
         let (out, _) = run(&payload);
-        let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
+        let marker = format!("[REDACTED:aws_access_key ...{}]", fake_secrets::hint(&key));
         let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- {marker}");
         let updated = format!(r#"{{"counts":{{{}:1}},"mode":"count"}}"#, json(&marker));
         assert_eq!(out, envelope(&reason, &updated));

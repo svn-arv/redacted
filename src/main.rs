@@ -4,7 +4,7 @@
 mod cli;
 mod config;
 #[cfg(test)]
-mod fake;
+mod fake_secrets;
 mod hook;
 mod init;
 mod scrub;
