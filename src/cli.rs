@@ -122,8 +122,8 @@ fn scrub() -> Result<(), String> {
         return Ok(());
     }
     let (mut out, by_pattern) = match scrubber {
-        Ok(s) => hook::process_safely(&data, &|t| s.scrub(t)),
-        Err(_) => (hook::withheld(), BTreeMap::new()),
+        Ok(s) => hook::scrub_payload_or_withhold(&data, &|t| s.scrub(t)),
+        Err(_) => (hook::withheld_output(), BTreeMap::new()),
     };
     record(&field("tool_name"), &by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
