@@ -41,7 +41,7 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/svn-arv/redacted"
-    description: "Hook that redacts secrets from Bash tool output"
+    description: "Claude Code PostToolUse hook that scrubs secrets from tool output"
     license: "MIT"
     install: |
       bin.install "redacted"
