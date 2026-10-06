@@ -11,47 +11,8 @@
 # or expression boundary in source code.
 value_safe_char: '[^\s\[\]()@,;"''`{}<>\\]'
 
-# Thresholds for the secret_value catch-all: redact a KEY=value whose value looks
-# like a random credential, even when the key is not a known keyword below.
-heuristic:
-  min_length: 16 # ignore values shorter than this
-  max_length: 128 # ignore values longer than this (likely a blob, not a key)
-  min_char_classes: 3 # require lower + upper + digit together (excludes UUIDs, hashes)
-  min_entropy: 3.5 # minimum Shannon entropy, bits per character
-
-# Keywords used to build the env_secret and yaml_secret catch-all patterns.
-# Any env variable whose name contains one of these words gets its value redacted.
-keywords:
-  - SECRET
-  - TOKEN
-  - PASSWORD
-  - API_KEY
-  - APIKEY
-  - CREDENTIAL
-  - PRIVATE_KEY
-  - ACCESS_KEY
-  - ENCRYPTION_KEY
-  - SIGNING_KEY
-  - LICENSE_KEY
-  - CLIENT_ID
-  - DB_PASS
-  # PASSWD and MYSQL_PWD, not a bare PWD: the keyword prefix is optional, so
-  # `PWD` alone would redact the working directory in every shell env dump.
-  - PASSWD
-  - MYSQL_PWD
-  - CONNECTION_STRING
-  - DB_URL
-  - DATABASE_URL
-  - REDIS_URL
-  - DSN
-  - SID
-  - ACCOUNT_ID
-  - AUTH_KEY
-  - MASTER_KEY
-  - SERVICE_KEY
-
 # Value-shape allow-list: a candidate whose VALUE (key=value) or whole MATCH
-# (value-only) matches one of these is never redacted. Complements `keywords`.
+# (value-only) matches one of these is never redacted.
 allow_values:
   # Anthropic transcript ids (toolu_/msg_/req_) — identifiers, not credentials.
   - '^(toolu|msg|req)_[A-Za-z0-9_]+$'
@@ -263,8 +224,7 @@ patterns:
     regex: 'pypi-[A-Za-z0-9_-]{50,}'
     prefilters: ['pypi-']
 
-  # Opaque Authorization headers: the keyword tier stops its value at the space
-  # after the scheme, so only JWTs survive via their own pattern. Runs after jwt
+  # Opaque Authorization headers (bearer/basic/token schemes). Runs after jwt
   # so a bearer JWT keeps the more specific label.
   - name: auth_header
     regex: '(?i)\b(proxy-)?authorization[ \t]*:[ \t]*(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}'
