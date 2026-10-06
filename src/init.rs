@@ -12,7 +12,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use inquire::{Confirm, MultiSelect, Select};
 
 use crate::config::{self, LearnedSecret};
-use crate::scrub::{learned_value_hint, sha256_hex};
+use crate::scrub::{learned_value_hint, percent_decode, sha256_hex};
 use crate::settings;
 
 /// Prompting happens only here and in the steps below; every function they call
@@ -56,7 +56,7 @@ fn pick_env_file(cwd: &Path) -> Result<Option<PathBuf>, String> {
 /// writes it only after a confirm.
 fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     let text = fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-    let pairs = parse_dotenv(&text);
+    let pairs = with_url_passwords(parse_dotenv(&text));
     if pairs.is_empty() {
         return Ok(());
     }
@@ -220,6 +220,35 @@ fn derive_shape(sample: &str) -> Option<String> {
         rest_len.saturating_sub(4).max(1),
         rest_len + 4
     ))
+}
+
+/// The password in `scheme://user:password@host`, percent-decoded.
+fn url_password(value: &str) -> Option<String> {
+    let (_, after_scheme) = value.split_once("://")?;
+    let authority_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    // The last `@` ends the userinfo, so an unencoded `@` in the password stays in it.
+    let (userinfo, _) = after_scheme[..authority_end].rsplit_once('@')?;
+    let (_, password) = userinfo.split_once(':')?;
+    if password.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8(percent_decode(password)).unwrap_or_else(|_| password.to_string()))
+}
+
+/// Each pair, followed by a `<KEY>_PASSWORD` pair when its value is a URL with a password.
+fn with_url_passwords(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (key, value) in pairs {
+        let password = url_password(&value);
+        let password_key = format!("{key}_PASSWORD");
+        out.push((key, value));
+        if let Some(password) = password {
+            out.push((password_key, password));
+        }
+    }
+    out
 }
 
 /// Err is the reason the value cannot be learned, shown in the picker.
@@ -438,6 +467,59 @@ mod tests {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn url_password_reads_the_password_from_the_userinfo() {
+        for (value, want) in [
+            (
+                "postgres://admin:Tr0ub4dor-99@db.example.com/prod",
+                Some("Tr0ub4dor-99"),
+            ),
+            ("postgres://db.example.com:5432/prod", None),
+            ("postgres://admin@db.example.com/prod", None),
+            ("postgres://admin:@db.example.com/prod", None),
+            ("redis://:P%40ss%2Fw0rd@cache:6379", Some("P@ss/w0rd")),
+            ("postgres://admin:p@ss@db.example.com/prod", Some("p@ss")),
+            ("postgres://host:5432?opt=a@b", None),
+            ("not a url user:pw@host", None),
+            ("sk_live_Ab1Ab1Ab1", None),
+        ] {
+            assert_eq!(url_password(value).as_deref(), want, "{value}");
+        }
+    }
+
+    #[test]
+    fn url_password_keeps_an_encoding_that_is_not_utf8() {
+        assert_eq!(
+            url_password("postgres://u:Pw%FFxyz12@h/db").as_deref(),
+            Some("Pw%FFxyz12")
+        );
+    }
+
+    #[test]
+    fn with_url_passwords_puts_the_password_right_after_its_url() {
+        let pairs: Vec<(String, String)> = [
+            ("DATABASE_URL", "postgres://admin:Tr0ub4dor-99@db/prod"),
+            ("PORT", "3000"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let keys: Vec<String> = with_url_passwords(pairs.clone())
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "DATABASE_URL=postgres://admin:Tr0ub4dor-99@db/prod",
+                "DATABASE_URL_PASSWORD=Tr0ub4dor-99",
+                "PORT=3000",
+            ]
+        );
+        let learned = learn("DATABASE_URL_PASSWORD", "Tr0ub4dor-99").unwrap();
+        assert_eq!(learned.name, "database_url_password");
     }
 
     #[test]

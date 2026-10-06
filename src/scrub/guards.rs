@@ -140,7 +140,7 @@ fn is_id_key(key: &str) -> bool {
 }
 
 /// Each %XX becomes its byte; a malformed `%` stays literal and `+` is never a space.
-fn percent_decode(encoded: &str) -> Vec<u8> {
+pub fn percent_decode(encoded: &str) -> Vec<u8> {
     let bytes = encoded.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
