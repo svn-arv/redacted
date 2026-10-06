@@ -137,20 +137,7 @@ impl Scrubber {
             .chain(&eng.allow_values)
             .map(|e| compile(e))
             .collect::<Result<_, _>>()?;
-        let thresholds = cfg.heuristic.clone();
-        let heuristic = if thresholds.enabled {
-            let regex = compile(&heuristic_regex(
-                thresholds.min_length,
-                &engine.value_safe_char,
-            ))?;
-            Some(Pattern {
-                includes_key: true,
-                is_heuristic: true,
-                ..Pattern::plain("secret_value".into(), regex)
-            })
-        } else {
-            None
-        };
+        let heuristic = compile_heuristic(&cfg.heuristic, &engine.value_safe_char)?;
         let mut shapes = Vec::new();
         for l in &cfg.learned {
             if let Some(shape) = &l.shape {
@@ -172,7 +159,7 @@ impl Scrubber {
             safe_run: compile(&format!("{}+", engine.value_safe_char))?,
             word_run: compile(r"[^ \t\n\x0C\r]+")?,
             heuristic,
-            thresholds,
+            thresholds: cfg.heuristic.clone(),
         })
     }
 
@@ -238,8 +225,9 @@ impl Scrubber {
 fn redact(name: &str, m: &str, includes_key: bool) -> String {
     if includes_key {
         if let Some(i) = m.find(['=', ':']) {
+            let sep = &m[i..=i];
             let value = m[i + 1..].trim_start_matches([' ', '\t']);
-            return format!("{}{} [REDACTED ...{}]", &m[..i], &m[i..=i], tail(value, 4));
+            return format!("{}{sep} [REDACTED ...{}]", &m[..i], tail(value, 4));
         }
     }
     format!("[REDACTED:{name} ...{}]", tail(m, 4))
@@ -250,6 +238,19 @@ fn tail(s: &str, n: usize) -> &str {
         Some((i, _)) => &s[i..],
         None => s,
     }
+}
+
+/// The opt-in entropy pattern, or None while the heuristic is off.
+fn compile_heuristic(h: &Heuristic, safe_char: &str) -> Result<Option<Pattern>, String> {
+    if !h.enabled {
+        return Ok(None);
+    }
+    let regex = compile(&heuristic_regex(h.min_length, safe_char))?;
+    Ok(Some(Pattern {
+        includes_key: true,
+        is_heuristic: true,
+        ..Pattern::plain("secret_value".into(), regex)
+    }))
 }
 
 /// KEY=value with a value of min_length+ chars that can't start with `/`, so a
