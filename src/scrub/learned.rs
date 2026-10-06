@@ -200,7 +200,12 @@ mod tests {
             assert_eq!(r.text, want);
             assert_eq!(r.count, 1);
         }
-        // A quoted value that ends in a strip character keeps it.
+    }
+
+    #[test]
+    fn quoted_value_ending_in_paren_keeps_the_paren() {
+        // Peeling trailing punctuation after the quotes would drop the `)`, so the
+        // quote-only stage must stay a candidate.
         let v = "Pa55w0rd(x)";
         let s = with_learned(vec![learned("db_password", v, None)]);
         let r = s.scrub(&format!("KEY=\"{v}\""));

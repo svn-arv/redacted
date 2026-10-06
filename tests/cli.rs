@@ -171,7 +171,7 @@ fn deeply_nested_payload_is_withheld_not_treated_as_text() {
 }
 
 #[test]
-fn version_matches_cobra_format() {
+fn version_flag_prints_the_cargo_version() {
     let dir = sandbox("version");
     let o = run(&dir, &["--version"], "");
     // The release tag must match Cargo.toml; v1.0.0 is the Rust cutover.

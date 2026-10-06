@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn bash_replacement_keeps_clean_stderr_but_reason_does_not() {
-        let key = fake::npm_token_like();
+        let key = fake::npm_token();
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"{key}","stderr":"warning: retrying once"}}}}"#
         );

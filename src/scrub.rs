@@ -287,12 +287,24 @@ mod tests {
         format!("[REDACTED:{name} ...{}]", fake::hint(secret))
     }
 
-    /// (pattern, input, exact expected output). One row per engine.yml pattern.
-    fn builtin_rows() -> Vec<(&'static str, String, String)> {
+    /// One engine.yml pattern: an input, its exact expected output, and the
+    /// secret part that must not survive.
+    struct Row {
+        name: &'static str,
+        input: String,
+        want: String,
+        secret: String,
+    }
+
+    fn builtin_rows() -> Vec<Row> {
         let mut rows = Vec::new();
         let mut bare = |name: &'static str, secret: String| {
-            let want = value_only(name, &secret);
-            rows.push((name, secret, want));
+            rows.push(Row {
+                name,
+                input: secret.clone(),
+                want: value_only(name, &secret),
+                secret,
+            });
         };
         bare("aws_access_key", fake::aws_access_key());
         bare("github_fine_grained", fake::github_fine_grained());
@@ -335,7 +347,7 @@ mod tests {
             format!("lsv2_pt_{}_{}", fake::alnum(32), fake::alnum(10)),
         );
         bare("gitlab_pat", format!("glpat-{}", fake::alnum(20)));
-        bare("npm_token", format!("npm_{}", fake::alnum(36)));
+        bare("npm_token", fake::npm_token());
         bare("slack_webhook", fake::slack_webhook());
         bare("pypi_token", format!("pypi-{}", fake::alnum(60)));
         bare(
@@ -354,7 +366,12 @@ mod tests {
                 sep.trim_end(),
                 fake::hint(&value)
             );
-            rows.push((name, format!("{key}{sep}{value}"), want));
+            rows.push(Row {
+                name,
+                input: format!("{key}{sep}{value}"),
+                want,
+                secret: value,
+            });
         };
         keyed(
             "aws_secret_key",
@@ -389,7 +406,11 @@ mod tests {
     #[test]
     fn builtin_patterns_redact_with_label_and_hint() {
         let s = default_scrubber();
-        for (name, input, want) in builtin_rows() {
+        // Destructuring in the loop header names the fields; `..` skips the rest.
+        for Row {
+            name, input, want, ..
+        } in builtin_rows()
+        {
             let r = s.scrub(&input);
             assert_eq!(r.text, want, "{name}: wrong redaction");
             assert_eq!(r.count, 1, "{name}: count");
@@ -411,7 +432,7 @@ mod tests {
             .iter()
             .map(|p| p["name"].as_str().unwrap().to_string())
             .collect();
-        let mut in_rows: Vec<String> = builtin_rows().iter().map(|r| r.0.to_string()).collect();
+        let mut in_rows: Vec<String> = builtin_rows().iter().map(|r| r.name.to_string()).collect();
         in_yml.sort();
         in_rows.sort();
         assert_eq!(in_rows, in_yml);
@@ -562,21 +583,12 @@ mod tests {
     fn corpus_recall_every_secret_redacted_in_every_file() {
         let s = default_scrubber();
         for (name, data) in clean_corpus() {
-            for (pattern, input, _) in builtin_rows() {
-                let planted = format!("{data}\n{input}\n");
+            for row in builtin_rows() {
+                let planted = format!("{data}\n{}\n", row.input);
                 let r = s.scrub(&planted);
-                let secret = input.split_once([':', '=']).map_or(&input[..], |kv| {
-                    if pattern_is_keyed(pattern) {
-                        kv.1
-                    } else {
-                        &input[..]
-                    }
-                });
+                let pattern = row.name;
                 assert!(r.redacted(), "{pattern} missed in {name}");
-                assert!(
-                    !r.text.contains(secret.trim()),
-                    "{pattern} leaked in {name}"
-                );
+                assert!(!r.text.contains(&row.secret), "{pattern} leaked in {name}");
             }
         }
     }
@@ -631,17 +643,6 @@ mod tests {
                 assert!(!r.text.contains(secret.as_str()), "leaked in {name}");
             }
         }
-    }
-
-    fn pattern_is_keyed(name: &str) -> bool {
-        matches!(
-            name,
-            "aws_secret_key"
-                | "digitalocean_spaces"
-                | "gcp_sa_key_id"
-                | "auth_header"
-                | "gcp_sa_private_key"
-        )
     }
 
     fn clean_corpus() -> Vec<(String, String)> {

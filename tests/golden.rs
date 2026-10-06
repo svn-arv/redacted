@@ -75,17 +75,13 @@ fn scrub(bin: &Path, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (out.stdout, out.stderr)
 }
 
-fn golden(path: &Path, ext: &str) -> PathBuf {
-    path.with_extension(ext)
-}
-
 #[test]
 fn raw_mode_matches_committed_goldens() {
     let rust = Path::new(env!("CARGO_BIN_EXE_redacted"));
     for path in fixtures() {
         let (stdout, stderr) = scrub(rust, &expand(&path));
-        let want_out = fs::read(golden(&path, "golden")).unwrap();
-        let want_err = fs::read(golden(&path, "stderr.golden")).unwrap();
+        let want_out = fs::read(path.with_extension("golden")).unwrap();
+        let want_err = fs::read(path.with_extension("stderr.golden")).unwrap();
         assert!(
             stdout == want_out,
             "stdout differs from golden for {}",

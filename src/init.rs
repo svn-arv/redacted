@@ -375,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_shape_table() {
+    fn derive_shape_needs_a_short_separated_prefix() {
         let stripe = format!("sk_live_{}", "Ab1".repeat(8));
         let gh = format!("ghp_{}", "aB3".repeat(12));
         let slack = format!("xoxb-{}-{}", "1".repeat(12), "2".repeat(12));
@@ -557,6 +557,11 @@ mod tests {
         assert!(merge_config("", &[added])
             .unwrap()
             .starts_with("version: 2\n"));
+    }
+
+    #[test]
+    fn merge_config_rejects_a_non_mapping() {
+        // Rewriting a list or scalar as a mapping would drop what the user wrote.
         assert!(merge_config("[not, a, map]", &[]).is_err());
     }
 

@@ -166,6 +166,6 @@ pub fn gcp_private_key_field() -> String {
     )
 }
 
-pub fn npm_token_like() -> String {
+pub fn npm_token() -> String {
     format!("npm_{}", alnum(36))
 }
