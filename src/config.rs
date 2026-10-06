@@ -47,18 +47,12 @@ pub struct CustomPattern {
     pub regex: String,
 }
 
-/// `keywords`, `heuristic` and `value_safe_char` are still parsed so old
-/// files load, but the tiers that used them are gone.
+/// A Go 0.7 engine.yml still loads: serde skips its retired `keywords`,
+/// `heuristic` and `value_safe_char` keys like any other unknown key.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct EngineConfig {
     pub r#override: bool,
-    #[allow(dead_code)]
-    pub value_safe_char: String,
-    #[allow(dead_code)]
-    pub heuristic: serde_yaml::Value,
-    #[allow(dead_code)]
-    pub keywords: Vec<String>,
     pub allow_values: Vec<String>,
     pub patterns: Vec<CustomPattern>,
 }
@@ -136,7 +130,6 @@ pub fn load_engine(home: &str, cwd: &str) -> EngineConfig {
         (Some(g), Some(p)) => EngineConfig {
             allow_values: [g.allow_values, p.allow_values].concat(),
             patterns: [g.patterns, p.patterns].concat(),
-            keywords: [g.keywords, p.keywords].concat(),
             ..g
         },
     }

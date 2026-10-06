@@ -12,7 +12,7 @@ use crate::scrub::ScrubResult;
 pub type Scrub<'a> = &'a dyn Fn(&str) -> ScrubResult;
 pub type Recorder<'a> = &'a mut dyn FnMut(&str, &BTreeMap<String, usize>);
 
-pub const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
+const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
 
 #[derive(Serialize)]
 struct Output<'a> {
@@ -32,7 +32,7 @@ struct HookSpecificOutput<'a> {
 
 /// Scrubs the tool output in a PostToolUse payload. No hit returns nothing so
 /// the original passes through; a hit returns the block envelope.
-pub fn process(data: &[u8], scrub: Scrub, record: Recorder) -> Result<Vec<u8>, String> {
+fn process(data: &[u8], scrub: Scrub, record: Recorder) -> Result<Vec<u8>, String> {
     let payload: Value =
         serde_json::from_slice(data).map_err(|e| format!("parse hook payload: {e}"))?;
     let tool_name = str_field(&payload, "tool_name")?;
