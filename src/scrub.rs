@@ -19,11 +19,6 @@ pub use learned::{learned_hint, sha256_hex};
 
 const ENGINE_YML: &str = include_str!("engine.yml");
 
-// Built-in heuristic thresholds (engine.yml) that the includes_key guards still
-// use to tell a random segment from an identifier.
-const MIN_CHAR_CLASSES: usize = 3;
-const MIN_ENTROPY: f64 = 3.5;
-
 #[derive(Deserialize)]
 struct PatternDef {
     name: String,
@@ -142,10 +137,10 @@ impl Scrubber {
             .chain(&eng.allow_values)
             .map(|e| compile(e))
             .collect::<Result<_, _>>()?;
-        let thresholds = with_defaults(&cfg.heuristic);
+        let thresholds = cfg.heuristic.clone();
         let heuristic = if thresholds.enabled {
             let regex = compile(&heuristic_regex(
-                thresholds.min_length_or_default(),
+                thresholds.min_length,
                 &engine.value_safe_char,
             ))?;
             Some(Pattern {
@@ -254,23 +249,6 @@ fn tail(s: &str, n: usize) -> &str {
     match s.char_indices().rev().nth(n - 1) {
         Some((i, _)) => &s[i..],
         None => s,
-    }
-}
-
-/// Zero thresholds take the engine.yml defaults, like Go; `min_length`
-/// resolves its own default.
-fn with_defaults(h: &Heuristic) -> Heuristic {
-    let or = |v: usize, d: usize| if v == 0 { d } else { v };
-    Heuristic {
-        enabled: h.enabled,
-        min_length: h.min_length,
-        max_length: or(h.max_length, 128),
-        min_char_classes: or(h.min_char_classes, MIN_CHAR_CLASSES),
-        min_entropy: if h.min_entropy == 0.0 {
-            MIN_ENTROPY
-        } else {
-            h.min_entropy
-        },
     }
 }
 
@@ -559,7 +537,7 @@ mod tests {
     #[test]
     fn heuristic_thresholds_come_from_config() {
         let strict = crate::config::Heuristic {
-            min_length: Some(50),
+            min_length: 50,
             ..heuristic_on()
         };
         assert_eq!(
@@ -569,11 +547,11 @@ mod tests {
         let short = "GADGET=aB3xK9pQ7mZ2";
         assert_eq!(with_heuristic(heuristic_on()).scrub(short).text, short);
         let loose = crate::config::Heuristic {
-            min_length: Some(10),
+            min_length: 10,
             ..heuristic_on()
         };
         assert!(with_heuristic(loose).scrub(short).redacted());
-        // Only an absent min_length takes the default; an explicit 0 is honored.
+        // Only an absent threshold takes its default; an explicit 0 is honored.
         let zero: crate::config::Heuristic =
             serde_yaml::from_str("{enabled: true, min_length: 0}").unwrap();
         assert!(with_heuristic(zero).scrub(short).redacted());

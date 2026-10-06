@@ -30,22 +30,58 @@ pub struct Learned {
     pub shape: Option<String>,
 }
 
-/// Opt-in entropy tier. An absent `min_length` means 16; the other thresholds
-/// still read zero as "use the default", like Go 0.7.
-#[derive(Debug, Default, Clone, Deserialize)]
+// Built-in heuristic thresholds. The includes_key guards in scrub/skip.rs use
+// MIN_CHAR_CLASSES and MIN_ENTROPY as fixed values on purpose, whatever the
+// config says, to tell a random segment from an identifier.
+pub const MIN_LENGTH: usize = 16;
+pub const MAX_LENGTH: usize = 128;
+pub const MIN_CHAR_CLASSES: usize = 3;
+pub const MIN_ENTROPY: f64 = 3.5;
+
+/// Opt-in entropy tier. Each absent threshold takes its default; an explicit
+/// value, zero included, is used as written.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Heuristic {
     pub enabled: bool,
-    pub min_length: Option<usize>,
+    // serde calls the named function when the key is missing.
+    #[serde(default = "default_min_length")]
+    pub min_length: usize,
+    #[serde(default = "default_max_length")]
     pub max_length: usize,
+    #[serde(default = "default_min_char_classes")]
     pub min_char_classes: usize,
+    #[serde(default = "default_min_entropy")]
     pub min_entropy: f64,
 }
 
-impl Heuristic {
-    pub fn min_length_or_default(&self) -> usize {
-        self.min_length.unwrap_or(16)
+// Written by hand, not derived: a derived Default would give zero thresholds.
+impl Default for Heuristic {
+    fn default() -> Self {
+        Heuristic {
+            enabled: false,
+            min_length: MIN_LENGTH,
+            max_length: MAX_LENGTH,
+            min_char_classes: MIN_CHAR_CLASSES,
+            min_entropy: MIN_ENTROPY,
+        }
     }
+}
+
+fn default_min_length() -> usize {
+    MIN_LENGTH
+}
+
+fn default_max_length() -> usize {
+    MAX_LENGTH
+}
+
+fn default_min_char_classes() -> usize {
+    MIN_CHAR_CLASSES
+}
+
+fn default_min_entropy() -> f64 {
+    MIN_ENTROPY
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -268,9 +304,32 @@ mod tests {
         assert_eq!(cfg.learned[1].shape, None);
         let h = &cfg.heuristic;
         assert!(h.enabled);
-        assert_eq!(h.min_length, Some(20));
+        assert_eq!(h.min_length, 20);
         assert_eq!((h.max_length, h.min_char_classes), (64, 2));
         assert_eq!(h.min_entropy, 3.0);
+    }
+
+    #[test]
+    fn heuristic_thresholds_default_per_field_and_explicit_values_win() {
+        let h: Heuristic = serde_yaml::from_str("{enabled: true}").unwrap();
+        assert!(h.enabled);
+        let defaults = (
+            h.min_length,
+            h.max_length,
+            h.min_char_classes,
+            h.min_entropy,
+        );
+        assert_eq!(defaults, (16, 128, 3, 3.5));
+
+        let yaml = "{min_length: 20, max_length: 64, min_char_classes: 2, min_entropy: 3.0}";
+        let h: Heuristic = serde_yaml::from_str(yaml).unwrap();
+        let explicit = (
+            h.min_length,
+            h.max_length,
+            h.min_char_classes,
+            h.min_entropy,
+        );
+        assert_eq!(explicit, (20, 64, 2, 3.0));
     }
 
     #[test]
