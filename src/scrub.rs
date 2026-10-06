@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::config::{Config, EngineConfig, Heuristic};
 use go_regex::go_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
-pub use learned::{learned_hint, sha256_hex};
+pub use learned::{learned_value_hint, sha256_hex};
 
 const BUILTIN_ENGINE_YML: &str = include_str!("engine.yml");
 

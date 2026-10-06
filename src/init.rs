@@ -12,7 +12,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use inquire::{Confirm, MultiSelect, Select};
 
 use crate::config::{self, Learned};
-use crate::scrub::{learned_hint, sha256_hex};
+use crate::scrub::{learned_value_hint, sha256_hex};
 use crate::settings;
 
 /// Prompting happens only here and in the steps below; every function they call
@@ -255,9 +255,9 @@ fn row(key: &str, value: &str, learned: &Result<Learned, &str>) -> String {
         Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),
     };
-    let hint = match learned_hint(value) {
-        "" => "(short)".to_string(),
-        h => format!("...{h}"),
+    let hint = match learned_value_hint(value) {
+        Some(hint) => format!("...{hint}"),
+        None => "(short)".to_string(),
     };
     format!(
         "{key}  {hint}  {}",
