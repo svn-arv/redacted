@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -97,10 +97,15 @@ fn scrub() -> Result<(), String> {
             .unwrap_or("")
             .to_string()
     };
-    let cwd = field("cwd");
+    // An absent or empty cwd reads no project config, not one under the process cwd.
+    let cwd = header
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+        .map(Path::new);
     let home_dir = config::home();
-    let cfg = config::load(home_dir.as_deref(), &cwd);
-    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir.as_deref(), &cwd));
+    let cfg = config::load(home_dir.as_deref(), cwd);
+    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir.as_deref(), cwd));
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !payload_mode {

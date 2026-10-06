@@ -119,8 +119,9 @@ fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
         settings_path.display()
     );
     println!("Binary: {bin} scrub");
-    // Judged on the written config, so a re-run with no .env does not warn a user who has entries.
-    if config::vendor_only(&config::load(Some(home), "")) {
+    // Judged on the written global config alone (no cwd), so a re-run with no .env
+    // does not warn a user who has entries.
+    if config::vendor_only(&config::load(Some(home), None)) {
         println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
     Ok(())

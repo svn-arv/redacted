@@ -49,17 +49,16 @@ pub fn run() -> Result<(), String> {
     let home_dir = config::home();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    let cfg = config::load(home_dir, &cwd);
-    let eng = config::load_engine(home_dir, &cwd);
+    let cwd = std::env::current_dir().ok();
+    let cwd = cwd.as_deref();
+    let cfg = config::load(home_dir, cwd);
+    let eng = config::load_engine(home_dir, cwd);
     let mut checks = vec![check_binary()];
-    checks.extend(check_hooks(home_dir, &cwd));
-    checks.push(check_config(home_dir, &cwd, &cfg, &eng));
+    checks.extend(check_hooks(home_dir, cwd));
+    checks.push(check_config(home_dir, cwd, &cfg, &eng));
     checks.push(check_patterns(&cfg, &eng));
     checks.push(check_scrub());
-    checks.extend(check_learned(&cwd, &cfg));
+    checks.extend(check_learned(cwd, &cfg));
 
     for c in &checks {
         let tag = c.status.label();
@@ -89,7 +88,7 @@ fn check_binary() -> Check {
     }
 }
 
-fn check_hooks(home_dir: Option<&Path>, cwd: &str) -> Vec<Check> {
+fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
     let mut global = match home_dir {
         Some(home) => check_settings_file(&home.join(".claude/settings.json"), "global hook"),
         None => check(
@@ -98,8 +97,14 @@ fn check_hooks(home_dir: Option<&Path>, cwd: &str) -> Vec<Check> {
             "cannot determine home directory",
         ),
     };
-    let local_path = Path::new(cwd).join(".claude/settings.local.json");
-    let mut local = check_settings_file(&local_path, "local hook");
+    let mut local = match cwd {
+        Some(dir) => check_settings_file(&dir.join(".claude/settings.local.json"), "local hook"),
+        None => check(
+            "local hook",
+            Status::Fail,
+            "cannot determine working directory",
+        ),
+    };
 
     // One registration is enough; the missing other is a skip, not a failure.
     if global.status == Status::Pass && local.status == Status::Fail {
@@ -154,18 +159,25 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
     check(label, Status::Pass, shown.to_string())
 }
 
-fn check_config(home_dir: Option<&Path>, cwd: &str, cfg: &Config, eng: &EngineConfig) -> Check {
-    let project = Path::new(cwd);
+fn check_config(
+    home_dir: Option<&Path>,
+    cwd: Option<&Path>,
+    cfg: &Config,
+    eng: &EngineConfig,
+) -> Check {
     let files = [
         ("global config", home_dir.map(config::global_path)),
-        ("project config", Some(project.join(".redacted.yaml"))),
+        ("project config", cwd.map(|c| c.join(".redacted.yaml"))),
         (
             "global engine",
             home_dir.map(|h| h.join(".config/redacted/engine.yml")),
         ),
-        ("project engine", Some(project.join(".redacted.engine.yml"))),
+        (
+            "project engine",
+            cwd.map(|c| c.join(".redacted.engine.yml")),
+        ),
     ];
-    // A global path is None without a HOME, which counts as not found.
+    // A path is None without a HOME or working directory, which counts as not found.
     let sources: Vec<&str> = files
         .iter()
         .filter(|(_, path)| path.as_deref().is_some_and(Path::exists))
@@ -206,7 +218,7 @@ fn check_patterns(cfg: &Config, eng: &EngineConfig) -> Check {
     }
 }
 
-fn check_learned(cwd: &str, cfg: &Config) -> Vec<Check> {
+fn check_learned(cwd: Option<&Path>, cfg: &Config) -> Vec<Check> {
     let heuristic = if cfg.heuristic.enabled {
         "enabled"
     } else {
@@ -225,7 +237,7 @@ fn check_learned(cwd: &str, cfg: &Config) -> Vec<Check> {
             config::VENDOR_ONLY_NOTICE,
         ));
     }
-    let n = config::project_learned_count(cwd);
+    let n = cwd.map_or(0, config::project_learned_count);
     if n > 0 {
         let entries = if n == 1 { "entry" } else { "entries" };
         out.push(check("project learned", Status::Warn, format!(

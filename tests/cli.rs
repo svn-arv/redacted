@@ -118,6 +118,25 @@ fn ignore_internal_tools_from_the_payload_cwd_skips_non_bash() {
 }
 
 #[test]
+fn an_empty_or_missing_payload_cwd_never_reads_the_process_cwd_config() {
+    // The process runs in proj/, so a cwd read as "" would find this file.
+    let dir = sandbox("no-cwd");
+    fs::write(
+        dir.join("proj/.redacted.yaml"),
+        "ignore_internal_tools: true\n",
+    )
+    .unwrap();
+    for cwd in [r#""cwd":"","#, ""] {
+        let payload = format!(
+            r#"{{{cwd}"tool_name":"Read","tool_response":"k {}"}}"#,
+            aws_key()
+        );
+        let out = stdout(&run(&dir, &["scrub"], &payload));
+        assert!(out.contains("[REDACTED:aws_access_key"), "{cwd}: {out}");
+    }
+}
+
+#[test]
 fn ignore_internal_tools_never_skips_a_missing_or_bad_tool_name() {
     let dir = sandbox("ignore-bad");
     fs::write(
