@@ -74,7 +74,7 @@ pub fn run() -> Result<(), String> {
     let (passed, failed) = (count(CheckStatus::Pass), count(CheckStatus::Fail));
     println!("\n{passed} passed, {failed} failed");
     if failed > 0 {
-        return Err(format!("Error: {failed} Check::new(s) failed"));
+        return Err(format!("Error: {failed} check(s) failed"));
     }
     Ok(())
 }

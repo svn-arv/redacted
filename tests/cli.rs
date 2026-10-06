@@ -236,6 +236,15 @@ fn verify_reports_checks_and_fails_without_a_hook() {
 }
 
 #[test]
+fn verify_summary_says_check_s_failed_in_plain_words() {
+    let dir = sandbox("verify-summary");
+    let output = run_redacted(&dir, &["verify"], "");
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(err.contains("3 check(s) failed"), "{err}");
+}
+
+#[test]
 fn verify_reports_learned_config_and_warns_on_project_hashes() {
     let dir = sandbox("verify-learned");
     fs::write(
