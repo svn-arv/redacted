@@ -1,6 +1,8 @@
 //! Detection tiers: vendor signatures (engine.yml `patterns:` plus user patterns),
 //! learned secrets, and the opt-in entropy heuristic.
 
+// Child modules add `impl Scrubber` blocks and read its private fields; what this
+// file calls from them (and the shared test helpers) is marked `pub(super)`.
 mod go_regex;
 mod learned;
 mod skip;

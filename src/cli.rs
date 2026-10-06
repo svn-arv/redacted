@@ -81,8 +81,8 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// Hook mode always succeeds, so Claude Code never sees a failed hook; only
-/// raw-text mode, run by hand, can fail.
+/// Once stdin is read, hook mode always succeeds, so Claude Code never sees a
+/// failed hook; only raw-text mode, run by hand, can still fail.
 fn scrub() -> Result<(), String> {
     let mut data = Vec::new();
     io::stdin()
@@ -168,6 +168,8 @@ fn record(tool: &str, by_pattern: &BTreeMap<String, usize>) {
 /// A JSON object is the shape of every hook payload. A leading `{` alone is not
 /// enough: Ruby/PHP hash literals start with it too.
 fn looks_like_hook_payload(data: &[u8]) -> bool {
+    // Not `trim_ascii_start`: it also strips form feed, which JSON does not allow as
+    // whitespace, so a payload starting with `\x0C` would wrongly switch to hook mode.
     let start = data
         .iter()
         .position(|c| !matches!(c, b' ' | b'\t' | b'\r' | b'\n'))

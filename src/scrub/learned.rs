@@ -8,8 +8,6 @@ use super::{tail, ScrubResult, Scrubber};
 impl Scrubber {
     /// Shapes first, then exact hashes on the rewritten text, so a span a shape
     /// already redacted is a marker and cannot match again.
-    // `pub(super)`: visible to the parent module (scrub.rs), which calls it. A child
-    // module may add `impl Scrubber` blocks and read the struct's private fields.
     pub(super) fn scrub_learned(&self, result: &mut ScrubResult) {
         for (name, re) in &self.shapes {
             let spans = re
