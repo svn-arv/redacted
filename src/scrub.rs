@@ -212,7 +212,7 @@ impl Scrubber {
         for found in pattern.regex.find_iter(text) {
             out.push_str(&text[copied_until..found.start()]);
             copied_until = found.end();
-            if self.skip_match(pattern, found.as_str(), text, found.end()) {
+            if self.should_skip_match(pattern, found.as_str(), text, found.end()) {
                 out.push_str(found.as_str());
                 continue;
             }
