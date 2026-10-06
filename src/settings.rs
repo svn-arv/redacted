@@ -84,7 +84,7 @@ pub fn remove_hook(path: &Path) -> Result<bool, String> {
 }
 
 /// The PostToolUse entries; empty when the key is missing or not a list.
-pub fn post_tool_use(settings: &Value) -> &[Value] {
+pub fn post_tool_use_entries(settings: &Value) -> &[Value] {
     // Indexing a `Value` with a missing key gives null instead of panicking.
     match settings["hooks"]["PostToolUse"].as_array() {
         Some(entries) => entries,
@@ -93,14 +93,14 @@ pub fn post_tool_use(settings: &Value) -> &[Value] {
 }
 
 /// The first PostToolUse entry that runs our hook.
-pub fn find_ours(settings: &Value) -> Option<&Value> {
-    post_tool_use(settings)
+pub fn find_redacted_entry(settings: &Value) -> Option<&Value> {
+    post_tool_use_entries(settings)
         .iter()
         .find(|entry| is_redacted_entry(entry))
 }
 
 /// Our commands inside one entry, which may also hold other tools' hooks.
-pub fn our_commands(entry: &Value) -> Vec<&str> {
+pub fn redacted_commands(entry: &Value) -> Vec<&str> {
     let Some(hooks) = entry["hooks"].as_array() else {
         return Vec::new();
     };
@@ -112,7 +112,7 @@ pub fn our_commands(entry: &Value) -> Vec<&str> {
 }
 
 fn is_redacted_entry(entry: &Value) -> bool {
-    !our_commands(entry).is_empty()
+    !redacted_commands(entry).is_empty()
 }
 
 #[cfg(test)]
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn tmp(tag: &str) -> PathBuf {
+    fn fresh_temp_dir(tag: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("redacted-settings-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -142,17 +142,17 @@ mod tests {
 
     #[test]
     fn install_hook_creates_new_file() {
-        let path = tmp("hook-new").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-new").join(".claude/settings.json");
         install_hook(&path, "/usr/local/bin/redacted").unwrap();
         assert_eq!(
-            post_tool_use(&read_back(&path)),
+            post_tool_use_entries(&read_back(&path)),
             [json!({"hooks": [{"type": "command", "command": "/usr/local/bin/redacted scrub"}]})]
         );
     }
 
     #[test]
     fn install_hook_preserves_existing_settings() {
-        let path = tmp("hook-keep").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-keep").join(".claude/settings.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let existing = json!({
             "theme": "dark",
@@ -160,15 +160,18 @@ mod tests {
         });
         fs::write(&path, existing.to_string()).unwrap();
         install_hook(&path, "/usr/local/bin/redacted").unwrap();
-        let v = read_back(&path);
-        assert_eq!(v["theme"], "dark");
-        assert_eq!(v["hooks"]["PreToolUse"], existing["hooks"]["PreToolUse"]);
-        assert_eq!(post_tool_use(&v).len(), 1);
+        let written = read_back(&path);
+        assert_eq!(written["theme"], "dark");
+        assert_eq!(
+            written["hooks"]["PreToolUse"],
+            existing["hooks"]["PreToolUse"]
+        );
+        assert_eq!(post_tool_use_entries(&written).len(), 1);
     }
 
     #[test]
     fn install_hook_preserves_other_post_tool_use_hooks_verbatim() {
-        let path = tmp("hook-other").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-other").join(".claude/settings.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         // Unknown fields like timeout must survive (Go 0.7's typed round-trip dropped them).
         let other = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/other-hook", "timeout": 5}]});
@@ -178,15 +181,15 @@ mod tests {
         )
         .unwrap();
         install_hook(&path, "/usr/local/bin/redacted").unwrap();
-        let v = read_back(&path);
-        let entries = post_tool_use(&v);
+        let written = read_back(&path);
+        let entries = post_tool_use_entries(&written);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0], other);
     }
 
     #[test]
     fn install_hook_replaces_existing_redacted() {
-        let path = tmp("hook-replace").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-replace").join(".claude/settings.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let existing = json!({"hooks": {"PostToolUse": [
             {"matcher": "Bash", "hooks": [{"type": "command", "command": "/old/path/to/redacted scrub"}]},
@@ -194,7 +197,7 @@ mod tests {
         ]}});
         fs::write(&path, existing.to_string()).unwrap();
         install_hook(&path, "/new/path/redacted").unwrap();
-        let cmds = commands(post_tool_use(&read_back(&path)));
+        let cmds = commands(post_tool_use_entries(&read_back(&path)));
         assert_eq!(
             cmds,
             ["/usr/local/bin/other-hook", "/new/path/redacted scrub"]
@@ -203,15 +206,15 @@ mod tests {
 
     #[test]
     fn install_hook_is_idempotent() {
-        let path = tmp("hook-twice").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-twice").join(".claude/settings.json");
         install_hook(&path, "/usr/local/bin/redacted").unwrap();
         install_hook(&path, "/usr/local/bin/redacted").unwrap();
-        assert_eq!(post_tool_use(&read_back(&path)).len(), 1);
+        assert_eq!(post_tool_use_entries(&read_back(&path)).len(), 1);
     }
 
     #[test]
     fn install_hook_rejects_invalid_existing_json() {
-        let path = tmp("hook-bad").join(".claude/settings.json");
+        let path = fresh_temp_dir("hook-bad").join(".claude/settings.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not json").unwrap();
         let err = install_hook(&path, "/usr/local/bin/redacted").unwrap_err();
@@ -219,13 +222,13 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
     }
 
-    fn settings_file(tag: &str, v: Value) -> PathBuf {
-        let path = tmp(tag).join("settings.json");
-        fs::write(&path, v.to_string()).unwrap();
+    fn settings_file(tag: &str, settings: Value) -> PathBuf {
+        let path = fresh_temp_dir(tag).join("settings.json");
+        fs::write(&path, settings.to_string()).unwrap();
         path
     }
 
-    fn ours() -> Value {
+    fn redacted_entry() -> Value {
         json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/redacted scrub"}]})
     }
 
@@ -233,7 +236,7 @@ mod tests {
     fn remove_hook_drops_the_entry_and_the_emptied_keys() {
         let path = settings_file(
             "rm-only",
-            json!({"theme": "dark", "hooks": {"PostToolUse": [ours()]}}),
+            json!({"theme": "dark", "hooks": {"PostToolUse": [redacted_entry()]}}),
         );
         assert_eq!(remove_hook(&path), Ok(true));
         assert_eq!(read_back(&path), json!({"theme": "dark"}));
@@ -245,42 +248,45 @@ mod tests {
         let pre = json!([{"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/rtk"}]}]);
         let path = settings_file(
             "rm-keep",
-            json!({"theme": "dark", "hooks": {"PreToolUse": pre, "PostToolUse": [other, ours()]}}),
+            json!({"theme": "dark", "hooks": {"PreToolUse": pre, "PostToolUse": [other, redacted_entry()]}}),
         );
         assert_eq!(remove_hook(&path), Ok(true));
-        let v = read_back(&path);
-        assert_eq!(v["theme"], "dark");
-        assert_eq!(v["hooks"]["PreToolUse"], pre);
-        assert_eq!(v["hooks"]["PostToolUse"], json!([other]));
+        let written = read_back(&path);
+        assert_eq!(written["theme"], "dark");
+        assert_eq!(written["hooks"]["PreToolUse"], pre);
+        assert_eq!(written["hooks"]["PostToolUse"], json!([other]));
     }
 
     #[test]
     fn remove_hook_reports_nothing_to_remove() {
         let other = json!({"hooks": [{"type": "command", "command": "/usr/local/bin/other-hook"}]});
-        for (tag, v) in [
+        for (tag, settings) in [
             ("rm-none", json!({"hooks": {"PostToolUse": [other]}})),
             ("rm-empty", json!({})),
             ("rm-nohooks", json!({"theme": "dark"})),
         ] {
-            let path = settings_file(tag, v.clone());
+            let path = settings_file(tag, settings.clone());
             assert_eq!(remove_hook(&path), Ok(false), "{tag}");
-            assert_eq!(read_back(&path), v, "{tag}: file must be untouched");
+            assert_eq!(read_back(&path), settings, "{tag}: file must be untouched");
         }
-        let missing = tmp("rm-missing").join("settings.json");
+        let missing = fresh_temp_dir("rm-missing").join("settings.json");
         assert_eq!(remove_hook(&missing), Ok(false));
         assert!(!missing.exists());
     }
 
     #[test]
     fn remove_hook_is_idempotent() {
-        let path = settings_file("rm-twice", json!({"hooks": {"PostToolUse": [ours()]}}));
+        let path = settings_file(
+            "rm-twice",
+            json!({"hooks": {"PostToolUse": [redacted_entry()]}}),
+        );
         assert_eq!(remove_hook(&path), Ok(true));
         assert_eq!(remove_hook(&path), Ok(false));
     }
 
     #[test]
     fn remove_hook_errors_on_invalid_json_and_leaves_it() {
-        let path = tmp("rm-bad").join("settings.json");
+        let path = fresh_temp_dir("rm-bad").join("settings.json");
         fs::write(&path, "not json").unwrap();
         assert!(remove_hook(&path).unwrap_err().contains("parsing"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
@@ -290,7 +296,10 @@ mod tests {
     #[test]
     fn remove_hook_errors_when_the_file_cannot_be_rewritten() {
         use std::os::unix::fs::PermissionsExt;
-        let path = settings_file("rm-ro", json!({"hooks": {"PostToolUse": [ours()]}}));
+        let path = settings_file(
+            "rm-ro",
+            json!({"hooks": {"PostToolUse": [redacted_entry()]}}),
+        );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
         // Root ignores file modes, so the rewrite would succeed there.
         if fs::OpenOptions::new().write(true).open(&path).is_ok() {

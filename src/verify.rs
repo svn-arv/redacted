@@ -135,16 +135,16 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
         Ok(s) => s,
         Err(e) => return fail(format!("{shown} contains invalid JSON: {e}")),
     };
-    if settings::post_tool_use(&settings).is_empty() {
+    if settings::post_tool_use_entries(&settings).is_empty() {
         return fail(format!(
             "no PostToolUse hooks in {shown}, run: redacted init"
         ));
     }
-    let Some(entry) = settings::find_ours(&settings) else {
+    let Some(entry) = settings::find_redacted_entry(&settings) else {
         return fail("PostToolUse exists but has no redacted entry, run: redacted init".into());
     };
     // The entry exists; make sure the binary it points to still does.
-    for command in settings::our_commands(entry) {
+    for command in settings::redacted_commands(entry) {
         let bin = command.trim_end_matches(" scrub");
         if fs::metadata(bin).is_err() {
             return fail(format!(
