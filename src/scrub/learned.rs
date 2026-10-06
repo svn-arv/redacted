@@ -33,7 +33,7 @@ impl Scrubber {
 
     fn exact_spans(&self, text: &str, runs: Vec<(usize, usize)>) -> Vec<(usize, usize, &str)> {
         let mut spans = Vec::new();
-        // A labeled loop: `continue 'runs` jumps to the next run from the inner loops.
+        // The `'runs` label names this outer loop so an inner loop can continue it.
         'runs: for (run_start, run_end) in runs {
             // `KEY=value` is one run, so also try each suffix after `=` or `:`.
             let mut starts = vec![run_start];
@@ -49,6 +49,7 @@ impl Scrubber {
                     }
                     if let Some(name) = self.exact.get(&sha256_hex(&text[s..e])) {
                         spans.push((s, e, name.as_str()));
+                        // One learned match per run, then on to the next run.
                         continue 'runs;
                     }
                 }
