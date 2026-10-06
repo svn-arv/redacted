@@ -1,14 +1,15 @@
-# engine.example.yml — detection rules. Copy to ~/.config/redacted/engine.yml
-# (global) or .redacted.engine.yml (project root). This file tunes WHAT counts as
-# a secret; operational policy, learned secrets and the heuristic live in
-# config.yaml instead. `keywords` and `heuristic` from 0.7 are ignored here.
+# engine.example.yml: extra detection rules.
+# Copy to ~/.config/redacted/engine.yml (global) or .redacted.engine.yml (project root).
+# Policy, learned secrets and the heuristic go in config.yaml.
+# keywords, heuristic and value_safe_char from 0.7 are ignored here.
 
-# Extra value-shape allow rows: a candidate whose value (key=value) or whole
-# match (value-only) matches one is never redacted.
+# Extra allow rows: a match whose value (keyed match) or whole text
+# (value-only match) fits one of these is not redacted. Learned secrets ignore it.
 allow_values:
   - '^svc_[A-Za-z0-9]+$'
 
-# Extra vendor patterns, run after the built-in ones.
+# Extra patterns in Go RE2 syntax, run after the built-in ones. The whole match
+# is replaced. One that fails to compile withholds all hook output.
 patterns:
-  - name: openai_key
-    regex: 'sk-proj-[A-Za-z0-9_-]{20,}'
+  - name: acme_key
+    regex: 'acme_[A-Za-z0-9]{32,}'

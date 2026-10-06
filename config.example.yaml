@@ -1,40 +1,46 @@
-# config.example.yaml — app/operational policy. Copy to
-# ~/.config/redacted/config.yaml (global) or .redacted.yaml (project root).
-# Vendor patterns and allow_values live in engine.yml instead.
+# config.example.yaml: policy, learned secrets and the heuristic.
+# Copy to ~/.config/redacted/config.yaml (global) or .redacted.yaml (project root).
+# Patterns and allow_values go in engine.yml.
 
-# Written by `redacted init`. A config without it runs vendor signatures only.
+# Set to 2 by `redacted init`. A global file without it is a 0.7 config:
+# no learned secrets, and the hook asks you to run `redacted init`.
 version: 2
 
-# Secrets learned by `redacted init`, global file only (a project file's entries
-# are ignored). Each holds the value's sha256, byte length and, for values with a
-# literal prefix, a shape regex that also catches rotated keys. Never the value.
+# Written by `redacted init`. Read from the global file only.
+# Each entry: the value's sha256, its byte length and, for values with a literal
+# prefix, a shape regex that also catches rotated keys. Never the value.
 learned:
   - name: acme_api_key
     sha256: 0000000000000000000000000000000000000000000000000000000000000000
     len: 29
     shape: '\bacme_[a-zA-Z0-9]{20,28}\b'
 
-# Opt-in entropy tier: redact a KEY=value whose value looks random. Global only.
-# Omitted or zero thresholds keep the defaults shown.
+# Opt-in entropy tier for KEY=value pairs. Read from the global file only.
+# An absent threshold takes the default shown; an explicit value, 0 included,
+# is used as written.
 heuristic:
   enabled: false
-  min_length: 16 # ignore values shorter than this
-  max_length: 128 # ignore values longer than this
-  min_char_classes: 3 # require lower + upper + digit together
-  min_entropy: 3.5 # minimum Shannon entropy, bits per character
+  min_length: 16 # value has at least this many characters
+  max_length: 128 # value has at most this many characters
+  min_char_classes: 3 # of lowercase, uppercase, digit
+  min_entropy: 3.5 # Shannon entropy, bits per character
 
-# Turn off built-in patterns by name (run `redacted stats` to see the names).
+# Turn off vendor or engine.yml patterns by name (see the README table).
+# No effect on learned secrets or the heuristic.
 whitelist:
   - jwt
   - stripe_test
 
-# Variable names that must never be redacted, even when they match a rule.
+# Skip a vendor or heuristic match whose text contains one of these names
+# (case-insensitive). Only keyed matches (KEY=value) contain the name, so
+# value-only patterns and learned secrets ignore this list.
 allow:
   - APP_URL
   - TWILIO_WORKFLOW_SID
 
-# Only scrub Bash output, skip Read/Grep/WebFetch.
+# Scrub Bash output only; Read, Grep, WebFetch and other tools pass through.
 ignore_internal_tools: false
 
-# In a project file, ignore the global config entirely instead of merging.
+# In a project file: drop the global file instead of merging.
+# version, learned and heuristic still come from the global file.
 override: false
