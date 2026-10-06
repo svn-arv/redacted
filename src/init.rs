@@ -185,6 +185,7 @@ fn parse_dotenv(text: &str) -> Vec<(String, String)> {
 /// A literal prefix ending in the last `_`/`-` of the first 12 chars, 3+ chars long,
 /// plus the remainder's charset and a length band of ±4. None means exact hash only.
 fn derive_shape(sample: &str) -> Option<String> {
+    // Byte index of the 13th char, so the slice never splits a multi-byte char.
     let head_end = sample
         .char_indices()
         .nth(12)

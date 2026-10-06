@@ -64,20 +64,30 @@ impl Pattern {
     }
 }
 
+/// Every tier compiled once from the config, then reused for each scrub.
 pub struct Scrubber {
     patterns: Vec<Pattern>,
+    /// Pattern names the user turned off.
     whitelist: HashSet<String>,
+    /// Uppercased names; a match containing one is left alone.
     allow: Vec<String>,
+    /// A match whose value fits one of these is left alone.
     allow_values: Vec<Regex>,
+    /// Learned name and the regex derived from its sample.
     shapes: Vec<(String, Regex)>,
+    /// sha256 of a learned value to its name.
     exact: HashMap<String, String>,
+    /// Only candidates of these byte lengths are hashed.
     exact_lens: HashSet<usize>,
+    /// Runs of the characters a value can hold (engine.yml `value_safe_char`).
     safe_run: Regex,
+    /// Whitespace-delimited runs, for values holding `@`, `(` or quotes.
     word_run: Regex,
     heuristic: Option<Pattern>,
     thresholds: Heuristic,
 }
 
+/// The rewritten text plus how many secrets each pattern redacted.
 #[derive(Debug, Default)]
 pub struct ScrubResult {
     pub text: String,
@@ -174,7 +184,7 @@ impl Scrubber {
             text: text.to_string(),
             ..Default::default()
         };
-        // Lowered once, like Go: redaction markers never add a prefilter literal.
+        // Lowered once, like Go 0.7: redaction markers never add a prefilter literal.
         let mut lowered: Option<String> = None;
         for p in &self.patterns {
             if self.whitelist.contains(&p.name) {
@@ -206,6 +216,7 @@ impl Scrubber {
         result
     }
 
+    /// Returns the hit count; `text` is rewritten only on a hit.
     fn apply_pattern(&self, p: &Pattern, text: &mut String) -> usize {
         let mut out = String::with_capacity(text.len());
         let (mut last, mut count) = (0, 0);
@@ -244,7 +255,7 @@ fn tail(s: &str, n: usize) -> &str {
     }
 }
 
-/// Zero thresholds take the engine.yml defaults, like Go 0.7; `min_length`
+/// Zero thresholds take the engine.yml defaults, like Go; `min_length`
 /// resolves its own default.
 fn with_defaults(h: &Heuristic) -> Heuristic {
     let or = |v: usize, d: usize| if v == 0 { d } else { v };

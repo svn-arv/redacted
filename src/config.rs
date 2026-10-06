@@ -55,7 +55,7 @@ pub struct CustomPattern {
     pub regex: String,
 }
 
-/// A Go 0.7 engine.yml still loads: serde skips its retired `keywords`,
+/// An engine.yml from 0.7 still loads: serde skips its retired `keywords`,
 /// `heuristic` and `value_safe_char` keys like any other unknown key.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]

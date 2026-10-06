@@ -1,4 +1,5 @@
-//! Commands: scrub, verify, stats, init, uninstall.
+//! Argument parsing, the scrub and stats commands, and the one place that
+//! turns a command error into exit code 1.
 
 use std::collections::BTreeMap;
 use std::fs;

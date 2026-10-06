@@ -170,7 +170,7 @@ mod tests {
     fn install_hook_preserves_other_post_tool_use_hooks_verbatim() {
         let path = tmp("hook-other").join(".claude/settings.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Unknown fields like timeout must survive (Go's typed round-trip dropped them).
+        // Unknown fields like timeout must survive (Go 0.7's typed round-trip dropped them).
         let other = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/other-hook", "timeout": 5}]});
         fs::write(
             &path,
