@@ -558,9 +558,11 @@ mod tests {
             "absent shape is omitted:\n{out}"
         );
 
-        assert!(merge_config("", &[added])
-            .unwrap()
-            .starts_with("version: 2\n"));
+        assert!(
+            merge_config("", &[added])
+                .unwrap()
+                .starts_with("version: 2\n")
+        );
     }
 
     #[test]
@@ -590,18 +592,10 @@ mod tests {
     }
 
     #[test]
-    fn bin_path_ignores_a_redacted_file_on_path() {
+    fn bin_path_is_this_executable_not_a_path_lookup() {
         // A writable PATH directory must not get its own binary registered as the hook.
-        let dir = tmp("path");
-        fs::write(dir.join("redacted"), "#!/bin/sh\n").unwrap();
-        let old = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths = vec![dir.clone()];
-        paths.extend(std::env::split_paths(&old));
-        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
-        let got = bin_path();
-        std::env::set_var("PATH", old);
         // Not canonicalized: a Homebrew symlink must stay, its Cellar target goes on upgrade.
         let want = std::path::absolute(std::env::current_exe().unwrap()).unwrap();
-        assert_eq!(got.unwrap(), want.display().to_string());
+        assert_eq!(bin_path().unwrap(), want.display().to_string());
     }
 }

@@ -131,7 +131,7 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
     let data = match fs::read(path) {
         Ok(d) => d,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return fail(format!("file not found: {shown}"))
+            return fail(format!("file not found: {shown}"));
         }
         Err(e) => return fail(format!("cannot read {shown}: {e}")),
     };

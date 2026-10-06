@@ -310,8 +310,9 @@ mod tests {
             assert_eq!(s.scrub(input).text, input, "{input}");
         }
         // Hex under a *_KEY name still redacts though the scorer rejects 2-class hex.
-        assert!(s
-            .scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
-            .redacted());
+        assert!(
+            s.scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
+                .redacted()
+        );
     }
 }

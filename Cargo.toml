@@ -1,7 +1,7 @@
 [package]
 name = "redacted"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
 description = "Claude Code PostToolUse hook that scrubs secrets from tool output"
 license = "MIT"
 

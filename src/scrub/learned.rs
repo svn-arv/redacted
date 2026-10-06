@@ -3,7 +3,7 @@
 
 use sha2::{Digest, Sha256};
 
-use super::{tail, ScrubResult, Scrubber};
+use super::{ScrubResult, Scrubber, tail};
 
 impl Scrubber {
     /// Shapes first, then exact hashes on the rewritten text, so a span a shape

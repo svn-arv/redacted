@@ -343,9 +343,11 @@ fn uninstall_local_leaves_the_global_hook() {
     let o = run(&dir, &["uninstall", "--local"], "");
     assert!(o.status.success());
     assert_eq!(fs::read_to_string(&global).unwrap(), settings);
-    assert!(!fs::read_to_string(&local)
-        .unwrap()
-        .contains("redacted scrub"));
+    assert!(
+        !fs::read_to_string(&local)
+            .unwrap()
+            .contains("redacted scrub")
+    );
 }
 
 const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";

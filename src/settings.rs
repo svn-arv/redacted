@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A hook command ending in this is ours, wherever the binary lives.
 const OUR_COMMAND_SUFFIX: &str = "redacted scrub";
