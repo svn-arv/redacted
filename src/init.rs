@@ -17,18 +17,18 @@ use crate::settings;
 
 /// Prompting happens only here and in the steps below; every function they call
 /// is tested without a TTY.
-pub fn run(env: Option<PathBuf>, local: bool) -> Result<(), String> {
+pub fn run(env_file: Option<PathBuf>, local: bool) -> Result<(), String> {
     if !io::stdin().is_terminal() {
         return Err("init needs an interactive terminal".to_string());
     }
-    prompt_and_install(env, local).map_err(|e| format!("init: {e}"))
+    prompt_and_install(env_file, local).map_err(|e| format!("init: {e}"))
 }
 
-fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
+fn prompt_and_install(env_file: Option<PathBuf>, local: bool) -> Result<(), String> {
     let home = config::home_dir().ok_or("cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
-    let env_file = match env {
+    let env_file = match env_file {
         Some(path) => Some(path),
         None => pick_env_file(&cwd)?,
     };
@@ -60,14 +60,14 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     if pairs.is_empty() {
         return Ok(());
     }
-    let entries: Vec<_> = pairs.iter().map(|(k, v)| learn(k, v)).collect();
+    let learn_results: Vec<_> = pairs.iter().map(|(key, value)| learn(key, value)).collect();
     let rows: Vec<String> = pairs
         .iter()
-        .zip(&entries)
-        .map(|((k, v), l)| row(k, v, l))
+        .zip(&learn_results)
+        .map(|((key, value), learned)| picker_row(key, value, learned))
         .collect();
     let defaults: Vec<usize> = (0..rows.len())
-        .filter(|&i| entries[i].is_ok() && preselect(&pairs[i].1))
+        .filter(|&i| learn_results[i].is_ok() && should_preselect(&pairs[i].1))
         .collect();
     let picked = MultiSelect::new("Secrets to learn:", rows)
         .with_default(&defaults)
@@ -76,7 +76,7 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     // Ticked rows that cannot be learned are skipped, not written.
     let chosen: Vec<LearnedSecret> = picked
         .iter()
-        .filter_map(|o| entries[o.index].clone().ok())
+        .filter_map(|picked_row| learn_results[picked_row.index].clone().ok())
         .collect();
     let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
@@ -84,13 +84,13 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("reading {}: {e}", config_path.display())),
     };
-    let merged = merge_config(&existing, &chosen)?;
+    let merged = merge_learned_into_config(&existing, &chosen)?;
     println!("\n{} will contain:\n\n{merged}", config_path.display());
-    let ok = Confirm::new("Write it?")
+    let confirmed = Confirm::new("Write it?")
         .with_default(false)
         .prompt()
         .map_err(|e| e.to_string())?;
-    if !ok {
+    if !confirmed {
         return Err("nothing written".into());
     }
     write_config(&config_path, &merged)
@@ -106,7 +106,7 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
 /// Registers the hook globally or for this project, then warns when only the
 /// vendor tier would be active.
 fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
-    let bin = bin_path()?;
+    let bin = this_executable_path()?;
     let settings_path = if local {
         cwd.join(".claude/settings.local.json")
     } else {
@@ -191,8 +191,8 @@ fn derive_shape(sample: &str) -> Option<String> {
         .char_indices()
         .nth(12)
         .map_or(sample.len(), |(i, _)| i);
-    let cut = sample[..head_end].rfind(['_', '-'])? + 1;
-    let (prefix, rest) = sample.split_at(cut);
+    let prefix_end = sample[..head_end].rfind(['_', '-'])? + 1;
+    let (prefix, rest) = sample.split_at(prefix_end);
     if prefix.chars().count() < 3 || rest.is_empty() {
         return None;
     }
@@ -213,12 +213,12 @@ fn derive_shape(sample: &str) -> Option<String> {
     .filter(|(present, _)| *present)
     .map(|(_, class)| *class)
     .collect();
-    let n = rest.chars().count();
+    let rest_len = rest.chars().count();
     Some(format!(
         r"\b{}[{charset}]{{{},{}}}\b",
         regex::escape(prefix),
-        n.saturating_sub(4).max(1),
-        n + 4
+        rest_len.saturating_sub(4).max(1),
+        rest_len + 4
     ))
 }
 
@@ -240,7 +240,7 @@ pub fn learn(key: &str, value: &str) -> Result<LearnedSecret, &'static str> {
 
 /// Ticked by default only with 2+ of {lower, upper, digit, other}: `development`
 /// or `3000` are config, not secrets, and would redact everywhere.
-fn preselect(value: &str) -> bool {
+fn should_preselect(value: &str) -> bool {
     let classes = [
         value.chars().any(|c| c.is_lowercase()),
         value.chars().any(|c| c.is_uppercase()),
@@ -250,7 +250,7 @@ fn preselect(value: &str) -> bool {
     classes.iter().filter(|&&has| has).count() >= 2
 }
 
-fn row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String {
+fn picker_row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String {
     let entry = match learned {
         Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),
@@ -266,7 +266,7 @@ fn row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String 
 }
 
 /// Merges `entries` by name into the config text, keeping every other field.
-fn merge_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, String> {
+fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, String> {
     let mut doc = if existing.trim().is_empty() {
         serde_yaml::Value::Mapping(Default::default())
     } else {
@@ -281,10 +281,13 @@ fn merge_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, Str
         }
         None => Vec::new(),
     };
-    for e in entries {
-        match learned.iter_mut().find(|l| l.name == e.name) {
-            Some(slot) => *slot = e.clone(),
-            None => learned.push(e.clone()),
+    for entry in entries {
+        match learned
+            .iter_mut()
+            .find(|existing| existing.name == entry.name)
+        {
+            Some(slot) => *slot = entry.clone(),
+            None => learned.push(entry.clone()),
         }
     }
     map.insert("version".into(), 2.into());
@@ -300,11 +303,11 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    opts.mode(0o600);
-    opts.open(path)?.write_all(contents.as_bytes())?;
+    options.mode(0o600);
+    options.open(path)?.write_all(contents.as_bytes())?;
     // mode() only applies on create; tighten a file that already existed.
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
@@ -313,7 +316,7 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
 
 /// This executable, never a `redacted` found on PATH: a writable PATH directory
 /// could otherwise register its own binary as the hook.
-fn bin_path() -> Result<String, String> {
+fn this_executable_path() -> Result<String, String> {
     std::env::current_exe()
         .and_then(std::path::absolute)
         .map(|p| p.display().to_string())
@@ -371,7 +374,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn tmp(tag: &str) -> PathBuf {
+    fn fresh_temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("redacted-init-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -439,7 +442,7 @@ mod tests {
 
     #[test]
     fn find_env_files_skips_examples_and_sorts() {
-        let dir = tmp("find");
+        let dir = fresh_temp_dir("find");
         for name in [
             ".env",
             ".env.local",
@@ -462,11 +465,11 @@ mod tests {
     #[test]
     fn learn_hashes_the_value_and_lowercases_the_name() {
         let value = format!("sk_live_{}", "Ab1".repeat(8));
-        let l = learn("STRIPE_KEY", &value).unwrap();
-        assert_eq!(l.name, "stripe_key");
-        assert_eq!(l.sha256, crate::scrub::sha256_hex(&value));
-        assert_eq!(l.byte_len, value.len());
-        assert_eq!(l.shape, derive_shape(&value));
+        let learned = learn("STRIPE_KEY", &value).unwrap();
+        assert_eq!(learned.name, "stripe_key");
+        assert_eq!(learned.sha256, crate::scrub::sha256_hex(&value));
+        assert_eq!(learned.byte_len, value.len());
+        assert_eq!(learned.shape, derive_shape(&value));
     }
 
     #[test]
@@ -476,7 +479,7 @@ mod tests {
             assert_eq!(learn("K", v).unwrap_err(), "too short", "{v}");
         }
         assert!(learn("K", "Pw9xQz7k").is_ok());
-        assert!(row("PORT", "3000", &learn("PORT", "3000")).contains("too short"));
+        assert!(picker_row("PORT", "3000", &learn("PORT", "3000")).contains("too short"));
     }
 
     #[test]
@@ -491,7 +494,7 @@ mod tests {
             ("P@ssw0rd2024", true),
             (hex, true),
         ] {
-            assert_eq!(preselect(v), want, "{v}");
+            assert_eq!(should_preselect(v), want, "{v}");
         }
     }
 
@@ -502,27 +505,30 @@ mod tests {
             learn("GREETING", "hello there world").unwrap_err(),
             "cannot match (contains spaces)"
         );
-        let r = row(
+        let row = picker_row(
             "GREETING",
             "hello there world",
             &learn("GREETING", "hello there world"),
         );
         assert!(
-            r.contains("cannot match (contains spaces)") && !r.contains("hello"),
-            "{r}"
+            row.contains("cannot match (contains spaces)") && !row.contains("hello"),
+            "{row}"
         );
     }
 
     #[test]
-    fn row_shows_key_hint_and_shape_never_the_value() {
+    fn picker_row_shows_key_hint_and_shape_never_the_value() {
         let value = format!("sk_live_{}", "Ab1".repeat(8));
-        let r = row("STRIPE_KEY", &value, &learn("STRIPE_KEY", &value));
+        let row = picker_row("STRIPE_KEY", &value, &learn("STRIPE_KEY", &value));
         assert!(
-            r.contains("STRIPE_KEY") && r.contains("...",) && r.contains("Ab1"),
-            "{r}"
+            row.contains("STRIPE_KEY") && row.contains("...",) && row.contains("Ab1"),
+            "{row}"
         );
-        assert!(r.contains(r"\bsk_live_") && !r.contains(&value), "{r}");
-        let short = row("PIN", "Pw9xQz7k", &learn("PIN", "Pw9xQz7k"));
+        assert!(
+            row.contains(r"\bsk_live_") && !row.contains(&value),
+            "{row}"
+        );
+        let short = picker_row("PIN", "Pw9xQz7k", &learn("PIN", "Pw9xQz7k"));
         assert!(
             short.contains("exact only") && !short.contains("Qz7k"),
             "{short}"
@@ -530,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_config_keeps_other_fields_and_merges_by_name() {
+    fn merge_learned_into_config_keeps_other_fields_and_merges_by_name() {
         let existing = "whitelist: [jwt]\nfuture_field: {a: 1}\nlearned:\n- {name: keep, sha256: aa, len: 1}\n- {name: stripe_key, sha256: old, len: 1}\n";
         let new = LearnedSecret {
             name: "stripe_key".into(),
@@ -544,13 +550,13 @@ mod tests {
             byte_len: 9,
             shape: None,
         };
-        let out = merge_config(existing, &[new.clone(), added.clone()]).unwrap();
+        let out = merge_learned_into_config(existing, &[new.clone(), added.clone()]).unwrap();
         let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
         assert_eq!(doc["version"], serde_yaml::Value::from(2));
         assert_eq!(doc["whitelist"][0], serde_yaml::Value::from("jwt"));
         assert_eq!(doc["future_field"]["a"], serde_yaml::Value::from(1));
         let learned: Vec<LearnedSecret> = serde_yaml::from_value(doc["learned"].clone()).unwrap();
-        let names: Vec<_> = learned.iter().map(|l| l.name.as_str()).collect();
+        let names: Vec<_> = learned.iter().map(|entry| entry.name.as_str()).collect();
         assert_eq!(names, ["keep", "stripe_key", "db_pass"]);
         assert_eq!(learned[1], new);
         assert!(
@@ -559,23 +565,23 @@ mod tests {
         );
 
         assert!(
-            merge_config("", &[added])
+            merge_learned_into_config("", &[added])
                 .unwrap()
                 .starts_with("version: 2\n")
         );
     }
 
     #[test]
-    fn merge_config_rejects_a_non_mapping() {
+    fn merge_learned_into_config_rejects_a_non_mapping() {
         // Rewriting a list or scalar as a mapping would drop what the user wrote.
-        assert!(merge_config("[not, a, map]", &[]).is_err());
+        assert!(merge_learned_into_config("[not, a, map]", &[]).is_err());
     }
 
     #[cfg(unix)]
     #[test]
     fn write_config_is_owner_only_even_over_an_existing_file() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp("write");
+        let dir = fresh_temp_dir("write");
         let path = dir.join("nested/config.yaml");
         write_config(&path, "a: 1\n").unwrap();
         assert_eq!(
@@ -592,10 +598,10 @@ mod tests {
     }
 
     #[test]
-    fn bin_path_is_this_executable_not_a_path_lookup() {
+    fn this_executable_path_is_not_a_path_lookup() {
         // A writable PATH directory must not get its own binary registered as the hook.
         // Not canonicalized: a Homebrew symlink must stay, its Cellar target goes on upgrade.
         let want = std::path::absolute(std::env::current_exe().unwrap()).unwrap();
-        assert_eq!(bin_path().unwrap(), want.display().to_string());
+        assert_eq!(this_executable_path().unwrap(), want.display().to_string());
     }
 }
