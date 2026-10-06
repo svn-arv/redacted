@@ -11,36 +11,38 @@ use crate::scrub::Scrubber;
 use crate::settings;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Status {
+enum CheckStatus {
     Pass,
     Fail,
     Skip,
     Warn,
 }
 
-impl Status {
+impl CheckStatus {
     fn label(self) -> &'static str {
         match self {
-            Status::Pass => "PASS",
-            Status::Fail => "FAIL",
-            Status::Skip => "SKIP",
-            Status::Warn => "WARN",
+            CheckStatus::Pass => "PASS",
+            CheckStatus::Fail => "FAIL",
+            CheckStatus::Skip => "SKIP",
+            CheckStatus::Warn => "WARN",
         }
     }
 }
 
 struct Check {
     name: &'static str,
-    status: Status,
+    status: CheckStatus,
     detail: String,
 }
 
-/// `impl Into<String>` takes a `&str` or a `String`, so callers skip `.to_string()`.
-fn check(name: &'static str, status: Status, detail: impl Into<String>) -> Check {
-    Check {
-        name,
-        status,
-        detail: detail.into(),
+impl Check {
+    /// `impl Into<String>` takes a `&str` or a `String`, so callers skip `.to_string()`.
+    fn new(name: &'static str, status: CheckStatus, detail: impl Into<String>) -> Check {
+        Check {
+            name,
+            status,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -51,70 +53,71 @@ pub fn run() -> Result<(), String> {
     let home_dir = home_dir.as_deref();
     let cwd = std::env::current_dir().ok();
     let cwd = cwd.as_deref();
-    let cfg = config::load(home_dir, cwd);
-    let eng = config::load_engine(home_dir, cwd);
+    let config = config::load(home_dir, cwd);
+    let engine_config = config::load_engine(home_dir, cwd);
     let mut checks = vec![check_binary()];
     checks.extend(check_hooks(home_dir, cwd));
-    checks.push(check_config(home_dir, cwd, &cfg, &eng));
-    checks.push(check_patterns(&cfg, &eng));
-    checks.push(check_scrub());
-    checks.extend(check_learned(cwd, &cfg));
+    checks.push(check_config_files(home_dir, cwd, &config, &engine_config));
+    checks.push(check_patterns(&config, &engine_config));
+    checks.push(check_test_scrub());
+    checks.extend(check_learned(cwd, &config));
 
-    for c in &checks {
-        let tag = c.status.label();
-        if c.detail.is_empty() {
-            println!("  [{tag}] {}", c.name);
+    for check in &checks {
+        let label = check.status.label();
+        if check.detail.is_empty() {
+            println!("  [{label}] {}", check.name);
         } else {
-            println!("  [{tag}] {} - {}", c.name, c.detail);
+            println!("  [{label}] {} - {}", check.name, check.detail);
         }
     }
-    let count = |status| checks.iter().filter(|c| c.status == status).count();
-    let (passed, failed) = (count(Status::Pass), count(Status::Fail));
+    let count = |status| checks.iter().filter(|check| check.status == status).count();
+    let (passed, failed) = (count(CheckStatus::Pass), count(CheckStatus::Fail));
     println!("\n{passed} passed, {failed} failed");
     if failed > 0 {
-        return Err(format!("Error: {failed} check(s) failed"));
+        return Err(format!("Error: {failed} Check::new(s) failed"));
     }
     Ok(())
 }
 
 fn check_binary() -> Check {
     match std::env::current_exe() {
-        Ok(p) => check("binary", Status::Pass, p.display().to_string()),
-        Err(_) => check("binary", Status::Fail, "not found, reinstall redacted"),
+        Ok(p) => Check::new("binary", CheckStatus::Pass, p.display().to_string()),
+        Err(_) => Check::new("binary", CheckStatus::Fail, "not found, reinstall redacted"),
     }
 }
 
 fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
     let mut global = match home_dir {
         Some(home) => check_settings_file(&home.join(".claude/settings.json"), "global hook"),
-        None => check(
+        None => Check::new(
             "global hook",
-            Status::Fail,
+            CheckStatus::Fail,
             "cannot determine home directory",
         ),
     };
     let mut local = match cwd {
         Some(dir) => check_settings_file(&dir.join(".claude/settings.local.json"), "local hook"),
-        None => check(
+        None => Check::new(
             "local hook",
-            Status::Fail,
+            CheckStatus::Fail,
             "cannot determine working directory",
         ),
     };
 
     // One registration is enough; the missing other is a skip, not a failure.
-    if global.status == Status::Pass && local.status == Status::Fail {
-        local.status = Status::Skip;
+    if global.status == CheckStatus::Pass && local.status == CheckStatus::Fail {
+        local.status = CheckStatus::Skip;
     }
-    if local.status == Status::Pass && global.status == Status::Fail {
-        global.status = Status::Skip;
+    if local.status == CheckStatus::Pass && global.status == CheckStatus::Fail {
+        global.status = CheckStatus::Skip;
     }
-    let none = global.status != Status::Pass && local.status != Status::Pass;
+    let no_hook_registered =
+        global.status != CheckStatus::Pass && local.status != CheckStatus::Pass;
     let mut out = vec![global, local];
-    if none {
-        out.push(check(
+    if no_hook_registered {
+        out.push(Check::new(
             "hook registered",
-            Status::Fail,
+            CheckStatus::Fail,
             "not found in either settings file, run: redacted init",
         ));
     }
@@ -123,16 +126,16 @@ fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
 
 fn check_settings_file(path: &Path, label: &'static str) -> Check {
     let shown = path.display();
-    let fail = |detail: String| check(label, Status::Fail, detail);
+    let fail = |detail: String| Check::new(label, CheckStatus::Fail, detail);
     let data = match fs::read(path) {
-        Ok(d) => d,
+        Ok(data) => data,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return fail(format!("file not found: {shown}"));
         }
         Err(e) => return fail(format!("cannot read {shown}: {e}")),
     };
     let settings: Value = match serde_json::from_slice(&data) {
-        Ok(s) => s,
+        Ok(settings) => settings,
         Err(e) => return fail(format!("{shown} contains invalid JSON: {e}")),
     };
     if settings::post_tool_use_entries(&settings).is_empty() {
@@ -152,14 +155,14 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
             ));
         }
     }
-    check(label, Status::Pass, shown.to_string())
+    Check::new(label, CheckStatus::Pass, shown.to_string())
 }
 
-fn check_config(
+fn check_config_files(
     home_dir: Option<&Path>,
     cwd: Option<&Path>,
-    cfg: &Config,
-    eng: &EngineConfig,
+    config: &Config,
+    engine_config: &EngineConfig,
 ) -> Check {
     let files = [
         ("global config", home_dir.map(config::global_config_path)),
@@ -180,17 +183,17 @@ fn check_config(
         .map(|(label, _)| *label)
         .collect();
     if sources.is_empty() {
-        return check(
+        return Check::new(
             "config files",
-            Status::Pass,
+            CheckStatus::Pass,
             "none found (using built-in defaults)",
         );
     }
     let mut detail = format!("{} loaded", sources.join(", "));
     let extras: Vec<String> = [
-        (cfg.disabled_patterns.len(), "whitelisted"),
-        (cfg.allowed_keys.len(), "allowed vars"),
-        (eng.patterns.len(), "custom patterns"),
+        (config.disabled_patterns.len(), "whitelisted"),
+        (config.allowed_keys.len(), "allowed vars"),
+        (engine_config.patterns.len(), "custom patterns"),
     ]
     .iter()
     .filter(|(n, _)| *n > 0)
@@ -199,62 +202,66 @@ fn check_config(
     if !extras.is_empty() {
         detail += &format!(" ({})", extras.join(", "));
     }
-    check("config files", Status::Pass, detail)
+    Check::new("config files", CheckStatus::Pass, detail)
 }
 
 // Includes user patterns: a bad one now withholds every hook output, so say so here.
-fn check_patterns(cfg: &Config, eng: &EngineConfig) -> Check {
-    match Scrubber::new(cfg, eng) {
-        Ok(_) => check("patterns load", Status::Pass, "all patterns compiled"),
-        Err(e) => check(
+fn check_patterns(config: &Config, engine_config: &EngineConfig) -> Check {
+    match Scrubber::new(config, engine_config) {
+        Ok(_) => Check::new("patterns load", CheckStatus::Pass, "all patterns compiled"),
+        Err(e) => Check::new(
             "patterns load",
-            Status::Fail,
+            CheckStatus::Fail,
             format!("failed to compile patterns: {e}"),
         ),
     }
 }
 
-fn check_learned(cwd: Option<&Path>, cfg: &Config) -> Vec<Check> {
-    let heuristic = if cfg.heuristic.enabled {
+fn check_learned(cwd: Option<&Path>, config: &Config) -> Vec<Check> {
+    let heuristic = if config.heuristic.enabled {
         "enabled"
     } else {
         "disabled"
     };
     let detail = format!(
         "config version {}, {} learned, heuristic {heuristic}",
-        cfg.version.max(1),
-        cfg.learned.len()
+        config.version.max(1),
+        config.learned.len()
     );
-    let mut out = vec![check("learned secrets", Status::Pass, detail)];
-    if config::is_vendor_only(cfg) {
-        out.push(check(
+    let mut out = vec![Check::new("learned secrets", CheckStatus::Pass, detail)];
+    if config::is_vendor_only(config) {
+        out.push(Check::new(
             "protection",
-            Status::Warn,
+            CheckStatus::Warn,
             config::VENDOR_ONLY_NOTICE,
         ));
     }
-    let n = cwd.map_or(0, config::project_learned_count);
-    if n > 0 {
-        let entries = if n == 1 { "entry" } else { "entries" };
-        out.push(check("project learned", Status::Warn, format!(
-            ".redacted.yaml has {n} learned {entries}, ignored: learned secrets belong in ~/.config/redacted/config.yaml"
+    let project_learned = cwd.map_or(0, config::project_learned_count);
+    if project_learned > 0 {
+        let entries = if project_learned == 1 {
+            "entry"
+        } else {
+            "entries"
+        };
+        out.push(Check::new("project learned", CheckStatus::Warn, format!(
+            ".redacted.yaml has {project_learned} learned {entries}, ignored: learned secrets belong in ~/.config/redacted/config.yaml"
         )));
     }
     out
 }
 
-fn check_scrub() -> Check {
+fn check_test_scrub() -> Check {
     let result = Scrubber::new(&Config::default(), &EngineConfig::default())
         .map(|s| s.scrub("DATABASE_URL=postgres://user:Xk7Pq9mW2vB8@host:5432/db"));
     match result {
-        Ok(r) if r.has_redactions() && r.text.contains("[REDACTED") => check(
+        Ok(r) if r.has_redactions() && r.text.contains("[REDACTED") => Check::new(
             "test scrub",
-            Status::Pass,
+            CheckStatus::Pass,
             format!("caught {} secret(s) in test input", r.count),
         ),
-        _ => check(
+        _ => Check::new(
             "test scrub",
-            Status::Fail,
+            CheckStatus::Fail,
             "scrubber did not detect a database URL, patterns may be broken",
         ),
     }
