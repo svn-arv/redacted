@@ -133,6 +133,11 @@ pub fn database_url(scheme: &str, host: &str) -> String {
     format!("{scheme}://user:{}@{host}:5432/mydb", alnum(12))
 }
 
+/// The hyphen keeps it from reading as a code identifier under a `password:` key.
+pub fn password() -> String {
+    format!("{}-{}", alnum(12), digits(4))
+}
+
 pub fn private_key(kind: &str) -> String {
     format!(
         "-----BEGIN {kind}PRIVATE KEY-----\n{}\n-----END {kind}PRIVATE KEY-----",

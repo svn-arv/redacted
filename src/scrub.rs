@@ -454,6 +454,12 @@ mod tests {
         let gcp = fake_secrets::gcp_private_key_field();
         let value = gcp.trim_start_matches(r#""private_key": "#).to_string();
         keyed_case("gcp_sa_private_key", r#""private_key""#, ": ", value);
+        keyed_case(
+            "password_assignment",
+            "DB_PASSWORD",
+            "=",
+            fake_secrets::password(),
+        );
         cases
     }
 
@@ -496,6 +502,72 @@ mod tests {
         in_yml.sort();
         in_cases.sort();
         assert_eq!(in_cases, in_yml);
+    }
+
+    #[test]
+    fn password_assignment_redacts_the_value_in_env_yaml_json_and_libpq_forms() {
+        let scrubber = default_scrubber();
+        for (input, expected) in [
+            ("password=Tr0ub4dor-99", "password= [REDACTED ...r-99]"),
+            (
+                "DB_PASSWORD=Tr0ub4dor-99",
+                "DB_PASSWORD= [REDACTED ...r-99]",
+            ),
+            (
+                "db.password=Tr0ub4dor-99",
+                "db.password= [REDACTED ...r-99]",
+            ),
+            ("password: Tr0ub4dor-99", "password: [REDACTED ...r-99]"),
+            (
+                r#""password": "Tr0ub4dor-99""#,
+                r#""password": [REDACTED ...r-99]""#,
+            ),
+            (
+                "SMTP_PASSWD='Tr0ub4dor-99'",
+                "SMTP_PASSWD= [REDACTED ...r-99]'",
+            ),
+            (
+                "DB_PASSWORD=Password2024",
+                "DB_PASSWORD= [REDACTED ...2024]",
+            ),
+            (
+                "host=db port=5432 password=P@ssw0rd99 dbname=prod",
+                "host=db port=5432 password= [REDACTED ...rd99] dbname=prod",
+            ),
+        ] {
+            let result = scrubber.scrub(input);
+            assert_eq!(result.text, expected, "{input}");
+            assert_eq!(
+                result.counts_by_pattern.get("password_assignment"),
+                Some(&1)
+            );
+        }
+    }
+
+    #[test]
+    fn password_assignment_skips_other_keys_short_values_and_placeholders() {
+        let scrubber = default_scrubber();
+        for input in [
+            "PASSWORD_FILE=/run/secrets/db",
+            "PASSWORD_HASH=Tr0ub4dor-99",
+            "pwd: /home/x",
+            "DB_PASS=Tr0ub4dor-99",
+            "password=Tr0u-99",
+            "password=changeme",
+            "password: password",
+            "DB_PASSWORD=${DB_PASSWORD}",
+            "DB_PASSWORD=<your-password>",
+            "DB_PASSWORD=********",
+            "DB_PASSWORD=xxxxxxxx",
+            "DB_PASSWORD=your-password-here",
+            r#"password: <%= ENV["DB_PASSWORD"] %>"#,
+            "password: {{ db_password }}",
+            "ADMIN_PASSWORD=password123",
+            "DB_PASSWORD=$DB_PASSWORD",
+            "update(password: @password)",
+        ] {
+            assert_eq!(scrubber.scrub(input).text, input, "{input}");
+        }
     }
 
     #[test]

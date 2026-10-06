@@ -3,3 +3,9 @@ DB_PASSWORD=changeme
 SECRET_KEY=placeholder
 ADMIN_PASSWORD=password123
 API_KEY=apikey123
+DB_PASSWORD=${DB_PASSWORD}
+SMTP_PASSWORD=<your-password>
+REDIS_PASSWORD=********
+MAIL_PASSWORD=xxxxxxxx
+ADMIN_PASSWD=your-password-here
+password: password

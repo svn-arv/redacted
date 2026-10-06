@@ -193,7 +193,7 @@ mod tests {
         let marker = "[REDACTED:db_password ...2024]";
         for (input, expected) in [
             (format!("pw {v} here"), format!("pw {marker} here")),
-            (format!("DB_PASSWORD={v}"), format!("DB_PASSWORD={marker}")),
+            (format!("DB_PASS={v}"), format!("DB_PASS={marker}")),
             (format!("it is {v}."), format!("it is {marker}.")),
         ] {
             let result = scrubber.scrub(&input);
@@ -209,16 +209,13 @@ mod tests {
         let scrubber = scrubber_with_learned(vec![learned("db_password", v, None)]);
         let marker = "[REDACTED:db_password ...2024]";
         for (input, expected) in [
+            (format!("DB_PASS=\"{v}\""), format!("DB_PASS=\"{marker}\"")),
             (
-                format!("PASSWORD=\"{v}\""),
-                format!("PASSWORD=\"{marker}\""),
-            ),
-            (
-                format!("\"password\":\"{v}\","),
-                format!("\"password\":\"{marker}\","),
+                format!("\"db_pass\":\"{v}\","),
+                format!("\"db_pass\":\"{marker}\","),
             ),
             (format!("db_pass: '{v}'"), format!("db_pass: '{marker}'")),
-            (format!("PASSWORD={v}"), format!("PASSWORD={marker}")),
+            (format!("SECRET={v}"), format!("SECRET={marker}")),
         ] {
             let result = scrubber.scrub(&input);
             assert_eq!(result.text, expected);
@@ -240,8 +237,8 @@ mod tests {
     fn quoted_non_secret_is_untouched() {
         let scrubber = scrubber_with_learned(vec![learned("db_password", "P@ssw0rd2024", None)]);
         for input in [
-            "PASSWORD=\"N0t@Secret99\"",
-            "PASSWORD=\"P@ssw0rd2024x\"",
+            "DB_PASS=\"N0t@Secret99\"",
+            "DB_PASS=\"P@ssw0rd2024x\"",
             "\"P@ssw0rd2024x\",",
         ] {
             assert_eq!(scrubber.scrub(input).text, input);
