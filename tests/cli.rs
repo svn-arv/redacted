@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 /// Built at runtime so no secret-shaped literal sits in the source.
-fn aws_key() -> String {
+fn fake_aws_access_key() -> String {
     format!("AKIA{}", "Q7".repeat(8))
 }
 
@@ -18,7 +18,7 @@ fn sandbox(tag: &str) -> PathBuf {
     dir
 }
 
-fn run(dir: &Path, args: &[&str], stdin: &str) -> Output {
+fn run_redacted(dir: &Path, args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_redacted"))
         .args(args)
         .current_dir(dir.join("proj"))
@@ -38,18 +38,22 @@ fn run(dir: &Path, args: &[&str], stdin: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-fn stdout(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 #[test]
 fn raw_mode_scrubs_text_and_reports_on_stderr() {
     let dir = sandbox("raw");
-    let o = run(&dir, &["scrub"], &format!("key {}\n", aws_key()));
-    assert!(o.status.success());
-    assert_eq!(stdout(&o), "key [REDACTED:aws_access_key ...Q7Q7]\n");
+    let output = run_redacted(
+        &dir,
+        &["scrub"],
+        &format!("key {}\n", fake_aws_access_key()),
+    );
+    assert!(output.status.success());
+    assert_eq!(stdout(&output), "key [REDACTED:aws_access_key ...Q7Q7]\n");
     assert_eq!(
-        String::from_utf8_lossy(&o.stderr),
+        String::from_utf8_lossy(&output.stderr),
         "[redacted] 1 secret(s) scrubbed\n"
     );
     assert!(
@@ -62,10 +66,10 @@ fn raw_mode_scrubs_text_and_reports_on_stderr() {
 fn raw_mode_passes_clean_text_through_unchanged() {
     let dir = sandbox("clean");
     let input = "{\"SID\"=>\"not json\"}\nplain\r\n";
-    let o = run(&dir, &["scrub"], input);
-    assert!(o.status.success());
-    assert_eq!(stdout(&o), input);
-    assert!(o.stderr.is_empty());
+    let output = run_redacted(&dir, &["scrub"], input);
+    assert!(output.status.success());
+    assert_eq!(stdout(&output), input);
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -73,31 +77,33 @@ fn payload_mode_blocks_and_records_stats() {
     let dir = sandbox("payload");
     let payload = format!(
         r#"{{"tool_name":"Bash","tool_response":{{"stdout":"k {}","stderr":""}}}}"#,
-        aws_key()
+        fake_aws_access_key()
     );
-    let o = run(&dir, &["scrub"], &payload);
-    assert!(o.status.success());
-    assert!(stdout(&o).contains(r#""updatedToolOutput":"k [REDACTED:aws_access_key ...Q7Q7]""#));
+    let output = run_redacted(&dir, &["scrub"], &payload);
+    assert!(output.status.success());
+    assert!(
+        stdout(&output).contains(r#""updatedToolOutput":"k [REDACTED:aws_access_key ...Q7Q7]""#)
+    );
     let stats = fs::read_to_string(dir.join("stats.jsonl")).unwrap();
     assert!(stats.ends_with("\"tool\":\"Bash\",\"by\":{\"aws_access_key\":1}}\n"));
 
-    let o = run(&dir, &["stats"], "");
+    let output = run_redacted(&dir, &["stats"], "");
     assert_eq!(
-        stdout(&o),
+        stdout(&output),
         "Redactions: 1 across 1 hook runs\n\nBy pattern:\n  aws_access_key         1\n"
     );
 }
 
 #[test]
-fn payload_clean_writes_nothing() {
+fn clean_payload_prints_nothing_so_the_original_output_stands() {
     let dir = sandbox("payload-clean");
-    let o = run(
+    let output = run_redacted(
         &dir,
         &["scrub"],
         r#"{"tool_name":"Read","tool_response":"fine"}"#,
     );
-    assert!(o.status.success());
-    assert!(o.stdout.is_empty());
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
@@ -112,9 +118,9 @@ fn ignore_internal_tools_from_the_payload_cwd_skips_non_bash() {
     let payload = format!(
         r#"{{"cwd":{:?},"tool_name":"Read","tool_response":"k {}"}}"#,
         cwd.to_str().unwrap(),
-        aws_key()
+        fake_aws_access_key()
     );
-    assert!(run(&dir, &["scrub"], &payload).stdout.is_empty());
+    assert!(run_redacted(&dir, &["scrub"], &payload).stdout.is_empty());
 }
 
 #[test]
@@ -129,9 +135,9 @@ fn an_empty_or_missing_payload_cwd_never_reads_the_process_cwd_config() {
     for cwd in [r#""cwd":"","#, ""] {
         let payload = format!(
             r#"{{{cwd}"tool_name":"Read","tool_response":"k {}"}}"#,
-            aws_key()
+            fake_aws_access_key()
         );
-        let out = stdout(&run(&dir, &["scrub"], &payload));
+        let out = stdout(&run_redacted(&dir, &["scrub"], &payload));
         assert!(out.contains("[REDACTED:aws_access_key"), "{cwd}: {out}");
     }
 }
@@ -144,13 +150,16 @@ fn ignore_internal_tools_never_skips_a_missing_or_bad_tool_name() {
         "ignore_internal_tools: true\n",
     )
     .unwrap();
-    let bad = format!(r#"{{"tool_name":5,"tool_response":"k {}"}}"#, aws_key());
-    assert!(stdout(&run(&dir, &["scrub"], &bad)).contains("tool output withheld"));
+    let bad = format!(
+        r#"{{"tool_name":5,"tool_response":"k {}"}}"#,
+        fake_aws_access_key()
+    );
+    assert!(stdout(&run_redacted(&dir, &["scrub"], &bad)).contains("tool output withheld"));
 
-    let missing = format!(r#"{{"tool_response":"k {}"}}"#, aws_key());
-    let out = stdout(&run(&dir, &["scrub"], &missing));
+    let missing = format!(r#"{{"tool_response":"k {}"}}"#, fake_aws_access_key());
+    let out = stdout(&run_redacted(&dir, &["scrub"], &missing));
     assert!(out.contains("[REDACTED:aws_access_key"), "{out}");
-    assert!(!out.contains(&aws_key()));
+    assert!(!out.contains(&fake_aws_access_key()));
 }
 
 #[test]
@@ -161,20 +170,20 @@ fn bad_user_regex_fails_closed() {
         "patterns: [{name: bad, regex: '('}]\n",
     )
     .unwrap();
-    let o = run(
+    let output = run_redacted(
         &dir,
         &["scrub"],
         r#"{"tool_name":"Read","tool_response":"anything"}"#,
     );
     assert!(
-        stdout(&o).contains("tool output withheld"),
+        stdout(&output).contains("tool output withheld"),
         "{}",
-        stdout(&o)
+        stdout(&output)
     );
 
-    let o = run(&dir, &["scrub"], "anything");
-    assert!(!o.status.success());
-    assert!(o.stdout.is_empty());
+    let output = run_redacted(&dir, &["scrub"], "anything");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
@@ -183,18 +192,18 @@ fn deeply_nested_payload_is_withheld_not_treated_as_text() {
     let payload = format!(
         r#"{{"tool_name":"Read","tool_response":{}"k {}"{}}}"#,
         "[".repeat(200),
-        aws_key(),
+        fake_aws_access_key(),
         "]".repeat(200)
     );
-    assert!(stdout(&run(&dir, &["scrub"], &payload)).contains("tool output withheld"));
+    assert!(stdout(&run_redacted(&dir, &["scrub"], &payload)).contains("tool output withheld"));
 }
 
 #[test]
 fn version_flag_prints_the_cargo_version() {
     let dir = sandbox("version");
-    let o = run(&dir, &["--version"], "");
+    let output = run_redacted(&dir, &["--version"], "");
     // The release tag must match Cargo.toml; v1.0.0 is the Rust cutover.
-    assert_eq!(stdout(&o), "redacted version 1.0.0\n");
+    assert_eq!(stdout(&output), "redacted version 1.0.0\n");
 }
 
 #[test]
@@ -204,9 +213,9 @@ fn verify_reports_checks_and_fails_without_a_hook() {
     let settings = dir.join("home/.claude/settings.json");
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
     fs::write(&settings, r#"{"hooks":{"PostToolUse":{}}}"#).unwrap();
-    let o = run(&dir, &["verify"], "");
-    let out = stdout(&o);
-    assert!(!o.status.success());
+    let output = run_redacted(&dir, &["verify"], "");
+    let out = stdout(&output);
+    assert!(!output.status.success());
     let no_hooks = format!(
         "[FAIL] global hook - no PostToolUse hooks in {}, run: redacted init",
         settings.display()
@@ -239,7 +248,7 @@ fn verify_reports_learned_config_and_warns_on_project_hashes() {
         "learned: [{name: c, sha256: ef, len: 9}]\n",
     )
     .unwrap();
-    let out = stdout(&run(&dir, &["verify"], ""));
+    let out = stdout(&run_redacted(&dir, &["verify"], ""));
     assert!(!out.contains("[WARN] protection"), "{out}");
     for line in [
         "[PASS] learned secrets - config version 2, 2 learned, heuristic enabled",
@@ -253,10 +262,10 @@ fn verify_reports_learned_config_and_warns_on_project_hashes() {
 fn init_refuses_without_a_terminal_and_writes_nothing() {
     let dir = sandbox("init-notty");
     fs::write(dir.join("proj/.env"), "A=1\n").unwrap();
-    let o = run(&dir, &["init", "--env", ".env", "--local"], "");
-    assert_eq!(o.status.code(), Some(1));
+    let output = run_redacted(&dir, &["init", "--env", ".env", "--local"], "");
+    assert_eq!(output.status.code(), Some(1));
     assert_eq!(
-        String::from_utf8_lossy(&o.stderr),
+        String::from_utf8_lossy(&output.stderr),
         "init needs an interactive terminal\n"
     );
     assert!(!dir.join("home/.config/redacted/config.yaml").exists());
@@ -273,9 +282,9 @@ fn verify_passes_with_a_registered_hook() {
         format!(r#"{{"hooks":{{"PostToolUse":[{{"matcher":"","hooks":[{{"type":"command","command":"{bin} scrub"}}]}}]}}}}"#),
     )
     .unwrap();
-    let o = run(&dir, &["verify"], "");
-    let out = stdout(&o);
-    assert!(o.status.success(), "{out}");
+    let output = run_redacted(&dir, &["verify"], "");
+    let out = stdout(&output);
+    assert!(output.status.success(), "{out}");
     assert!(
         out.contains("[PASS] global hook") && out.contains("[SKIP] local hook"),
         "{out}"
@@ -303,9 +312,9 @@ fn uninstall_removes_both_scopes_keeps_config_and_is_idempotent() {
     let config = dir.join("home/.config/redacted/config.yaml");
     fs::write(&config, "version: 2\n").unwrap();
 
-    let o = run(&dir, &["uninstall"], "");
-    let out = stdout(&o);
-    assert!(o.status.success(), "{out}");
+    let output = run_redacted(&dir, &["uninstall"], "");
+    let out = stdout(&output);
+    assert!(output.status.success(), "{out}");
     for line in [
         format!("Removed redacted hook from {}", global.display()),
         // current_dir() is canonical (/private/var on macOS).
@@ -326,7 +335,7 @@ fn uninstall_removes_both_scopes_keeps_config_and_is_idempotent() {
     assert!(fs::read_to_string(&global).unwrap().contains("other-hook"));
     assert!(config.exists());
 
-    let out = stdout(&run(&dir, &["uninstall"], ""));
+    let out = stdout(&run_redacted(&dir, &["uninstall"], ""));
     assert!(out.contains("No redacted hooks found."), "{out}");
 }
 
@@ -340,8 +349,8 @@ fn uninstall_local_leaves_the_global_hook() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, settings).unwrap();
     }
-    let o = run(&dir, &["uninstall", "--local"], "");
-    assert!(o.status.success());
+    let output = run_redacted(&dir, &["uninstall", "--local"], "");
+    assert!(output.status.success());
     assert_eq!(fs::read_to_string(&global).unwrap(), settings);
     assert!(
         !fs::read_to_string(&local)
@@ -358,12 +367,12 @@ fn hook_output(dir: &Path, session: &str, stdout_text: &str) -> serde_json::Valu
         "tool_name": "Bash",
         "tool_response": {"stdout": stdout_text, "stderr": ""},
     });
-    let o = run(dir, &["scrub"], &payload.to_string());
-    serde_json::from_slice(&o.stdout).unwrap_or(serde_json::Value::Null)
+    let output = run_redacted(dir, &["scrub"], &payload.to_string());
+    serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
 }
 
-fn reason(v: &serde_json::Value) -> &str {
-    v["reason"].as_str().unwrap_or("")
+fn reason(response: &serde_json::Value) -> &str {
+    response["reason"].as_str().unwrap_or("")
 }
 
 #[test]
@@ -374,7 +383,7 @@ fn v1_config_notice_rides_the_reason_once_per_session() {
         "whitelist: [jwt]\nallow: [FOO]\n",
     )
     .unwrap();
-    let hit = format!("k {}", aws_key());
+    let hit = format!("k {}", fake_aws_access_key());
 
     // A clean call must not use up the session's one notice.
     assert!(hook_output(&dir, "s1", "clean").is_null());
@@ -408,7 +417,7 @@ fn an_empty_home_never_reads_config_under_the_working_directory() {
     .unwrap();
     let payload = serde_json::json!({
         "tool_name": "Bash",
-        "tool_response": {"stdout": format!("k {}", aws_key()), "stderr": ""},
+        "tool_response": {"stdout": format!("k {}", fake_aws_access_key()), "stderr": ""},
     });
     let mut child = Command::new(env!("CARGO_BIN_EXE_redacted"))
         .arg("scrub")
@@ -430,7 +439,7 @@ fn an_empty_home_never_reads_config_under_the_working_directory() {
 #[test]
 fn v2_config_or_no_config_never_carries_the_notice() {
     let dir = sandbox("v2-notice");
-    let hit = format!("k {}", aws_key());
+    let hit = format!("k {}", fake_aws_access_key());
     let none = hook_output(&dir, "s1", &hit);
     assert!(
         reason(&none).starts_with("[redacted] 1 secret(s)"),

@@ -21,8 +21,9 @@ fn fixtures() -> Vec<PathBuf> {
 
 /// Expands `{{kind:n}}` placeholders with a PRNG seeded from the file name,
 /// so every run sees the same bytes.
-fn expand(path: &Path) -> Vec<u8> {
+fn expand_placeholders(path: &Path) -> Vec<u8> {
     let name = path.file_name().unwrap().to_str().unwrap();
+    // FNV-1a hash of the file name seeds a xorshift64 (13, 7, 17) generator.
     let mut state = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
     });
@@ -57,7 +58,7 @@ fn expand(path: &Path) -> Vec<u8> {
 }
 
 /// Runs `bin scrub` in raw-text mode with an empty HOME so no user config leaks in.
-fn scrub(bin: &Path, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
+fn run_scrub_raw(bin: &Path, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let home = std::env::temp_dir().join(format!("redacted-diff-home-{}", std::process::id()));
     fs::create_dir_all(&home).unwrap();
     let mut child = Command::new(bin)
@@ -76,10 +77,10 @@ fn scrub(bin: &Path, input: &[u8]) -> (Vec<u8>, Vec<u8>) {
 }
 
 #[test]
-fn raw_mode_matches_committed_goldens() {
+fn raw_mode_output_matches_the_go_0_7_goldens() {
     let rust = Path::new(env!("CARGO_BIN_EXE_redacted"));
     for path in fixtures() {
-        let (stdout, stderr) = scrub(rust, &expand(&path));
+        let (stdout, stderr) = run_scrub_raw(rust, &expand_placeholders(&path));
         let want_out = fs::read(path.with_extension("golden")).unwrap();
         let want_err = fs::read(path.with_extension("stderr.golden")).unwrap();
         assert!(
