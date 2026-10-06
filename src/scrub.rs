@@ -241,13 +241,11 @@ impl Scrubber {
 }
 
 fn marker_for(name: &str, matched: &str, includes_key: bool) -> String {
-    if includes_key {
-        if let Some(separator_at) = matched.find(['=', ':']) {
-            let separator = &matched[separator_at..=separator_at];
-            let value = matched[separator_at + 1..].trim_start_matches([' ', '\t']);
-            let key = &matched[..separator_at];
-            return format!("{key}{separator} [REDACTED ...{}]", last_chars(value, 4));
-        }
+    if includes_key && let Some(separator_at) = matched.find(['=', ':']) {
+        let separator = &matched[separator_at..=separator_at];
+        let value = matched[separator_at + 1..].trim_start_matches([' ', '\t']);
+        let key = &matched[..separator_at];
+        return format!("{key}{separator} [REDACTED ...{}]", last_chars(value, 4));
     }
     format!("[REDACTED:{name} ...{}]", last_chars(matched, 4))
 }

@@ -74,10 +74,10 @@ pub fn remove_hook(path: &Path) -> Result<bool, String> {
     if entries.is_empty() {
         hooks.remove("PostToolUse");
     }
-    if hooks.is_empty() {
-        if let Some(root) = settings.as_object_mut() {
-            root.remove("hooks");
-        }
+    if hooks.is_empty()
+        && let Some(root) = settings.as_object_mut()
+    {
+        root.remove("hooks");
     }
     write(path, &settings)?;
     Ok(true)

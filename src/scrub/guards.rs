@@ -146,12 +146,13 @@ pub fn percent_decode(encoded: &str) -> Vec<u8> {
     let mut i = 0;
     while i < bytes.len() {
         let hex = |c: u8| (c as char).to_digit(16);
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(high_nibble), Some(low_nibble)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-                out.push((high_nibble * 16 + low_nibble) as u8);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(high_nibble), Some(low_nibble)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push((high_nibble * 16 + low_nibble) as u8);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

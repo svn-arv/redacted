@@ -171,10 +171,10 @@ fn parse_dotenv(text: &str) -> Vec<(String, String)> {
         }
         .trim();
         for q in ['"', '\''] {
-            if let Some(rest) = raw.strip_prefix(q) {
-                if let Some(end) = rest.rfind(q) {
-                    value = &rest[..end];
-                }
+            if let Some(rest) = raw.strip_prefix(q)
+                && let Some(end) = rest.rfind(q)
+            {
+                value = &rest[..end];
             }
         }
         if !value.is_empty() {
@@ -363,10 +363,8 @@ pub fn uninstall(local: bool) -> Result<(), String> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut paths = Vec::new();
     // Without a HOME there is no global file, only the local one.
-    if !local {
-        if let Some(home) = home {
-            paths.push(home.join(".claude/settings.json"));
-        }
+    if !local && let Some(home) = home {
+        paths.push(home.join(".claude/settings.json"));
     }
     paths.push(cwd.join(".claude/settings.local.json"));
     let mut removed = 0;
