@@ -1,7 +1,5 @@
 # Contributing
 
-Thanks for helping improve `redacted`.
-
 ## Development
 
 ```bash
@@ -11,23 +9,43 @@ cargo build
 cargo test
 ```
 
-`cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` and
-`sh scripts/migration-check.sh` should come back clean.
+CI runs these on Linux and macOS. All must pass:
 
-## Detection rules
+| Command | Checks |
+| --- | --- |
+| `cargo fmt --check` | formatting |
+| `cargo clippy --all-targets -- -D warnings` | lints, warnings are errors |
+| `cargo test` | unit, CLI, golden and corpus tests |
+| `sh scripts/migration-check.sh` | fresh install, v1 upgrade, v2 config |
 
-Vendor patterns live in `src/engine.yml`. Add or tune rules there, not in Rust.
-A new pattern needs:
+- A behavior change starts with a test that fails for the right reason. Then change the code until it passes.
+- Never commit a real or real-looking secret. Build test secrets at runtime with `src/fake.rs`, or with a `{{kind:n}}` placeholder in a golden fixture.
 
-- a synthetic generator in `src/fake.rs` (never commit a real key),
-- a row in `builtin_rows` in `src/scrub.rs` (recall), and
-- no regression in the clean-corpus precision tests (`corpus/clean/` stays clean).
+How the code fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the engine fits together.
+## Adding or changing a detection rule
+
+Built-in patterns live in `src/engine.yml`, not in Rust.
+
+1. Add or edit the row in `src/engine.yml`:
+   - `name`, `regex` (Go RE2 syntax, translated by `src/scrub/go_regex.rs`);
+   - `prefilters` or `prefilters_fold`: literals that must appear before the regex runs;
+   - `includes_key: true` when the match includes the key, so the output keeps `KEY=`.
+   - Order matters: specific patterns before catch-alls.
+2. Add a generator to `src/fake.rs` when the secret needs one (`fake` is test-only).
+3. Add a row to `builtin_rows` in `src/scrub.rs`. `every_engine_pattern_has_a_row` fails until you do. The row gives the input, the exact expected output and the secret that must not survive.
+4. Run `cargo test`:
+   - recall: the new secret is caught when planted in every `corpus/clean/*.txt` file;
+   - precision: no clean corpus file gets a redaction.
+5. A false positive from real output becomes a new `corpus/clean/*.txt` file.
+6. Golden fixtures (`tests/fixtures/*.txt` with `.golden` and `.stderr.golden`) pin raw-mode output recorded from the Go 0.7 binary.
+   - There is no script to regenerate them.
+   - A change that alters existing golden output breaks 0.7 parity on purpose or by mistake. Say which in the PR, and edit the golden by hand.
 
 ## Pull requests
 
 - Branch off `main` (`feat/...`, `fix/...`, `chore/...`).
 - Use [Conventional Commits](https://www.conventionalcommits.org/).
+- Fill in `.github/pull_request_template.md`, including the linked issue.
 - CI (fmt, clippy, test, migration check) must pass.
-- A maintainer reviews and merges; external PRs need a maintainer approval.
+- A maintainer reviews and merges. External PRs need a maintainer approval.
