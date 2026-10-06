@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub r#override: bool,
+    #[serde(rename = "override")]
+    pub project_override: bool,
     pub whitelist: Vec<String>,
     pub allow: Vec<String>,
     pub ignore_internal_tools: bool,
@@ -52,18 +53,29 @@ pub struct CustomPattern {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct EngineConfig {
-    pub r#override: bool,
+    #[serde(rename = "override")]
+    pub project_override: bool,
     pub allow_values: Vec<String>,
     pub patterns: Vec<CustomPattern>,
 }
 
+/// Generic over the file's type: `DeserializeOwned` means "can be built from
+/// text without borrowing it", so one reader serves Config and EngineConfig.
 fn read<T: serde::de::DeserializeOwned>(path: PathBuf) -> Option<T> {
     serde_yaml::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 fn paths(home: &str, cwd: &str, global: &str, project: &str) -> (Option<PathBuf>, Option<PathBuf>) {
-    let g = (!home.is_empty()).then(|| Path::new(home).join(".config/redacted").join(global));
-    let p = (!cwd.is_empty()).then(|| Path::new(cwd).join(project));
+    let g = if home.is_empty() {
+        None
+    } else {
+        Some(Path::new(home).join(".config/redacted").join(global))
+    };
+    let p = if cwd.is_empty() {
+        None
+    } else {
+        Some(Path::new(cwd).join(project))
+    };
     (g, p)
 }
 
@@ -71,24 +83,19 @@ fn paths(home: &str, cwd: &str, global: &str, project: &str) -> (Option<PathBuf>
 /// a project `override: true` drops the global file. Unreadable files are skipped.
 pub fn load(home: &str, cwd: &str) -> Config {
     let (g, p) = paths(home, cwd, "config.yaml", ".redacted.yaml");
-    let mut global: Option<Config> = g.and_then(read);
+    let global: Option<Config> = g.and_then(read);
     let project: Option<Config> = p.and_then(read);
     // Learned hashes and the heuristic are global only, even under a project override.
-    let (version, learned, heuristic) = global
-        .as_mut()
-        .map(|g| {
-            (
-                g.version,
-                std::mem::take(&mut g.learned),
-                g.heuristic.clone(),
-            )
-        })
-        .unwrap_or_default();
+    let (version, learned, heuristic) = match &global {
+        Some(g) => (g.version, g.learned.clone(), g.heuristic.clone()),
+        None => (0, Vec::new(), Heuristic::default()),
+    };
+    // Matching on the pair covers every combination; `if` guards pick the override case.
     let cfg = match (global, project) {
         (None, None) => Config::default(),
         (Some(g), None) => g,
         (None, Some(p)) => p,
-        (Some(_), Some(p)) if p.r#override => p,
+        (Some(_), Some(p)) if p.project_override => p,
         (Some(g), Some(p)) => Config {
             whitelist: [g.whitelist, p.whitelist].concat(),
             allow: [g.allow, p.allow].concat(),
@@ -96,6 +103,7 @@ pub fn load(home: &str, cwd: &str) -> Config {
             ..Default::default()
         },
     };
+    // Struct update: the three named fields, everything else taken from `cfg`.
     Config {
         version,
         learned,
@@ -126,7 +134,7 @@ pub fn load_engine(home: &str, cwd: &str) -> EngineConfig {
         (None, None) => EngineConfig::default(),
         (Some(g), None) => g,
         (None, Some(p)) => p,
-        (Some(_), Some(p)) if p.r#override => p,
+        (Some(_), Some(p)) if p.project_override => p,
         (Some(g), Some(p)) => EngineConfig {
             allow_values: [g.allow_values, p.allow_values].concat(),
             patterns: [g.patterns, p.patterns].concat(),

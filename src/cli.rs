@@ -116,23 +116,24 @@ fn scrub() -> i32 {
     if cfg.ignore_internal_tools && named_non_bash {
         return 0;
     }
-    let mut out = match scrubber {
-        Ok(s) => hook::process_safely(&data, &|t| s.scrub(t), &mut record),
-        Err(_) => hook::withheld(),
+    let (mut out, by_pattern) = match scrubber {
+        Ok(s) => hook::process_safely(&data, &|t| s.scrub(t)),
+        Err(_) => (hook::withheld(), BTreeMap::new()),
     };
-    // A global config without `version` is a v0.7.x install that has no learned secrets.
-    let v1 = cfg.version == 0
+    record(&field("tool_name"), &by_pattern);
+    // A global config without `version` is a Go 0.7 install that has no learned secrets.
+    let is_pre_v2_config = cfg.version == 0
         && Path::new(&home())
             .join(".config/redacted/config.yaml")
             .exists();
-    if v1 && !out.is_empty() && first_notice(&field("session_id")) {
-        out = hook::prepend_reason(&out, V1_NOTICE);
+    if is_pre_v2_config && !out.is_empty() && first_notice(&field("session_id")) {
+        out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
     let _ = io::stdout().write_all(&out);
     0
 }
 
-const V1_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
+const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
 
 /// Stamps `session` in a file next to the stats file; true if it was not there yet.
 /// A missing or unreadable file means notify.
@@ -206,6 +207,7 @@ struct Check {
     detail: String,
 }
 
+/// `impl Into<String>` takes a `&str` or a `String`, so callers skip `.to_string()`.
 fn check(name: &'static str, status: Status, detail: impl Into<String>) -> Check {
     Check {
         name,
@@ -335,16 +337,16 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
 }
 
 fn check_config(cwd: &str) -> Check {
-    let home = home();
+    let home_dir = home();
     let files = [
         (
             "global config",
-            Path::new(&home).join(".config/redacted/config.yaml"),
+            Path::new(&home_dir).join(".config/redacted/config.yaml"),
         ),
         ("project config", Path::new(cwd).join(".redacted.yaml")),
         (
             "global engine",
-            Path::new(&home).join(".config/redacted/engine.yml"),
+            Path::new(&home_dir).join(".config/redacted/engine.yml"),
         ),
         (
             "project engine",
@@ -363,8 +365,8 @@ fn check_config(cwd: &str) -> Check {
             "none found (using built-in defaults)",
         );
     }
-    let cfg = config::load(&home, cwd);
-    let eng = config::load_engine(&home, cwd);
+    let cfg = config::load(&home_dir, cwd);
+    let eng = config::load_engine(&home_dir, cwd);
     let mut detail = format!("{} loaded", sources.join(", "));
     let extras: Vec<String> = [
         (cfg.whitelist.len(), "whitelisted"),

@@ -4,11 +4,16 @@
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+// A trait's methods only exist once the trait is imported: these add the unix
+// `mode` to OpenOptions and `from_mode` to Permissions.
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+use inquire::{Confirm, MultiSelect, Select};
 
 use crate::config::Learned;
 use crate::scrub::{learned_hint, sha256_hex};
 use crate::settings;
-use inquire::{Confirm, MultiSelect, Select};
 
 /// The only function that prompts; everything it calls is tested without a TTY.
 pub fn run(env: Option<PathBuf>, local: bool) -> i32 {
@@ -26,7 +31,7 @@ pub fn run(env: Option<PathBuf>, local: bool) -> i32 {
 }
 
 fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "cannot determine home directory")?;
+    let home = std::env::var("HOME").map_err(|_| "cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
     let env = match env {
@@ -120,24 +125,23 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
 
 /// `.env*` files in `dir`, minus example/sample/template ones, sorted.
 fn find_env_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .filter(|p| {
-            let name = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            name.starts_with(".env")
-                && !["example", "sample", "template"]
-                    .iter()
-                    .any(|w| name.contains(w))
-        })
-        .collect();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    // `flatten` skips the entries that failed to read.
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_lowercase) else {
+            continue;
+        };
+        let is_template = ["example", "sample", "template"]
+            .iter()
+            .any(|w| name.contains(w));
+        if path.is_file() && name.starts_with(".env") && !is_template {
+            out.push(path);
+        }
+    }
     out.sort();
     out
 }
@@ -155,11 +159,19 @@ fn parse_dotenv(text: &str) -> Vec<(String, String)> {
         if key.is_empty() || key.starts_with('#') || key.contains(char::is_whitespace) {
             continue;
         }
-        let quoted = ['"', '\''].into_iter().find_map(|q| {
-            let rest = raw.strip_prefix(q)?;
-            rest.rfind(q).map(|end| &rest[..end])
-        });
-        let value = quoted.unwrap_or_else(|| raw.split(" #").next().unwrap_or("").trim());
+        // A comment after an unquoted value starts at ` #`.
+        let mut value = match raw.find(" #") {
+            Some(i) => &raw[..i],
+            None => raw,
+        }
+        .trim();
+        for q in ['"', '\''] {
+            if let Some(rest) = raw.strip_prefix(q) {
+                if let Some(end) = rest.rfind(q) {
+                    value = &rest[..end];
+                }
+            }
+        }
         if !value.is_empty() {
             out.push((key.to_string(), value.to_string()));
         }
@@ -255,7 +267,9 @@ fn merge_config(existing: &str, entries: &[Learned]) -> Result<String, String> {
     } else {
         serde_yaml::from_str(existing).map_err(|e| format!("parsing config: {e}"))?
     };
-    let map = doc.as_mapping_mut().ok_or("config is not a YAML mapping")?;
+    let map = doc
+        .as_mapping_mut()
+        .ok_or("config is not a YAML mapping".to_string())?;
     let mut learned: Vec<Learned> = match map.get("learned") {
         Some(v) => {
             serde_yaml::from_value(v.clone()).map_err(|e| format!("parsing learned: {e}"))?
@@ -284,11 +298,11 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    opts.mode(0o600);
     opts.open(path)?.write_all(contents.as_bytes())?;
     // mode() only applies on create; tighten a file that already existed.
     #[cfg(unix)]
-    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 

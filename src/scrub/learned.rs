@@ -21,44 +21,40 @@ impl Scrubber {
         if self.exact.is_empty() {
             return;
         }
-        let runs: Vec<_> = self
-            .safe_run
-            .find_iter(&result.text)
-            .map(|m| (m.start(), m.end()))
-            .collect();
-        let spans = self.exact_spans(&result.text, runs);
-        replace_spans(result, spans);
-        // A value holding `@`, `(` or quotes spans several safe runs; whitespace-delimited
-        // runs catch it, on the rewritten text so a marker is never matched again.
-        let text = &result.text;
-        let runs: Vec<_> = text
-            .split_ascii_whitespace()
-            .map(|w| {
-                let start = w.as_ptr() as usize - text.as_ptr() as usize;
-                (start, start + w.len())
-            })
-            .collect();
-        let spans = self.exact_spans(text, runs);
-        replace_spans(result, spans);
+        // A value holding `@`, `(` or quotes spans several safe runs, so whitespace-delimited
+        // runs go second, on the rewritten text so a marker is never matched again.
+        for run_regex in [&self.safe_run, &self.word_run] {
+            let runs = run_regex
+                .find_iter(&result.text)
+                .map(|m| (m.start(), m.end()))
+                .collect();
+            let spans = self.exact_spans(&result.text, runs);
+            replace_spans(result, spans);
+        }
     }
 
     fn exact_spans(&self, text: &str, runs: Vec<(usize, usize)>) -> Vec<(usize, usize, &str)> {
         let mut spans = Vec::new();
-        for (run_start, run_end) in runs {
-            let run = &text[run_start..run_end];
+        // A labeled loop: `continue 'runs` jumps to the next run from the inner loops.
+        'runs: for (run_start, run_end) in runs {
             // `KEY=value` is one run, so also try each suffix after `=` or `:`.
-            let starts = std::iter::once(run_start).chain(
+            let mut starts = vec![run_start];
+            let run = &text[run_start..run_end];
+            starts.extend(
                 run.match_indices(['=', ':'])
                     .map(|(i, _)| run_start + i + 1),
             );
-            let hit = starts
-                .flat_map(|start| unwrap_candidates(text, start, run_end))
-                .filter(|&(start, end)| start < end && self.exact_lens.contains(&(end - start)))
-                .find_map(|(start, end)| {
-                    let name = self.exact.get(&sha256_hex(&text[start..end]))?;
-                    Some((start, end, name.as_str()))
-                });
-            spans.extend(hit);
+            for start in starts {
+                for (s, e) in unwrap_candidates(text, start, run_end) {
+                    if s >= e || !self.exact_lens.contains(&(e - s)) {
+                        continue;
+                    }
+                    if let Some(name) = self.exact.get(&sha256_hex(&text[s..e])) {
+                        spans.push((s, e, name.as_str()));
+                        continue 'runs;
+                    }
+                }
+            }
         }
         spans
     }
@@ -70,6 +66,7 @@ impl Scrubber {
 fn unwrap_candidates(text: &str, start: usize, end: usize) -> [(usize, usize); 4] {
     const TRAIL: [char; 9] = ['.', ':', '!', '?', ',', ';', ')', '}', ']'];
     let trailed = start + text[start..end].trim_end_matches(TRAIL).len();
+    // Slice pattern: the first and last byte are the same quote character.
     let (qs, qe) = match text.as_bytes()[start..trailed] {
         [q @ (b'"' | b'\''), .., l] if q == l => (start + 1, trailed - 1),
         _ => (start, trailed),

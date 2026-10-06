@@ -4,6 +4,9 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
+// A trait's methods only exist once the trait is imported: this adds `mode`.
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,7 +46,7 @@ pub fn record(path: &Path, tool: &str, by_pattern: &BTreeMap<String, usize>) {
     let mut opts = OpenOptions::new();
     opts.append(true).create(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    opts.mode(0o600);
     let file = opts.open(path);
     if let Ok(mut f) = file {
         let _ = f.write_all(line.as_bytes());
@@ -61,8 +64,9 @@ pub struct Summary {
 pub fn aggregate(path: &Path) -> std::io::Result<Summary> {
     let mut s = Summary::default();
     let data = match fs::read_to_string(path) {
+        Ok(data) => data,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(s),
-        other => other?,
+        Err(e) => return Err(e),
     };
     for line in data.lines().filter(|l| !l.is_empty()) {
         let Ok(e) = serde_json::from_str::<Event>(line) else {

@@ -47,7 +47,7 @@ struct Pattern {
     includes_key: bool,
     prefilters: Vec<String>,
     prefilters_fold: Vec<String>,
-    scored: bool,
+    is_heuristic: bool,
 }
 
 pub struct Scrubber {
@@ -59,6 +59,7 @@ pub struct Scrubber {
     exact: HashMap<String, String>,
     exact_lens: HashSet<usize>,
     safe_run: Regex,
+    word_run: Regex,
     heuristic: Option<Pattern>,
     thresholds: Heuristic,
 }
@@ -92,7 +93,7 @@ impl Scrubber {
                 includes_key: p.includes_key,
                 prefilters: p.prefilters,
                 prefilters_fold: p.prefilters_fold,
-                scored: false,
+                is_heuristic: false,
             });
         }
         for p in &eng.patterns {
@@ -102,7 +103,7 @@ impl Scrubber {
                 includes_key: false,
                 prefilters: Vec::new(),
                 prefilters_fold: Vec::new(),
-                scored: false,
+                is_heuristic: false,
             });
         }
         let allow_values = engine
@@ -122,7 +123,7 @@ impl Scrubber {
                 includes_key: true,
                 prefilters: Vec::new(),
                 prefilters_fold: Vec::new(),
-                scored: true,
+                is_heuristic: true,
             })
         } else {
             None
@@ -146,6 +147,7 @@ impl Scrubber {
                 .collect(),
             exact_lens: cfg.learned.iter().map(|l| l.len).collect(),
             safe_run: compile(&format!("{}+", engine.value_safe_char))?,
+            word_run: compile(r"[^ \t\n\x0C\r]+")?,
             heuristic,
             thresholds,
         })
@@ -171,6 +173,7 @@ impl Scrubber {
                 continue;
             }
             if !p.prefilters_fold.is_empty() {
+                // Computes the lowercase copy on first use only, then reuses it.
                 let low = lowered.get_or_insert_with(|| result.text.to_lowercase());
                 if !p.prefilters_fold.iter().any(|l| low.contains(l.as_str())) {
                     continue;

@@ -9,11 +9,11 @@ use serde_json::Value;
 
 use crate::scrub::ScrubResult;
 
-pub type Scrub<'a> = &'a dyn Fn(&str) -> ScrubResult;
-pub type Recorder<'a> = &'a mut dyn FnMut(&str, &BTreeMap<String, usize>);
+/// The bytes to print and the per-pattern hit counts to record.
+pub const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
 
-const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
-
+// Typed structs rather than `json!`: serde_json sorts `json!` keys, and the
+// envelope's key order is pinned byte for byte. `'a` lets fields borrow strings.
 #[derive(Serialize)]
 struct Output<'a> {
     decision: &'a str,
@@ -30,30 +30,28 @@ struct HookSpecificOutput<'a> {
     updated_tool_output: &'a str,
 }
 
-/// Scrubs the tool output in a PostToolUse payload. No hit returns nothing so
+/// Scrubs the tool output in a PostToolUse payload. No hit returns no bytes so
 /// the original passes through; a hit returns the block envelope.
-fn process(data: &[u8], scrub: Scrub, record: Recorder) -> Result<Vec<u8>, String> {
+fn process(data: &[u8], scrub: &dyn Fn(&str) -> ScrubResult) -> Result<Processed, String> {
     let payload: Value =
         serde_json::from_slice(data).map_err(|e| format!("parse hook payload: {e}"))?;
     let tool_name = str_field(&payload, "tool_name")?;
     let response = payload.get("tool_response").unwrap_or(&Value::Null);
-    let (out, by_pattern) = if tool_name == "Bash" {
-        process_bash(response, scrub)?
+    if tool_name == "Bash" {
+        process_bash(response, scrub)
     } else {
-        process_generic(response, &tool_name, scrub)?
-    };
-    if !by_pattern.is_empty() {
-        record(&tool_name, &by_pattern);
+        process_generic(response, &tool_name, scrub)
     }
-    Ok(out)
 }
 
 /// Fail closed: an error or panic withholds the output rather than letting
 /// raw, unscrubbed bytes through.
-pub fn process_safely(data: &[u8], scrub: Scrub, record: Recorder) -> Vec<u8> {
-    match panic::catch_unwind(AssertUnwindSafe(|| process(data, scrub, record))) {
-        Ok(Ok(out)) => out,
-        _ => withheld(),
+pub fn process_safely(data: &[u8], scrub: &dyn Fn(&str) -> ScrubResult) -> Processed {
+    // catch_unwind turns a panic into an Err. AssertUnwindSafe vouches that nothing
+    // the panic may have left half-written is used afterwards: it is all dropped.
+    match panic::catch_unwind(AssertUnwindSafe(|| process(data, scrub))) {
+        Ok(Ok(processed)) => processed,
+        _ => (withheld(), BTreeMap::new()),
     }
 }
 
@@ -66,7 +64,7 @@ pub fn withheld() -> Vec<u8> {
             updated_tool_output: WITHHELD,
         },
     })
-    .unwrap_or_default()
+    .expect("static envelope serializes")
 }
 
 /// Puts `line` above an envelope's reason; `updatedToolOutput` is left alone
@@ -93,7 +91,10 @@ fn str_field(v: &Value, key: &str) -> Result<String, String> {
     }
 }
 
-fn process_bash(response: &Value, scrub: Scrub) -> Result<Processed, String> {
+fn process_bash(
+    response: &Value,
+    scrub: &dyn Fn(&str) -> ScrubResult,
+) -> Result<Processed, String> {
     if !(response.is_object() || response.is_null()) {
         return Err("parse hook payload: tool_response is not an object".into());
     }
@@ -101,7 +102,7 @@ fn process_bash(response: &Value, scrub: Scrub) -> Result<Processed, String> {
     let out = scrub(&str_field(response, "stdout")?);
     let err = scrub(&stderr);
     if !out.redacted() && !err.redacted() {
-        return Ok(Default::default());
+        return Ok((Vec::new(), BTreeMap::new()));
     }
 
     let mut reason = out.text.clone();
@@ -117,16 +118,21 @@ fn process_bash(response: &Value, scrub: Scrub) -> Result<Processed, String> {
     let block = write_block(out.count + err.count, "command", &reason, &updated)?;
     let mut by = out.by_pattern;
     for (k, v) in err.by_pattern {
+        // entry() finds or inserts the key; or_default() starts a new count at 0.
         *by.entry(k).or_default() += v;
     }
     Ok((block, by))
 }
 
-fn process_generic(response: &Value, tool_name: &str, scrub: Scrub) -> Result<Processed, String> {
+fn process_generic(
+    response: &Value,
+    tool_name: &str,
+    scrub: &dyn Fn(&str) -> ScrubResult,
+) -> Result<Processed, String> {
     let (text, structured) = extract_text(response)?;
     let result = scrub(&text);
     if !result.redacted() {
-        return Ok(Default::default());
+        return Ok((Vec::new(), BTreeMap::new()));
     }
 
     // The hit counts every string in the response; a Read envelope's reason still shows its content.
@@ -173,18 +179,24 @@ fn file_content(raw: &Value) -> Option<&str> {
 fn walk_strings(v: &Value, dst: &mut Vec<String>) {
     match v {
         Value::String(s) if !s.is_empty() => dst.push(s.clone()),
-        Value::Object(m) => m.iter().for_each(|(k, x)| {
-            if !k.is_empty() {
-                dst.push(k.clone());
+        Value::Object(m) => {
+            for (k, x) in m {
+                if !k.is_empty() {
+                    dst.push(k.clone());
+                }
+                walk_strings(x, dst);
             }
-            walk_strings(x, dst)
-        }),
-        Value::Array(a) => a.iter().for_each(|x| walk_strings(x, dst)),
+        }
+        Value::Array(a) => {
+            for x in a {
+                walk_strings(x, dst);
+            }
+        }
         _ => {}
     }
 }
 
-fn scrub_json(v: &Value, scrub: Scrub) -> Value {
+fn scrub_json(v: &Value, scrub: &dyn Fn(&str) -> ScrubResult) -> Value {
     match v {
         Value::String(s) => Value::String(scrub(s).text),
         Value::Object(m) => Value::Object(
@@ -229,7 +241,7 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, String> {
 
 // Go always escapes U+2028/U+2029; serde_json never does. Both only ever
 // appear inside JSON strings, so a plain replace is safe.
-fn to_go_json<T: Serialize + ?Sized>(v: &T) -> Result<String, String> {
+fn to_go_json<T: Serialize>(v: &T) -> Result<String, String> {
     let s = serde_json::to_string(v).map_err(|e| format!("encode response: {e}"))?;
     Ok(s.replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029"))
@@ -242,15 +254,10 @@ mod tests {
     use crate::fake;
     use crate::scrub::Scrubber;
 
-    type Recorded = Vec<(String, BTreeMap<String, usize>)>;
-
-    fn run(payload: &str) -> (String, Recorded) {
+    fn run(payload: &str) -> (String, BTreeMap<String, usize>) {
         let s = Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap();
-        let mut recorded = Vec::new();
-        let out = process_safely(payload.as_bytes(), &|t| s.scrub(t), &mut |tool, by| {
-            recorded.push((tool.to_string(), by.clone()))
-        });
-        (String::from_utf8(out).unwrap(), recorded)
+        let (out, counts) = process_safely(payload.as_bytes(), &|t| s.scrub(t));
+        (String::from_utf8(out).unwrap(), counts)
     }
 
     fn json(s: &str) -> String {
@@ -266,22 +273,16 @@ mod tests {
     }
 
     #[test]
-    fn bash_hit_emits_the_envelope_and_records() {
+    fn bash_hit_emits_the_envelope_and_counts() {
         let key = fake::aws_access_key();
         let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"k {key}","stderr":"","exitCode":0}}}}"#
         );
-        let (out, recorded) = run(&payload);
+        let (out, counts) = run(&payload);
         let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\nk {marker}");
         assert_eq!(out, envelope(&reason, &format!("k {marker}")));
-        assert_eq!(
-            recorded,
-            [(
-                "Bash".to_string(),
-                BTreeMap::from([("aws_access_key".to_string(), 1)])
-            )]
-        );
+        assert_eq!(counts, BTreeMap::from([("aws_access_key".to_string(), 1)]));
     }
 
     #[test]
@@ -298,13 +299,13 @@ mod tests {
     }
 
     #[test]
-    fn no_hit_writes_nothing_and_records_nothing() {
+    fn no_hit_writes_nothing_and_counts_nothing() {
         for payload in [
             r#"{"tool_name":"Bash","tool_response":{"stdout":"nothing secret","stderr":""}}"#,
             r#"{"tool_name":"Read","tool_response":"plain file"}"#,
             r#"{"tool_name":"Grep","tool_response":{"numFiles":0}}"#,
         ] {
-            assert_eq!(run(payload), (String::new(), vec![]), "{payload}");
+            assert_eq!(run(payload), (String::new(), BTreeMap::new()), "{payload}");
         }
     }
 
@@ -312,11 +313,11 @@ mod tests {
     fn read_string_response_replaces_with_bare_text() {
         let key = fake::jwt();
         let payload = format!(r#"{{"tool_name":"Read","tool_response":"line1\ntoken {key}"}}"#);
-        let (out, recorded) = run(&payload);
+        let (out, counts) = run(&payload);
         let text = format!("line1\ntoken [REDACTED:jwt ...{}]", fake::hint(&key));
         let reason = format!("[redacted] 1 secret(s) scrubbed from Read output.\n\n{text}");
         assert_eq!(out, envelope(&reason, &text));
-        assert_eq!(recorded[0].0, "Read");
+        assert_eq!(counts.get("jwt"), Some(&1));
     }
 
     #[test]
@@ -360,7 +361,7 @@ mod tests {
         let payload = format!(
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/{key}.txt","content":"clean"}}}}}}"#
         );
-        let (out, recorded) = run(&payload);
+        let (out, counts) = run(&payload);
         let marker = format!("[REDACTED:aws_access_key ...{}]", fake::hint(&key));
         let reason = "[redacted] 1 secret(s) scrubbed from Read output.\n\nclean";
         let updated = format!(
@@ -368,7 +369,7 @@ mod tests {
             json(&format!("/a/{marker}.txt"))
         );
         assert_eq!(out, envelope(reason, &updated));
-        assert_eq!(recorded[0].1.get("aws_access_key"), Some(&1));
+        assert_eq!(counts.get("aws_access_key"), Some(&1));
     }
 
     #[test]
@@ -401,7 +402,7 @@ mod tests {
     #[test]
     fn fails_closed_on_panic() {
         let payload = r#"{"tool_name":"Read","tool_response":"anything"}"#;
-        let out = process_safely(payload.as_bytes(), &|_| panic!("boom"), &mut |_, _| {});
+        let (out, _) = process_safely(payload.as_bytes(), &|_| panic!("boom"));
         assert_eq!(String::from_utf8(out).unwrap(), withheld_line());
     }
 

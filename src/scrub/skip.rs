@@ -7,7 +7,7 @@ use super::{Pattern, Scrubber, MIN_CHAR_CLASSES, MIN_ENTROPY};
 
 impl Scrubber {
     pub(super) fn skip_match(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
-        if self.is_allowed(m) || self.allows_value(p, m, text, end) {
+        if self.name_allowed(m) || self.value_allowed(p, m, text, end) {
             return true;
         }
         if !p.includes_key {
@@ -35,7 +35,7 @@ impl Scrubber {
         if (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_lowercase()) {
             return true;
         }
-        p.scored && self.skip_scored(m, value, text, end)
+        p.is_heuristic && self.skip_scored(m, value, text, end)
     }
 
     /// Go's secret_value guards: identifier keys, URLs, and values that don't score as random.
@@ -64,7 +64,7 @@ impl Scrubber {
             && shannon_entropy(&v) >= h.min_entropy
     }
 
-    fn is_allowed(&self, m: &str) -> bool {
+    fn name_allowed(&self, m: &str) -> bool {
         if self.allow.is_empty() {
             return false;
         }
@@ -72,7 +72,7 @@ impl Scrubber {
         self.allow.iter().any(|name| upper.contains(name.as_str()))
     }
 
-    fn allows_value(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
+    fn value_allowed(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
         if self.allow_values.is_empty() {
             return false;
         }
@@ -223,8 +223,8 @@ fn char_classes(v: &str) -> usize {
         v.bytes().any(|c| c.is_ascii_uppercase()),
         v.bytes().any(|c| c.is_ascii_digit()),
     ]
-    .iter()
-    .filter(|&&b| b)
+    .into_iter()
+    .filter(|&b| b)
     .count()
 }
 

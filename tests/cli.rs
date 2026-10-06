@@ -329,7 +329,7 @@ fn uninstall_local_leaves_the_global_hook() {
         .contains("redacted scrub"));
 }
 
-const V1_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
+const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to learn your secrets.";
 
 fn hook_output(dir: &Path, session: &str, stdout_text: &str) -> serde_json::Value {
     let payload = serde_json::json!({
@@ -359,7 +359,7 @@ fn v1_config_notice_rides_the_reason_once_per_session() {
     assert!(hook_output(&dir, "s1", "clean").is_null());
     let first = hook_output(&dir, "s1", &hit);
     assert!(
-        reason(&first).starts_with(&format!("{V1_NOTICE}\n[redacted] 1 secret(s)")),
+        reason(&first).starts_with(&format!("{PRE_V2_NOTICE}\n[redacted] 1 secret(s)")),
         "{first}"
     );
     let updated = first["hookSpecificOutput"]["updatedToolOutput"]
@@ -372,7 +372,7 @@ fn v1_config_notice_rides_the_reason_once_per_session() {
         reason(&second).starts_with("[redacted] 1 secret(s)"),
         "{second}"
     );
-    assert!(reason(&hook_output(&dir, "s2", &hit)).starts_with(V1_NOTICE));
+    assert!(reason(&hook_output(&dir, "s2", &hit)).starts_with(PRE_V2_NOTICE));
 }
 
 #[test]
