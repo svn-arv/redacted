@@ -25,11 +25,11 @@ struct Cli {
     #[arg(long)]
     version: bool,
     #[command(subcommand)]
-    command: Option<Cmd>,
+    command: Option<CliCommand>,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+enum CliCommand {
     /// Scrub secrets from a hook payload (stdin -> stdout)
     Scrub,
     /// Check that redacted is installed and working
@@ -39,8 +39,8 @@ enum Cmd {
     /// Learn secrets from a .env file and install the hook
     Init {
         /// Env file to learn from (skips the .env* search in this directory)
-        #[arg(long)]
-        env: Option<PathBuf>,
+        #[arg(long = "env", value_name = "ENV")]
+        env_file: Option<PathBuf>,
         /// Install to .claude/settings.local.json (this project only)
         #[arg(long)]
         local: bool,
@@ -62,11 +62,11 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let result = match cli.command {
-        Some(Cmd::Scrub) => scrub(),
-        Some(Cmd::Verify) => verify::run(),
-        Some(Cmd::Stats) => show_stats(),
-        Some(Cmd::Init { env, local }) => init::run(env, local),
-        Some(Cmd::Uninstall { local }) => init::uninstall(local),
+        Some(CliCommand::Scrub) => run_scrub(),
+        Some(CliCommand::Verify) => verify::run(),
+        Some(CliCommand::Stats) => show_stats(),
+        Some(CliCommand::Init { env_file, local }) => init::run(env_file, local),
+        Some(CliCommand::Uninstall { local }) => init::uninstall(local),
         None => {
             let _ = Cli::command().print_help();
             Ok(())
@@ -83,22 +83,22 @@ pub fn run() -> ExitCode {
 
 /// Once stdin is read, hook mode always succeeds, so Claude Code never sees a
 /// failed hook; only raw-text mode, run by hand, can still fail.
-fn scrub() -> Result<(), String> {
-    let mut data = Vec::new();
+fn run_scrub() -> Result<(), String> {
+    let mut stdin_bytes = Vec::new();
     io::stdin()
-        .read_to_end(&mut data)
+        .read_to_end(&mut stdin_bytes)
         .map_err(|e| format!("scrub: read stdin: {e}"))?;
-    let payload_mode = looks_like_hook_payload(&data);
-    let header: Value = serde_json::from_slice(&data).unwrap_or(Value::Null);
-    let field = |k: &str| {
-        header
-            .get(k)
+    let is_hook_payload = looks_like_hook_payload(&stdin_bytes);
+    let payload: Value = serde_json::from_slice(&stdin_bytes).unwrap_or(Value::Null);
+    let payload_string = |key: &str| {
+        payload
+            .get(key)
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string()
     };
     // An absent or empty cwd reads no project config, not one under the process cwd.
-    let cwd = header
+    let cwd = payload
         .get("cwd")
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
@@ -106,37 +106,38 @@ fn scrub() -> Result<(), String> {
     let home_dir = config::home();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
-    let cfg = config::load(home_dir, cwd);
-    let scrubber = Scrubber::new(&cfg, &config::load_engine(home_dir, cwd));
+    let config = config::load(home_dir, cwd);
+    let scrubber = Scrubber::new(&config, &config::load_engine(home_dir, cwd));
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
-    if !payload_mode {
+    if !is_hook_payload {
         let scrubber = scrubber.map_err(|e| format!("scrub: {e}"))?;
-        scrub_raw_text(&data, &scrubber);
+        scrub_raw_text(&stdin_bytes, &scrubber);
         return Ok(());
     }
 
     // Only a well-formed non-Bash name skips; anything else goes on to fail closed.
-    let named_non_bash = matches!(header.get("tool_name"), Some(Value::String(t)) if t != "Bash");
-    if cfg.ignore_internal_tools && named_non_bash {
+    let is_named_non_bash_tool =
+        matches!(payload.get("tool_name"), Some(Value::String(tool)) if tool != "Bash");
+    if config.ignore_internal_tools && is_named_non_bash_tool {
         return Ok(());
     }
-    let (mut out, by_pattern) = match scrubber {
-        Ok(s) => hook::scrub_payload_or_withhold(&data, &|t| s.scrub(t)),
+    let (mut out, counts_by_pattern) = match scrubber {
+        Ok(scrubber) => hook::scrub_payload_or_withhold(&stdin_bytes, &|text| scrubber.scrub(text)),
         Err(_) => (hook::withheld_output(), BTreeMap::new()),
     };
-    record(&field("tool_name"), &by_pattern);
+    record_stats(&payload_string("tool_name"), &counts_by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
     let is_pre_v2_config =
-        cfg.version == 0 && home_dir.is_some_and(|home| config::global_path(home).exists());
-    if is_pre_v2_config && !out.is_empty() && first_notice(&field("session_id")) {
+        config.version == 0 && home_dir.is_some_and(|home| config::global_path(home).exists());
+    if is_pre_v2_config && !out.is_empty() && mark_session_notified(&payload_string("session_id")) {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
     let _ = io::stdout().write_all(&out);
     Ok(())
 }
 
-/// Prints the scrubbed text, and the hit count on stderr, for a person testing by hand.
+/// Prints the scrubbed text, and the redaction count on stderr, for a person testing by hand.
 fn scrub_raw_text(data: &[u8], scrubber: &Scrubber) {
     let result = scrubber.scrub(&String::from_utf8_lossy(data));
     let _ = io::stdout().write_all(result.text.as_bytes());
@@ -149,24 +150,24 @@ const PRE_V2_NOTICE: &str = "[redacted] config is v1: run `redacted init` to lea
 
 /// Stamps `session` in a file next to the stats file; true if it was not there yet.
 /// A missing or unreadable file means notify.
-fn first_notice(session: &str) -> bool {
+fn mark_session_notified(session: &str) -> bool {
     let Some(path) = stats::file_path().map(|p| p.with_file_name("notified.txt")) else {
         return true;
     };
-    let seen = fs::read_to_string(&path).unwrap_or_default();
-    if seen.lines().any(|l| l == session) {
+    let notified_sessions = fs::read_to_string(&path).unwrap_or_default();
+    if notified_sessions.lines().any(|line| line == session) {
         return false;
     }
-    let file = fs::OpenOptions::new().append(true).create(true).open(&path);
-    if let Ok(mut f) = file {
-        let _ = writeln!(f, "{session}");
+    let opened = fs::OpenOptions::new().append(true).create(true).open(&path);
+    if let Ok(mut file) = opened {
+        let _ = writeln!(file, "{session}");
     }
     true
 }
 
-fn record(tool: &str, by_pattern: &BTreeMap<String, usize>) {
+fn record_stats(tool: &str, counts_by_pattern: &BTreeMap<String, usize>) {
     if let Some(path) = stats::file_path() {
-        stats::record(&path, tool, by_pattern);
+        stats::record(&path, tool, counts_by_pattern);
     }
 }
 
