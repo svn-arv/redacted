@@ -7,6 +7,7 @@ mod init;
 mod scrub;
 mod settings;
 mod stats;
+mod verify;
 
 use std::process::ExitCode;
 
