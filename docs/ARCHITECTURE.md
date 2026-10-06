@@ -35,7 +35,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/cli.rs` | clap commands, `scrub` (mode choice, stats, pre-v2 notice), `show_stats`, the one place an `Err` becomes exit 1. |
 | `src/config.rs` | `Config`, `LearnedSecret`, `HeuristicConfig`, `EngineConfig`; global and project loading and merging; `is_vendor_only`. |
 | `src/settings.rs` | Claude Code `settings.json`: read, `install_hook`, `remove_hook`, find our entry. |
-| `src/init.rs` | `redacted init` (env file pick, `parse_dotenv`, `learn`, `derive_shape`, `merge_learned_into_config`, hook install) and `uninstall`. |
+| `src/init.rs` | `redacted init` (env file pick, `parse_dotenv`, `with_url_passwords`, `learn`, `derive_shape`, `merge_learned_into_config`, hook install) and `uninstall`. |
 | `src/verify.rs` | `redacted verify`: one `Check` per line, exit 1 on any FAIL. |
 | `src/scrub.rs` | `Scrubber`: builds every tier, runs vendor patterns and the heuristic, writes markers. |
 | `src/scrub/learned.rs` | Learned tier: shape and exact-hash matching, `sha256_hex`, `learned_value_hint`. |
@@ -88,6 +88,12 @@ Other paths:
 The hint counts characters, not bytes.
 
 ## Learned matching
+
+Before the picker, `init::with_url_passwords` expands the parsed pairs:
+
+- A value that is a URL with `user:password@` adds a `<KEY>_PASSWORD` pair right after it.
+- `url_password` reads the password from the userinfo, up to the last `@` before the first `/`, `?` or `#`.
+- The password is percent-decoded with `scrub::percent_decode`. Invalid UTF-8 keeps it as written.
 
 `init::learn` turns a picked `.env` value into `LearnedSecret {name, sha256, byte_len, shape}`:
 

@@ -155,12 +155,14 @@ The `name` column is what `whitelist` takes. Keyed patterns match `KEY=value` or
 | `auth_header` | `Authorization:` or `Proxy-Authorization:` + `Bearer`, `Basic` or `Token` + value (keyed) |
 | `database_url` | `postgres://`, `postgresql://`, `mysql://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `amqp://`, `amqps://` |
 | `credentialed_url` | `scheme://user:pass@host` for any other scheme (for example `postgis://`) |
+| `password_assignment` | a key ending in `password` or `passwd`, then `=` or `:`, then a value of 8+ characters (keyed). Covers `DB_PASSWORD=`, `db.password=`, `password: `, `"password": ` and libpq `password=` |
 
-Built-in `allow_values` leave these alone: Anthropic transcript ids (`toolu_`, `msg_`, `req_`), placeholder URL passwords (`pass`, `password`, `USER:PASSWORD`, `<password>`), `org/repo#123` refs, version strings, and credential-free localhost database URLs.
+Built-in `allow_values` leave these alone: Anthropic transcript ids (`toolu_`, `msg_`, `req_`), placeholder URL passwords (`pass`, `password`, `USER:PASSWORD`, `<password>`), `org/repo#123` refs, version strings, credential-free localhost database URLs, and filler password values (`********`, `your-password-here`, lowercase `password` followed by digits).
 
 ### Learned secrets
 
 - `init` stores, per value: `name` (the env key, lowercased), `sha256` of the value, `len` in bytes and an optional `shape`. Never the value.
+- A URL value with a password, such as `DATABASE_URL=postgres://admin:pw@host/db`, adds a second row, `database_url_password`. It holds the password alone, percent-decoded, so a log that prints only the password is caught too.
 - A `shape` is derived when the value has a literal prefix of 3+ characters ending in `_` or `-` within its first 12 characters, and the rest holds only letters, digits, `_` and `-`.
 - The shape is the prefix, the rest's character set and a length band of plus or minus 4, for example `\bsk_live_[a-zA-Z0-9]{20,28}\b`. It also catches a rotated key with the same prefix.
 - Matching runs shapes first, then exact hashes.
