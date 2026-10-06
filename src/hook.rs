@@ -128,10 +128,6 @@ fn scrub_bash_response(
         return Ok((Vec::new(), BTreeMap::new()));
     }
 
-    let mut reason = stdout_result.text.clone();
-    if stderr_result.has_redactions() {
-        reason += &format!("\n[stderr]\n{}", stderr_result.text);
-    }
     // Only fields that came in as strings are replaced: no key is invented.
     let mut updated = response.clone();
     for (key, scrubbed) in [
@@ -144,17 +140,14 @@ fn scrub_bash_response(
         }
     }
 
-    let block = block_output(
-        stdout_result.count + stderr_result.count,
-        "command",
-        &reason,
-        updated,
-    )?;
     let mut counts = stdout_result.counts_by_pattern;
     for (pattern, count) in stderr_result.counts_by_pattern {
         // entry() finds or inserts the key; or_default() starts a new count at 0.
         *counts.entry(pattern).or_default() += count;
     }
+    // Stdout lines, then stderr ones: updatedToolOutput keeps the streams apart.
+    let scrubbed = format!("{}\n{}", stdout_result.text, stderr_result.text);
+    let block = block_output("command", &counts, &scrubbed, updated)?;
     Ok((block, counts))
 }
 
@@ -163,49 +156,35 @@ fn scrub_tool_response(
     tool_name: &str,
     scrub: &dyn Fn(&str) -> ScrubResult,
 ) -> Result<HookResult, String> {
-    let (text, structured) = text_to_scrub(response)?;
+    let text = text_to_scrub(response)?;
     let result = scrub(&text);
     if !result.has_redactions() {
         return Ok((Vec::new(), BTreeMap::new()));
     }
 
-    // The hit counts every string in the response; a Read envelope's reason still shows its content.
-    let content = match file_content(response) {
-        Some(c) => scrub(c).text,
-        None if structured => marker_lines(&result.text),
-        None => result.text.clone(),
-    };
     // reason may summarize, the replacement may not: it stands in for the result.
     let updated = match response {
         Value::String(_) => Value::String(result.text.clone()),
         other => scrub_json(other, scrub),
     };
-    let block = block_output(result.count, tool_name, &content, updated)?;
+    let block = block_output(tool_name, &result.counts_by_pattern, &result.text, updated)?;
     Ok((block, result.counts_by_pattern))
 }
 
-/// Scrubber input plus whether it came from a structured value (summarized in reason).
-fn text_to_scrub(response: &Value) -> Result<(String, bool), String> {
+/// Scrubber input: the string itself, or every string in a structured value.
+fn text_to_scrub(response: &Value) -> Result<String, String> {
     if let Value::String(s) = response {
-        return Ok((s.clone(), false));
+        return Ok(s.clone());
     }
     let mut parts = Vec::new();
     collect_strings(response, &mut parts);
     if !parts.is_empty() {
-        return Ok((parts.join("\n"), true));
+        return Ok(parts.join("\n"));
     }
     match response {
-        Value::Null => Ok((String::new(), true)),
-        other => Ok((to_go_json(other)?, true)),
+        Value::Null => Ok(String::new()),
+        other => to_go_json(other),
     }
-}
-
-/// `file.content` of a Read `{"type":"text","file":{...}}` envelope.
-fn file_content(response: &Value) -> Option<&str> {
-    if response.get("type")?.as_str()? != "text" {
-        return None;
-    }
-    response.get("file")?.get("content")?.as_str()
 }
 
 /// Every non-empty string leaf and object key, keys in sorted order (serde_json's
@@ -257,15 +236,32 @@ fn marker_lines(scrubbed: &str) -> String {
     lines.join("\n")
 }
 
+/// The reason names the hits only: Claude Code shows its first line collapsed,
+/// the marker lines on expand, and the model reads the output in `updated`.
 fn block_output(
-    count: usize,
     source: &str,
-    reason: &str,
+    counts_by_pattern: &BTreeMap<String, usize>,
+    scrubbed: &str,
     updated: Value,
 ) -> Result<Vec<u8>, String> {
+    let count: usize = counts_by_pattern.values().sum();
+    let mut hits: Vec<_> = counts_by_pattern.iter().collect();
+    // Most hits first, then by name, as `redacted stats` orders them.
+    hits.sort_by(|left, right| right.1.cmp(left.1).then(left.0.cmp(right.0)));
+    let summary: Vec<String> = hits
+        .iter()
+        .map(|(name, hit_count)| match hit_count {
+            1 => name.to_string(),
+            _ => format!("{name} ×{hit_count}"),
+        })
+        .collect();
+    let summary = summary.join(", ");
     encode(&HookOutput {
         decision: "block",
-        reason: &format!("[redacted] {count} secret(s) scrubbed from {source} output.\n\n{reason}"),
+        reason: &format!(
+            "[redacted] {count} secret(s) scrubbed from {source} output: {summary}\n\n{}",
+            marker_lines(scrubbed)
+        ),
         hook_specific_output: HookSpecificOutput {
             hook_event_name: "PostToolUse",
             updated_tool_output: updated,
@@ -327,7 +323,9 @@ mod tests {
             r#"{{"tool_name":"Bash","tool_response":{{"stdout":"k {key}","stderr":"","exitCode":0}}}}"#
         );
         let (out, counts) = run_hook(&payload);
-        let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\nk {marker}");
+        let reason = format!(
+            "[redacted] 1 secret(s) scrubbed from command output: aws_access_key\n\n- k {marker}"
+        );
         let updated = format!(
             r#"{{"exitCode":0,"stderr":"","stdout":{}}}"#,
             json_string(&format!("k {marker}"))
@@ -347,12 +345,39 @@ mod tests {
             "[REDACTED:npm_token ...{}]",
             fake_secrets::last_four_chars(&key)
         );
-        let reason = format!("[redacted] 1 secret(s) scrubbed from command output.\n\n{marker}");
+        let reason =
+            format!("[redacted] 1 secret(s) scrubbed from command output: npm_token\n\n- {marker}");
         let updated = format!(
             r#"{{"stderr":"warning: retrying once","stdout":{}}}"#,
             json_string(&marker)
         );
         assert_eq!(out, expected_envelope(&reason, &updated));
+    }
+
+    #[test]
+    fn collapsed_reason_line_names_the_most_hit_pattern_first() {
+        // Claude Code shows only the first line until expanded, so it must say what was hit.
+        let (npm_key, aws_key) = (fake_secrets::npm_token(), fake_secrets::aws_access_key());
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_response":{{"stdout":"a {npm_key}\nclean\nb {npm_key}","stderr":"c {aws_key}"}}}}"#
+        );
+        let (out, _) = run_hook(&payload);
+        let envelope: Value = serde_json::from_str(&out).unwrap();
+        let npm_marker = format!(
+            "[REDACTED:npm_token ...{}]",
+            fake_secrets::last_four_chars(&npm_key)
+        );
+        let aws_marker = format!(
+            "[REDACTED:aws_access_key ...{}]",
+            fake_secrets::last_four_chars(&aws_key)
+        );
+        // Count before name: npm_token sorts after aws_access_key but was hit more.
+        assert_eq!(
+            envelope["reason"],
+            format!(
+                "[redacted] 3 secret(s) scrubbed from command output: npm_token ×2, aws_access_key\n\n- a {npm_marker}\n- b {npm_marker}\n- c {aws_marker}"
+            )
+        );
     }
 
     #[test]
@@ -395,17 +420,16 @@ mod tests {
         let key = fake_secrets::jwt();
         let payload = format!(r#"{{"tool_name":"Read","tool_response":"line1\ntoken {key}"}}"#);
         let (out, counts) = run_hook(&payload);
-        let text = format!(
-            "line1\ntoken [REDACTED:jwt ...{}]",
-            fake_secrets::last_four_chars(&key)
-        );
-        let reason = format!("[redacted] 1 secret(s) scrubbed from Read output.\n\n{text}");
+        let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
+        let text = format!("line1\ntoken {marker}");
+        let reason =
+            format!("[redacted] 1 secret(s) scrubbed from Read output: jwt\n\n- token {marker}");
         assert_eq!(out, expected_envelope(&reason, &json_string(&text)));
         assert_eq!(counts.get("jwt"), Some(&1));
     }
 
     #[test]
-    fn read_file_envelope_reason_is_full_content_and_shape_is_kept() {
+    fn read_file_envelope_reason_lists_only_marker_lines_and_shape_is_kept() {
         let key = fake_secrets::jwt();
         let payload = format!(
             r#"{{"tool_name":"Read","tool_response":{{"type":"text","file":{{"filePath":"/a/.env","content":"A=1\nT={key}","numLines":2,"startLine":1}}}}}}"#
@@ -413,7 +437,7 @@ mod tests {
         let (out, _) = run_hook(&payload);
         let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
         let reason =
-            format!("[redacted] 1 secret(s) scrubbed from Read output.\n\nA=1\nT={marker}");
+            format!("[redacted] 1 secret(s) scrubbed from Read output: jwt\n\n- T={marker}");
         // An object, not a string of JSON: Claude Code ignores a replacement of the wrong type.
         let updated = format!(
             r#"{{"file":{{"content":{},"filePath":"/a/.env","numLines":2,"startLine":1}},"type":"text"}}"#,
@@ -430,7 +454,8 @@ mod tests {
         );
         let (out, _) = run_hook(&payload);
         let marker = format!("[REDACTED:jwt ...{}]", fake_secrets::last_four_chars(&key));
-        let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- x {marker}");
+        let reason =
+            format!("[redacted] 1 secret(s) scrubbed from Grep output: jwt\n\n- x {marker}");
         // Go escapes U+2028 even with HTML escaping off, and keeps number literals verbatim.
         let content =
             json_string(&format!("<a>&b\u{2028}\nx {marker}")).replace('\u{2028}', "\\u2028");
@@ -452,12 +477,14 @@ mod tests {
             "[REDACTED:aws_access_key ...{}]",
             fake_secrets::last_four_chars(&key)
         );
-        let reason = "[redacted] 1 secret(s) scrubbed from Read output.\n\nclean";
+        let reason = format!(
+            "[redacted] 1 secret(s) scrubbed from Read output: aws_access_key\n\n- /a/{marker}.txt"
+        );
         let updated = format!(
             r#"{{"file":{{"content":"clean","filePath":{}}},"type":"text"}}"#,
             json_string(&format!("/a/{marker}.txt"))
         );
-        assert_eq!(out, expected_envelope(reason, &updated));
+        assert_eq!(out, expected_envelope(&reason, &updated));
         assert_eq!(counts.get("aws_access_key"), Some(&1));
     }
 
@@ -472,7 +499,9 @@ mod tests {
             "[REDACTED:aws_access_key ...{}]",
             fake_secrets::last_four_chars(&key)
         );
-        let reason = format!("[redacted] 1 secret(s) scrubbed from Grep output.\n\n- {marker}");
+        let reason = format!(
+            "[redacted] 1 secret(s) scrubbed from Grep output: aws_access_key\n\n- {marker}"
+        );
         let updated = format!(
             r#"{{"counts":{{{}:1}},"mode":"count"}}"#,
             json_string(&marker)

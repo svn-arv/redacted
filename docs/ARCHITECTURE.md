@@ -160,17 +160,16 @@ Before the picker, `init::with_url_passwords` expands the parsed pairs:
 
 - `scrub_bash_response` scrubs `tool_response.stdout` and `.stderr` separately.
 - `scrub_tool_response` scrubs a string response directly. For structured responses it collects every string leaf and object key (`collect_strings`) and rewrites them in place (`scrub_json`).
-- For a Read `{"type":"text","file":{"content":...}}` response, the `reason` shows the scrubbed file content.
 
 A hit prints one line:
 
 ```json
-{"decision":"block","reason":"[redacted] N secret(s) scrubbed from <command|tool_name> output.\n\n<text>","hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":<tool_response with its strings scrubbed>}}
+{"decision":"block","reason":"[redacted] N secret(s) scrubbed from <command|tool_name> output: <pattern ×k, ...>\n\n- <line holding a marker>","hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":<tool_response with its strings scrubbed>}}
 ```
 
 - `updatedToolOutput` replaces the tool result the model reads. It mirrors the `tool_response` shape, because Claude Code applies it only when it matches the tool's output schema (a string is ignored on Bash).
 - Bash: the incoming object with `stdout` and `stderr` replaced by their scrubbed text. Other fields (`interrupted`, `isImage`) stay. Other tools: the scrubbed JSON value, or the scrubbed string for a string response.
-- `reason` may summarize: lines holding a marker, prefixed `- `.
+- `reason` only names the hits, since `updatedToolOutput` already carries the output. Header: per-pattern counts, most hits first then by name, `×k` only when k > 1. Claude Code shows it collapsed. Body: each line holding a marker, prefixed `- ` (Bash: stdout lines, then stderr).
 - Key order and escaping match the Go 0.7 encoder: typed `Serialize` structs, U+2028 and U+2029 escaped, trailing newline.
 - No hit: nothing is printed and Claude Code keeps the original output.
 - Fail closed: a parse error, a wrong field type, a scrubber that failed to build, or a panic (`catch_unwind` in `scrub_payload_or_withhold`) prints `withheld_output(stdin)`, an envelope whose `reason` and `updatedToolOutput` carry no tool output. `updatedToolOutput` mirrors `tool_response` with every string leaf withheld (object keys are kept); unparsable input or no `tool_response` gets the bare `WITHHELD` sentence.
