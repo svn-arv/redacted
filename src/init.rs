@@ -150,17 +150,18 @@ fn find_env_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `KEY=value` lines with optional `export`, quotes and `#` comments; empty values skipped.
+/// `KEY=value` lines with optional `export` and quotes, commented-out ones included; empty values skipped.
 fn parse_dotenv(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
-        let line = line.trim();
+        // A commented-out assignment is still a secret in the file, so drop the `#` and parse it.
+        let line = line.trim().trim_start_matches('#').trim_start();
         let line = line.strip_prefix("export ").unwrap_or(line);
         let Some((key, raw)) = line.split_once('=') else {
             continue;
         };
         let (key, raw) = (key.trim(), raw.trim());
-        if key.is_empty() || key.starts_with('#') || key.contains(char::is_whitespace) {
+        if key.is_empty() || key.contains(char::is_whitespace) {
             continue;
         }
         // A comment after an unquoted value starts at ` #`.
@@ -462,6 +463,21 @@ mod tests {
             ("C", "single"),
             ("D", "bare"),
             ("E", "x=y"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn parse_dotenv_keeps_commented_out_assignments_because_they_leak_too() {
+        let text = "# OLD_KEY=abc12345XYZ\n#export TOKEN='t0k3n-value'\n## DOUBLE=hash-hash\n# set your key here\n# a note with = sign in prose\n";
+        let got = parse_dotenv(text);
+        let want: Vec<(String, String)> = [
+            ("OLD_KEY", "abc12345XYZ"),
+            ("TOKEN", "t0k3n-value"),
+            ("DOUBLE", "hash-hash"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

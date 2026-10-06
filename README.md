@@ -80,7 +80,7 @@ What `init` does, in order:
    - Names containing `example`, `sample` or `template` are skipped.
    - One file is used directly. Several open a picker.
    - None found: it installs the hook only.
-3. Reads `KEY=value` lines. Handles `export`, quotes and `#` comments. Skips empty values.
+3. Reads `KEY=value` lines. Handles `export` and quotes. Commented-out assignments are offered too, since they leak like live ones; prose comments are skipped. Skips empty values.
 4. Shows a multi-select, `Secrets to learn:`. Each row shows the key, the last 4 characters (values of 12+ characters only) and the shape, or `exact only`. Never the value.
    - Pre-ticked: values with at least 2 of {lowercase, uppercase, digit, other}. So `development` and `3000` start unticked.
    - Not learnable, shown with the reason: under 8 characters (`too short`) or containing whitespace (`cannot match (contains spaces)`).
