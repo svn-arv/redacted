@@ -102,12 +102,12 @@ fn process_bash(
     let stderr = str_field(response, "stderr")?;
     let out = scrub(&str_field(response, "stdout")?);
     let err = scrub(&stderr);
-    if !out.redacted() && !err.redacted() {
+    if !out.has_redactions() && !err.has_redactions() {
         return Ok((Vec::new(), BTreeMap::new()));
     }
 
     let mut reason = out.text.clone();
-    if err.redacted() {
+    if err.has_redactions() {
         reason += &format!("\n[stderr]\n{}", err.text);
     }
     // The replacement keeps a clean stderr too: the model still needs it.
@@ -117,8 +117,8 @@ fn process_bash(
     }
 
     let block = write_block(out.count + err.count, "command", &reason, &updated)?;
-    let mut by = out.by_pattern;
-    for (k, v) in err.by_pattern {
+    let mut by = out.counts_by_pattern;
+    for (k, v) in err.counts_by_pattern {
         // entry() finds or inserts the key; or_default() starts a new count at 0.
         *by.entry(k).or_default() += v;
     }
@@ -132,7 +132,7 @@ fn process_generic(
 ) -> Result<Processed, String> {
     let (text, structured) = extract_text(response)?;
     let result = scrub(&text);
-    if !result.redacted() {
+    if !result.has_redactions() {
         return Ok((Vec::new(), BTreeMap::new()));
     }
 
@@ -148,7 +148,7 @@ fn process_generic(
         other => to_go_json(&scrub_json(other, scrub))?,
     };
     let block = write_block(result.count, tool_name, &content, &updated)?;
-    Ok((block, result.by_pattern))
+    Ok((block, result.counts_by_pattern))
 }
 
 /// Scrubber input plus whether it came from a structured value (summarized in reason).

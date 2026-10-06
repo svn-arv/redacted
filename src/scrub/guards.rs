@@ -58,7 +58,7 @@ impl Scrubber {
             return false;
         }
         let decoded_text = String::from_utf8_lossy(&decoded);
-        let h = &self.thresholds;
+        let h = &self.heuristic_thresholds;
         let len = decoded_text.chars().count();
         (h.min_length..=h.max_length).contains(&len)
             && char_classes(&decoded_text) >= h.min_char_classes
@@ -66,11 +66,13 @@ impl Scrubber {
     }
 
     fn name_allowed(&self, m: &str) -> bool {
-        if self.allow.is_empty() {
+        if self.allowed_keys_upper.is_empty() {
             return false;
         }
         let upper = m.to_uppercase();
-        self.allow.iter().any(|name| upper.contains(name.as_str()))
+        self.allowed_keys_upper
+            .iter()
+            .any(|name| upper.contains(name.as_str()))
     }
 
     fn value_allowed(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
@@ -280,7 +282,7 @@ fn looks_like_lenient_identifier(v: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::scrub::tests::{default_scrubber, heuristic_on, with_heuristic};
+    use crate::scrub::tests::{default_scrubber, enabled_heuristic, scrubber_with_heuristic};
 
     #[test]
     fn keyed_identifier_values_are_skipped() {
@@ -298,7 +300,7 @@ mod tests {
 
     #[test]
     fn heuristic_keeps_the_go_skip_guards() {
-        let s = with_heuristic(heuristic_on());
+        let s = scrubber_with_heuristic(enabled_heuristic());
         for input in [
             "session_id=Xy7aB3kQ9mZ2pL5nR8tW",
             "url=https://Xy7aB3kQ9mZ2pL5nR8tW.example.com/a",
@@ -312,7 +314,7 @@ mod tests {
         // Hex under a *_KEY name still redacts though the scorer rejects 2-class hex.
         assert!(
             s.scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
-                .redacted()
+                .has_redactions()
         );
     }
 }

@@ -140,7 +140,7 @@ fn scrub() -> Result<(), String> {
 fn scrub_raw_text(data: &[u8], scrubber: &Scrubber) {
     let result = scrubber.scrub(&String::from_utf8_lossy(data));
     let _ = io::stdout().write_all(result.text.as_bytes());
-    if result.redacted() {
+    if result.has_redactions() {
         eprintln!("[redacted] {} secret(s) scrubbed", result.count);
     }
 }

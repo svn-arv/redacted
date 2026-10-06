@@ -82,14 +82,17 @@ fn translate_escape(n: char, in_class: bool) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::fake_secrets;
-    use crate::scrub::tests::{default_scrubber, value_only};
+    use crate::scrub::tests::{default_scrubber, value_only_marker};
 
     #[test]
     fn go_perl_classes_stay_ascii() {
         // Go's \b is ASCII-only, so a letter like é before SK is still a boundary.
         let sid = fake_secrets::twilio_sid("SK");
         let r = default_scrubber().scrub(&format!("é{sid}"));
-        assert_eq!(r.text, format!("é{}", value_only("twilio_api_key", &sid)));
+        assert_eq!(
+            r.text,
+            format!("é{}", value_only_marker("twilio_api_key", &sid))
+        );
         // Go's \s excludes NBSP, so it ends the PEM body match.
         assert_eq!(go_regex(r"[^\s]\s\b"), r"[^\t\n\f\r ][\t\n\f\r ](?-u:\b)");
     }

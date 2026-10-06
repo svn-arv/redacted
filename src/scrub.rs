@@ -17,10 +17,10 @@ use go_regex::go_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use learned::{learned_hint, sha256_hex};
 
-const ENGINE_YML: &str = include_str!("engine.yml");
+const BUILTIN_ENGINE_YML: &str = include_str!("engine.yml");
 
 #[derive(Deserialize)]
-struct PatternDef {
+struct BuiltinPatternYaml {
     name: String,
     regex: String,
     #[serde(default)]
@@ -28,14 +28,14 @@ struct PatternDef {
     #[serde(default)]
     prefilters: Vec<String>,
     #[serde(default)]
-    prefilters_fold: Vec<String>,
+    prefilters_ignore_case: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct EngineFile {
+struct BuiltinEngine {
     value_safe_char: String,
     allow_values: Vec<String>,
-    patterns: Vec<PatternDef>,
+    patterns: Vec<BuiltinPatternYaml>,
 }
 
 struct Pattern {
@@ -43,19 +43,19 @@ struct Pattern {
     regex: Regex,
     includes_key: bool,
     prefilters: Vec<String>,
-    prefilters_fold: Vec<String>,
+    prefilters_ignore_case: Vec<String>,
     is_heuristic: bool,
 }
 
 impl Pattern {
     /// No key handling and no prefilters, as user patterns from engine.yml run.
-    fn plain(name: String, regex: Regex) -> Self {
+    fn unkeyed(name: String, regex: Regex) -> Self {
         Pattern {
             name,
             regex,
             includes_key: false,
             prefilters: Vec::new(),
-            prefilters_fold: Vec::new(),
+            prefilters_ignore_case: Vec::new(),
             is_heuristic: false,
         }
     }
@@ -64,102 +64,103 @@ impl Pattern {
 /// Every tier compiled once from the config, then reused for each scrub.
 pub struct Scrubber {
     patterns: Vec<Pattern>,
-    /// Pattern names the user turned off.
-    whitelist: HashSet<String>,
-    /// Uppercased names; a match containing one is left alone.
-    allow: Vec<String>,
+    disabled_patterns: HashSet<String>,
+    /// A match containing one of these key names is left alone.
+    allowed_keys_upper: Vec<String>,
     /// A match whose value fits one of these is left alone.
     allow_values: Vec<Regex>,
     /// Learned name and the regex derived from its sample.
-    shapes: Vec<(String, Regex)>,
-    /// sha256 of a learned value to its name.
-    exact: HashMap<String, String>,
+    learned_shapes: Vec<(String, Regex)>,
+    learned_name_by_hash: HashMap<String, String>,
     /// Only candidates of these byte lengths are hashed.
-    exact_lens: HashSet<usize>,
+    learned_byte_lengths: HashSet<usize>,
     /// Runs of the characters a value can hold (engine.yml `value_safe_char`).
-    safe_run: Regex,
-    /// Whitespace-delimited runs, for values holding `@`, `(` or quotes.
-    word_run: Regex,
-    heuristic: Option<Pattern>,
-    thresholds: Heuristic,
+    value_char_run: Regex,
+    /// For values holding `@`, `(` or quotes, which split a `value_char_run`.
+    non_whitespace_run: Regex,
+    heuristic_pattern: Option<Pattern>,
+    heuristic_thresholds: Heuristic,
 }
 
-/// The rewritten text plus how many secrets each pattern redacted.
+/// The rewritten text plus how many redactions each pattern made.
 #[derive(Debug, Default)]
 pub struct ScrubResult {
     pub text: String,
     pub count: usize,
-    pub by_pattern: BTreeMap<String, usize>,
+    pub counts_by_pattern: BTreeMap<String, usize>,
 }
 
 impl ScrubResult {
-    pub fn redacted(&self) -> bool {
+    pub fn has_redactions(&self) -> bool {
         self.count > 0
     }
 
-    /// Counts `n` hits for `name`; zero adds nothing, so a pattern that never
-    /// matched stays out of `by_pattern`.
-    fn add(&mut self, name: &str, n: usize) {
-        if n == 0 {
+    /// Zero adds nothing, so a pattern that never matched stays out of
+    /// `counts_by_pattern`.
+    fn add_redactions(&mut self, name: &str, redactions: usize) {
+        if redactions == 0 {
             return;
         }
         // entry() finds or inserts the key; or_default() starts a new count at 0.
-        *self.by_pattern.entry(name.to_string()).or_default() += n;
-        self.count += n;
+        *self.counts_by_pattern.entry(name.to_string()).or_default() += redactions;
+        self.count += redactions;
     }
 }
 
-fn compile(expr: &str) -> Result<Regex, String> {
+fn compile_go_regex(expr: &str) -> Result<Regex, String> {
     Regex::new(&go_regex(expr)).map_err(|e| format!("invalid regex {expr:?}: {e}"))
 }
 
 impl Scrubber {
-    pub fn new(cfg: &Config, eng: &EngineConfig) -> Result<Self, String> {
-        let engine: EngineFile =
-            serde_yaml::from_str(ENGINE_YML).map_err(|e| format!("engine.yml: {e}"))?;
+    pub fn new(config: &Config, user_engine: &EngineConfig) -> Result<Self, String> {
+        let builtin: BuiltinEngine =
+            serde_yaml::from_str(BUILTIN_ENGINE_YML).map_err(|e| format!("engine.yml: {e}"))?;
         let mut patterns = Vec::new();
-        for p in engine.patterns {
+        for pattern in builtin.patterns {
             patterns.push(Pattern {
-                regex: compile(&p.regex)?,
-                name: p.name,
-                includes_key: p.includes_key,
-                prefilters: p.prefilters,
-                prefilters_fold: p.prefilters_fold,
+                regex: compile_go_regex(&pattern.regex)?,
+                name: pattern.name,
+                includes_key: pattern.includes_key,
+                prefilters: pattern.prefilters,
+                prefilters_ignore_case: pattern.prefilters_ignore_case,
                 is_heuristic: false,
             });
         }
-        for p in &eng.patterns {
-            patterns.push(Pattern::plain(p.name.clone(), compile(&p.regex)?));
+        for pattern in &user_engine.patterns {
+            patterns.push(Pattern::unkeyed(
+                pattern.name.clone(),
+                compile_go_regex(&pattern.regex)?,
+            ));
         }
-        let allow_values = engine
+        let allow_values = builtin
             .allow_values
             .iter()
-            .chain(&eng.allow_values)
-            .map(|e| compile(e))
+            .chain(&user_engine.allow_values)
+            .map(|expr| compile_go_regex(expr))
             .collect::<Result<_, _>>()?;
-        let heuristic = compile_heuristic(&cfg.heuristic, &engine.value_safe_char)?;
-        let mut shapes = Vec::new();
-        for l in &cfg.learned {
-            if let Some(shape) = &l.shape {
-                shapes.push((l.name.clone(), compile(shape)?));
+        let heuristic_pattern = compile_heuristic(&config.heuristic, &builtin.value_safe_char)?;
+        let mut learned_shapes = Vec::new();
+        for learned in &config.learned {
+            if let Some(shape) = &learned.shape {
+                learned_shapes.push((learned.name.clone(), compile_go_regex(shape)?));
             }
         }
         Ok(Scrubber {
             patterns,
-            whitelist: cfg.whitelist.iter().cloned().collect(),
-            allow: cfg.allow.iter().map(|a| a.to_uppercase()).collect(),
+            disabled_patterns: config.whitelist.iter().cloned().collect(),
+            allowed_keys_upper: config.allow.iter().map(|a| a.to_uppercase()).collect(),
             allow_values,
-            shapes,
-            exact: cfg
+            learned_shapes,
+            learned_name_by_hash: config
                 .learned
                 .iter()
-                .map(|l| (l.sha256.clone(), l.name.clone()))
+                .map(|learned| (learned.sha256.clone(), learned.name.clone()))
                 .collect(),
-            exact_lens: cfg.learned.iter().map(|l| l.len).collect(),
-            safe_run: compile(&format!("{}+", engine.value_safe_char))?,
-            word_run: compile(r"[^ \t\n\x0C\r]+")?,
-            heuristic,
-            thresholds: cfg.heuristic.clone(),
+            learned_byte_lengths: config.learned.iter().map(|learned| learned.len).collect(),
+            value_char_run: compile_go_regex(&format!("{}+", builtin.value_safe_char))?,
+            non_whitespace_run: compile_go_regex(r"[^ \t\n\x0C\r]+")?,
+            heuristic_pattern,
+            heuristic_thresholds: config.heuristic.clone(),
         })
     }
 
@@ -169,99 +170,108 @@ impl Scrubber {
             ..Default::default()
         };
         // Lowered once, like Go 0.7: redaction markers never add a prefilter literal.
-        let mut lowered: Option<String> = None;
-        for p in &self.patterns {
-            if self.whitelist.contains(&p.name) {
+        let mut lowercase_text: Option<String> = None;
+        for pattern in &self.patterns {
+            if self.disabled_patterns.contains(&pattern.name) {
                 continue;
             }
-            if !p.prefilters.is_empty()
-                && !p
+            if !pattern.prefilters.is_empty()
+                && !pattern
                     .prefilters
                     .iter()
-                    .any(|l| result.text.contains(l.as_str()))
+                    .any(|literal| result.text.contains(literal.as_str()))
             {
                 continue;
             }
-            if !p.prefilters_fold.is_empty() {
+            if !pattern.prefilters_ignore_case.is_empty() {
                 // Computes the lowercase copy on first use only, then reuses it.
-                let low = lowered.get_or_insert_with(|| result.text.to_lowercase());
-                if !p.prefilters_fold.iter().any(|l| low.contains(l.as_str())) {
+                let lowercase = lowercase_text.get_or_insert_with(|| result.text.to_lowercase());
+                if !pattern
+                    .prefilters_ignore_case
+                    .iter()
+                    .any(|literal| lowercase.contains(literal.as_str()))
+                {
                     continue;
                 }
             }
-            let n = self.apply_pattern(p, &mut result.text);
-            result.add(&p.name, n);
+            let redactions = self.redact_matches(pattern, &mut result.text);
+            result.add_redactions(&pattern.name, redactions);
         }
         self.scrub_learned(&mut result);
-        if let Some(p) = &self.heuristic {
-            let n = self.apply_pattern(p, &mut result.text);
-            result.add(&p.name, n);
+        if let Some(pattern) = &self.heuristic_pattern {
+            let redactions = self.redact_matches(pattern, &mut result.text);
+            result.add_redactions(&pattern.name, redactions);
         }
         result
     }
 
-    /// Returns the hit count; `text` is rewritten only on a hit.
-    fn apply_pattern(&self, p: &Pattern, text: &mut String) -> usize {
+    /// Returns the redaction count; `text` is rewritten only when it is above zero.
+    fn redact_matches(&self, pattern: &Pattern, text: &mut String) -> usize {
         let mut out = String::with_capacity(text.len());
-        let (mut last, mut count) = (0, 0);
-        for m in p.regex.find_iter(text) {
-            out.push_str(&text[last..m.start()]);
-            last = m.end();
-            if self.skip_match(p, m.as_str(), text, m.end()) {
-                out.push_str(m.as_str());
+        let (mut copied_until, mut count) = (0, 0);
+        for found in pattern.regex.find_iter(text) {
+            out.push_str(&text[copied_until..found.start()]);
+            copied_until = found.end();
+            if self.skip_match(pattern, found.as_str(), text, found.end()) {
+                out.push_str(found.as_str());
                 continue;
             }
-            out.push_str(&redact(&p.name, m.as_str(), p.includes_key));
+            out.push_str(&marker_for(
+                &pattern.name,
+                found.as_str(),
+                pattern.includes_key,
+            ));
             count += 1;
         }
         if count > 0 {
-            out.push_str(&text[last..]);
+            out.push_str(&text[copied_until..]);
             *text = out;
         }
         count
     }
 }
 
-fn redact(name: &str, m: &str, includes_key: bool) -> String {
+fn marker_for(name: &str, matched: &str, includes_key: bool) -> String {
     if includes_key {
-        if let Some(i) = m.find(['=', ':']) {
-            let sep = &m[i..=i];
-            let value = m[i + 1..].trim_start_matches([' ', '\t']);
-            return format!("{}{sep} [REDACTED ...{}]", &m[..i], tail(value, 4));
+        if let Some(separator_at) = matched.find(['=', ':']) {
+            let separator = &matched[separator_at..=separator_at];
+            let value = matched[separator_at + 1..].trim_start_matches([' ', '\t']);
+            let key = &matched[..separator_at];
+            return format!("{key}{separator} [REDACTED ...{}]", last_chars(value, 4));
         }
     }
-    format!("[REDACTED:{name} ...{}]", tail(m, 4))
+    format!("[REDACTED:{name} ...{}]", last_chars(matched, 4))
 }
 
-fn tail(s: &str, n: usize) -> &str {
-    match s.char_indices().rev().nth(n - 1) {
-        Some((i, _)) => &s[i..],
-        None => s,
+fn last_chars(text: &str, count: usize) -> &str {
+    match text.char_indices().rev().nth(count - 1) {
+        Some((start, _)) => &text[start..],
+        None => text,
     }
 }
 
 /// The opt-in entropy pattern, or None while the heuristic is off.
-fn compile_heuristic(h: &Heuristic, safe_char: &str) -> Result<Option<Pattern>, String> {
-    if !h.enabled {
+fn compile_heuristic(heuristic: &Heuristic, safe_char: &str) -> Result<Option<Pattern>, String> {
+    if !heuristic.enabled {
         return Ok(None);
     }
-    let regex = compile(&heuristic_regex(h.min_length, safe_char))?;
+    let regex = compile_go_regex(&heuristic_regex(heuristic.min_length, safe_char))?;
     Ok(Some(Pattern {
         includes_key: true,
         is_heuristic: true,
-        ..Pattern::plain("secret_value".into(), regex)
+        ..Pattern::unkeyed("secret_value".into(), regex)
     }))
 }
 
 /// KEY=value with a value of min_length+ chars that can't start with `/`, so a
 /// URL scheme isn't read as one.
 fn heuristic_regex(min_length: usize, safe_char: &str) -> String {
-    let first = match safe_char.strip_suffix(']') {
+    let first_char_class = match safe_char.strip_suffix(']') {
         Some(class) if safe_char.starts_with("[^") => format!("{class}/]"),
         _ => safe_char.to_string(),
     };
     format!(
-        r#"(?i)\b[A-Za-z0-9_\-]*[A-Za-z][A-Za-z0-9_\-]*["']?[ \t]*(?:=>?|:)[ \t]*["']?{first}{safe_char}{{{},}}"#,
+        r#"(?i)\b[A-Za-z0-9_\-]*[A-Za-z][A-Za-z0-9_\-]*["']?[ \t]*(?:=>?|:)[ \t]*["']?{first_char_class}{safe_char}{{{},}}"#,
         min_length.max(1) - 1
     )
 }
@@ -275,99 +285,99 @@ mod tests {
         Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap()
     }
 
-    pub(super) fn value_only(name: &str, secret: &str) -> String {
+    pub(super) fn value_only_marker(name: &str, secret: &str) -> String {
         format!("[REDACTED:{name} ...{}]", fake_secrets::hint(secret))
     }
 
     /// One engine.yml pattern: an input, its exact expected output, and the
     /// secret part that must not survive.
-    struct Row {
+    struct PatternCase {
         name: &'static str,
         input: String,
-        want: String,
+        expected: String,
         secret: String,
     }
 
-    fn builtin_rows() -> Vec<Row> {
-        let mut rows = Vec::new();
-        let mut bare = |name: &'static str, secret: String| {
-            rows.push(Row {
+    fn builtin_pattern_cases() -> Vec<PatternCase> {
+        let mut cases = Vec::new();
+        let mut value_only_case = |name: &'static str, secret: String| {
+            cases.push(PatternCase {
                 name,
                 input: secret.clone(),
-                want: value_only(name, &secret),
+                expected: value_only_marker(name, &secret),
                 secret,
             });
         };
-        bare("aws_access_key", fake_secrets::aws_access_key());
-        bare("github_fine_grained", fake_secrets::github_fine_grained());
-        bare("github_token", fake_secrets::github_token("ghp_"));
-        bare("github_oauth", fake_secrets::github_token("gho_"));
-        bare("github_refresh", fake_secrets::github_token("ghr_"));
-        bare("stripe_live", fake_secrets::stripe_key("sk_live_"));
-        bare("stripe_test", fake_secrets::stripe_key("pk_test_"));
-        bare("twilio_api_key", fake_secrets::twilio_sid("SK"));
-        bare("twilio_account_sid", fake_secrets::twilio_sid("AC"));
-        bare("digitalocean_token", fake_secrets::digitalocean_token());
-        bare("sentry_dsn", fake_secrets::sentry_dsn());
-        bare("slack_token", fake_secrets::slack_token("xoxb"));
-        bare("sendgrid_key", fake_secrets::sendgrid_key());
-        bare("hubspot_key", fake_secrets::hubspot_pat("na1"));
-        bare("private_key", fake_secrets::private_key("RSA "));
-        bare(
+        value_only_case("aws_access_key", fake_secrets::aws_access_key());
+        value_only_case("github_fine_grained", fake_secrets::github_fine_grained());
+        value_only_case("github_token", fake_secrets::github_token("ghp_"));
+        value_only_case("github_oauth", fake_secrets::github_token("gho_"));
+        value_only_case("github_refresh", fake_secrets::github_token("ghr_"));
+        value_only_case("stripe_live", fake_secrets::stripe_key("sk_live_"));
+        value_only_case("stripe_test", fake_secrets::stripe_key("pk_test_"));
+        value_only_case("twilio_api_key", fake_secrets::twilio_sid("SK"));
+        value_only_case("twilio_account_sid", fake_secrets::twilio_sid("AC"));
+        value_only_case("digitalocean_token", fake_secrets::digitalocean_token());
+        value_only_case("sentry_dsn", fake_secrets::sentry_dsn());
+        value_only_case("slack_token", fake_secrets::slack_token("xoxb"));
+        value_only_case("sendgrid_key", fake_secrets::sendgrid_key());
+        value_only_case("hubspot_key", fake_secrets::hubspot_pat("na1"));
+        value_only_case("private_key", fake_secrets::private_key("RSA "));
+        value_only_case(
             "private_key_truncated",
             fake_secrets::private_key_truncated(""),
         );
-        bare("jwt", fake_secrets::jwt());
-        bare(
+        value_only_case("jwt", fake_secrets::jwt());
+        value_only_case(
             "anthropic_key",
             format!("sk-ant-{}", fake_secrets::alnum(90)),
         );
-        bare(
+        value_only_case(
             "circleci_token",
             format!("CCIPAT_{}", fake_secrets::alnum(30)),
         );
-        bare(
+        value_only_case(
             "sentry_user_token",
             format!("sntryu_{}", fake_secrets::alnum(40)),
         );
-        bare(
+        value_only_case(
             "rubygems_key",
             format!("rubygems_{}", fake_secrets::alnum(30)),
         );
-        bare("newrelic_key", format!("NRAK-{}", fake_secrets::alnum(27)));
-        bare("openai_key", format!("sk-proj-{}", fake_secrets::alnum(48)));
-        bare(
+        value_only_case("newrelic_key", format!("NRAK-{}", fake_secrets::alnum(27)));
+        value_only_case("openai_key", format!("sk-proj-{}", fake_secrets::alnum(48)));
+        value_only_case(
             "openai_classic_key",
             format!("sk-{}", fake_secrets::alnum(48)),
         );
-        bare(
+        value_only_case(
             "google_api_key",
             format!("AIza{}", fake_secrets::base64url(35)),
         );
-        bare(
+        value_only_case(
             "google_api_key_v2",
             format!("AQ.{}", fake_secrets::base64url(50)),
         );
-        bare(
+        value_only_case(
             "stripe_webhook_secret",
             format!("whsec_{}", fake_secrets::alnum(32)),
         );
-        bare(
+        value_only_case(
             "huggingface_token",
             format!("hf_{}", fake_secrets::alnum(34)),
         );
-        bare("groq_key", format!("gsk_{}", fake_secrets::alnum(52)));
-        bare(
+        value_only_case("groq_key", format!("gsk_{}", fake_secrets::alnum(52)));
+        value_only_case(
             "openrouter_key",
             format!("sk-or-v1-{}", fake_secrets::hex(64)),
         );
-        bare("xai_key", format!("xai-{}", fake_secrets::alnum(80)));
-        bare(
+        value_only_case("xai_key", format!("xai-{}", fake_secrets::alnum(80)));
+        value_only_case(
             "perplexity_key",
             format!("pplx-{}", fake_secrets::alnum(48)),
         );
-        bare("tavily_key", format!("tvly-{}", fake_secrets::alnum(32)));
-        bare(
+        value_only_case("tavily_key", format!("tvly-{}", fake_secrets::alnum(32)));
+        value_only_case(
             "langsmith_key",
             format!(
                 "lsv2_pt_{}_{}",
@@ -375,52 +385,52 @@ mod tests {
                 fake_secrets::alnum(10)
             ),
         );
-        bare("gitlab_pat", format!("glpat-{}", fake_secrets::alnum(20)));
-        bare("npm_token", fake_secrets::npm_token());
-        bare("slack_webhook", fake_secrets::slack_webhook());
-        bare("pypi_token", format!("pypi-{}", fake_secrets::alnum(60)));
-        bare(
+        value_only_case("gitlab_pat", format!("glpat-{}", fake_secrets::alnum(20)));
+        value_only_case("npm_token", fake_secrets::npm_token());
+        value_only_case("slack_webhook", fake_secrets::slack_webhook());
+        value_only_case("pypi_token", format!("pypi-{}", fake_secrets::alnum(60)));
+        value_only_case(
             "database_url",
             fake_secrets::database_url("postgres", "db.example.com"),
         );
-        bare(
+        value_only_case(
             "credentialed_url",
             fake_secrets::database_url("postgis", "db.example.com"),
         );
 
         // includes_key patterns keep the key and separator and drop the label.
-        let mut keyed = |name: &'static str, key: &str, sep: &str, value: String| {
-            let want = format!(
+        let mut keyed_case = |name: &'static str, key: &str, sep: &str, value: String| {
+            let expected = format!(
                 "{key}{} [REDACTED ...{}]",
                 sep.trim_end(),
                 fake_secrets::hint(&value)
             );
-            rows.push(Row {
+            cases.push(PatternCase {
                 name,
                 input: format!("{key}{sep}{value}"),
-                want,
+                expected,
                 secret: value,
             });
         };
-        keyed(
+        keyed_case(
             "aws_secret_key",
             "aws_secret_access_key",
             "=",
             fake_secrets::aws_secret_key(),
         );
-        keyed(
+        keyed_case(
             "digitalocean_spaces",
             "SPACES_SECRET_KEY",
             "=",
             fake_secrets::digitalocean_spaces_value(),
         );
-        keyed(
+        keyed_case(
             "gcp_sa_key_id",
             r#""private_key_id""#,
             ": ",
             format!("\"{}\"", fake_secrets::hex(40)),
         );
-        keyed(
+        keyed_case(
             "auth_header",
             "Authorization",
             ": ",
@@ -428,49 +438,55 @@ mod tests {
         );
         let gcp = fake_secrets::gcp_private_key_field();
         let value = gcp.trim_start_matches(r#""private_key": "#).to_string();
-        keyed("gcp_sa_private_key", r#""private_key""#, ": ", value);
-        rows
+        keyed_case("gcp_sa_private_key", r#""private_key""#, ": ", value);
+        cases
     }
 
     #[test]
     fn builtin_patterns_redact_with_label_and_hint() {
-        let s = default_scrubber();
+        let scrubber = default_scrubber();
         // Destructuring in the loop header names the fields; `..` skips the rest.
-        for Row {
-            name, input, want, ..
-        } in builtin_rows()
+        for PatternCase {
+            name,
+            input,
+            expected,
+            ..
+        } in builtin_pattern_cases()
         {
-            let r = s.scrub(&input);
-            assert_eq!(r.text, want, "{name}: wrong redaction");
-            assert_eq!(r.count, 1, "{name}: count");
+            let result = scrubber.scrub(&input);
+            assert_eq!(result.text, expected, "{name}: wrong redaction");
+            assert_eq!(result.count, 1, "{name}: count");
             assert_eq!(
-                r.by_pattern.get(name),
+                result.counts_by_pattern.get(name),
                 Some(&1),
                 "{name}: label {:?}",
-                r.by_pattern
+                result.counts_by_pattern
             );
         }
     }
 
     #[test]
-    fn every_engine_pattern_has_a_row() {
-        let engine: serde_yaml::Value = serde_yaml::from_str(ENGINE_YML).unwrap();
+    fn every_builtin_pattern_has_a_test_case() {
+        let engine: serde_yaml::Value = serde_yaml::from_str(BUILTIN_ENGINE_YML).unwrap();
         let mut in_yml: Vec<String> = engine["patterns"]
             .as_sequence()
             .unwrap()
             .iter()
             .map(|p| p["name"].as_str().unwrap().to_string())
             .collect();
-        let mut in_rows: Vec<String> = builtin_rows().iter().map(|r| r.name.to_string()).collect();
+        let mut in_cases: Vec<String> = builtin_pattern_cases()
+            .iter()
+            .map(|case| case.name.to_string())
+            .collect();
         in_yml.sort();
-        in_rows.sort();
-        assert_eq!(in_rows, in_yml);
+        in_cases.sort();
+        assert_eq!(in_cases, in_yml);
     }
 
     #[test]
     fn hint_is_last_four_chars_not_bytes() {
-        let r = default_scrubber().scrub("postgis://u:pw@host/dbéèêë");
-        assert_eq!(r.text, "[REDACTED:credentialed_url ...éèêë]");
+        let result = default_scrubber().scrub("postgis://u:pw@host/dbéèêë");
+        assert_eq!(result.text, "[REDACTED:credentialed_url ...éèêë]");
     }
 
     #[test]
@@ -480,10 +496,10 @@ mod tests {
             ..Default::default()
         };
         let key = fake_secrets::aws_access_key();
-        let r = Scrubber::new(&cfg, &EngineConfig::default())
+        let result = Scrubber::new(&cfg, &EngineConfig::default())
             .unwrap()
             .scrub(&key);
-        assert_eq!(r.text, key);
+        assert_eq!(result.text, key);
     }
 
     #[test]
@@ -493,20 +509,20 @@ mod tests {
             ..Default::default()
         };
         let input = format!("AWS_SECRET_ACCESS_KEY={}", fake_secrets::aws_secret_key());
-        let r = Scrubber::new(&cfg, &EngineConfig::default())
+        let result = Scrubber::new(&cfg, &EngineConfig::default())
             .unwrap()
             .scrub(&input);
-        assert_eq!(r.text, input);
+        assert_eq!(result.text, input);
     }
 
     #[test]
-    fn builtin_allow_values_clear_placeholder_urls() {
+    fn placeholder_database_urls_are_not_redacted() {
         let input = "postgres://user:password@db.example.com:5432/app";
         assert_eq!(default_scrubber().scrub(input).text, input);
     }
 
     #[test]
-    fn user_allow_values_and_patterns_apply() {
+    fn user_patterns_redact_and_user_allow_values_exempt() {
         let eng = EngineConfig {
             patterns: vec![crate::config::CustomPattern {
                 name: "acme".into(),
@@ -515,9 +531,15 @@ mod tests {
             allow_values: vec!["^acme_test".into()],
             ..Default::default()
         };
-        let s = Scrubber::new(&Config::default(), &eng).unwrap();
-        assert_eq!(s.scrub("acme_live1234abcd").text, "[REDACTED:acme ...abcd]");
-        assert_eq!(s.scrub("acme_test1234abcd").text, "acme_test1234abcd");
+        let scrubber = Scrubber::new(&Config::default(), &eng).unwrap();
+        assert_eq!(
+            scrubber.scrub("acme_live1234abcd").text,
+            "[REDACTED:acme ...abcd]"
+        );
+        assert_eq!(
+            scrubber.scrub("acme_test1234abcd").text,
+            "acme_test1234abcd"
+        );
     }
 
     #[test]
@@ -532,7 +554,7 @@ mod tests {
         assert!(Scrubber::new(&Config::default(), &eng).is_err());
     }
 
-    pub(super) fn with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
+    pub(super) fn scrubber_with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
         let cfg = Config {
             learned: entries,
             ..Default::default()
@@ -540,7 +562,7 @@ mod tests {
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    pub(super) fn with_heuristic(h: crate::config::Heuristic) -> Scrubber {
+    pub(super) fn scrubber_with_heuristic(h: crate::config::Heuristic) -> Scrubber {
         let cfg = Config {
             heuristic: h,
             ..Default::default()
@@ -548,7 +570,7 @@ mod tests {
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    pub(super) fn heuristic_on() -> crate::config::Heuristic {
+    pub(super) fn enabled_heuristic() -> crate::config::Heuristic {
         crate::config::Heuristic {
             enabled: true,
             ..Default::default()
@@ -567,63 +589,81 @@ mod tests {
 
     #[test]
     fn heuristic_enabled_redacts_a_random_value_under_any_key() {
-        let r = with_heuristic(heuristic_on()).scrub(RANDOM_ASSIGNMENT);
-        assert_eq!(r.text, "FOO_CONF= [REDACTED ...R8tW]");
-        assert_eq!(r.by_pattern.get("secret_value"), Some(&1));
+        let result = scrubber_with_heuristic(enabled_heuristic()).scrub(RANDOM_ASSIGNMENT);
+        assert_eq!(result.text, "FOO_CONF= [REDACTED ...R8tW]");
+        assert_eq!(result.counts_by_pattern.get("secret_value"), Some(&1));
     }
 
     #[test]
     fn heuristic_thresholds_come_from_config() {
         let strict = crate::config::Heuristic {
             min_length: 50,
-            ..heuristic_on()
+            ..enabled_heuristic()
         };
         assert_eq!(
-            with_heuristic(strict).scrub(RANDOM_ASSIGNMENT).text,
+            scrubber_with_heuristic(strict)
+                .scrub(RANDOM_ASSIGNMENT)
+                .text,
             RANDOM_ASSIGNMENT
         );
         let short = "GADGET=aB3xK9pQ7mZ2";
-        assert_eq!(with_heuristic(heuristic_on()).scrub(short).text, short);
+        assert_eq!(
+            scrubber_with_heuristic(enabled_heuristic())
+                .scrub(short)
+                .text,
+            short
+        );
         let loose = crate::config::Heuristic {
             min_length: 10,
-            ..heuristic_on()
+            ..enabled_heuristic()
         };
-        assert!(with_heuristic(loose).scrub(short).redacted());
+        assert!(scrubber_with_heuristic(loose).scrub(short).has_redactions());
         // Only an absent threshold takes its default; an explicit 0 is honored.
         let zero: crate::config::Heuristic =
             serde_yaml::from_str("{enabled: true, min_length: 0}").unwrap();
-        assert!(with_heuristic(zero).scrub(short).redacted());
+        assert!(scrubber_with_heuristic(zero).scrub(short).has_redactions());
         // A lowercase-only value has one character class, so it passes only at 0.
         let one_class = "FOO_CONF=qwertyuiopasdfghjk";
         let zero: crate::config::Heuristic =
             serde_yaml::from_str("{enabled: true, min_char_classes: 0}").unwrap();
-        assert!(with_heuristic(zero).scrub(one_class).redacted());
-        assert!(!with_heuristic(heuristic_on()).scrub(one_class).redacted());
+        assert!(
+            scrubber_with_heuristic(zero)
+                .scrub(one_class)
+                .has_redactions()
+        );
+        assert!(
+            !scrubber_with_heuristic(enabled_heuristic())
+                .scrub(one_class)
+                .has_redactions()
+        );
     }
 
     #[test]
-    fn corpus_precision_no_redaction_on_clean_files() {
-        let s = default_scrubber();
+    fn clean_corpus_files_produce_no_false_positives() {
+        let scrubber = default_scrubber();
         for (name, data) in clean_corpus() {
-            let r = s.scrub(&data);
+            let result = scrubber.scrub(&data);
             assert!(
-                !r.redacted(),
+                !result.has_redactions(),
                 "false positive in {name}: {:?}",
-                r.by_pattern
+                result.counts_by_pattern
             );
         }
     }
 
     #[test]
-    fn corpus_recall_every_secret_redacted_in_every_file() {
-        let s = default_scrubber();
+    fn every_builtin_secret_planted_in_the_corpus_is_redacted() {
+        let scrubber = default_scrubber();
         for (name, data) in clean_corpus() {
-            for row in builtin_rows() {
-                let planted = format!("{data}\n{}\n", row.input);
-                let r = s.scrub(&planted);
-                let pattern = row.name;
-                assert!(r.redacted(), "{pattern} missed in {name}");
-                assert!(!r.text.contains(&row.secret), "{pattern} leaked in {name}");
+            for case in builtin_pattern_cases() {
+                let planted = format!("{data}\n{}\n", case.input);
+                let result = scrubber.scrub(&planted);
+                let pattern = case.name;
+                assert!(result.has_redactions(), "{pattern} missed in {name}");
+                assert!(
+                    !result.text.contains(&case.secret),
+                    "{pattern} leaked in {name}"
+                );
             }
         }
     }
@@ -648,34 +688,34 @@ mod tests {
             .unwrap(),
         ];
         assert!(entries[1].shape.is_some() && entries[0].shape.is_none());
-        (with_learned(entries), exact, shaped)
+        (scrubber_with_learned(entries), exact, shaped)
     }
 
     #[test]
     fn corpus_precision_holds_with_learned_secrets_loaded() {
-        let (s, _, _) = learned_corpus_scrubber();
+        let (scrubber, _, _) = learned_corpus_scrubber();
         for (name, data) in clean_corpus() {
-            let r = s.scrub(&data);
+            let result = scrubber.scrub(&data);
             assert!(
-                !r.redacted(),
+                !result.has_redactions(),
                 "false positive in {name}: {:?}",
-                r.by_pattern
+                result.counts_by_pattern
             );
         }
     }
 
     #[test]
-    fn corpus_recall_learned_exact_and_shape_including_a_rotated_key() {
-        let (s, exact, shaped) = learned_corpus_scrubber();
+    fn learned_and_rotated_values_planted_in_the_corpus_are_redacted() {
+        let (scrubber, exact, shaped) = learned_corpus_scrubber();
         // Rotated: same prefix, 3 characters longer than the sample.
         let rotated = format!("acme_{}", fake_secrets::alnum(33));
         for (name, data) in clean_corpus() {
             let planted = format!("{data}\nDB_PASS={exact}\nkey: {shaped}\nnew {rotated}\n");
-            let r = s.scrub(&planted);
-            assert_eq!(r.by_pattern.get("db_pass"), Some(&1), "{name}");
-            assert_eq!(r.by_pattern.get("acme_key"), Some(&2), "{name}");
+            let result = scrubber.scrub(&planted);
+            assert_eq!(result.counts_by_pattern.get("db_pass"), Some(&1), "{name}");
+            assert_eq!(result.counts_by_pattern.get("acme_key"), Some(&2), "{name}");
             for secret in [&exact, &shaped, &rotated] {
-                assert!(!r.text.contains(secret.as_str()), "leaked in {name}");
+                assert!(!result.text.contains(secret.as_str()), "leaked in {name}");
             }
         }
     }

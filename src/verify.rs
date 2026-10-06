@@ -247,7 +247,7 @@ fn check_scrub() -> Check {
     let result = Scrubber::new(&Config::default(), &EngineConfig::default())
         .map(|s| s.scrub("DATABASE_URL=postgres://user:Xk7Pq9mW2vB8@host:5432/db"));
     match result {
-        Ok(r) if r.redacted() && r.text.contains("[REDACTED") => check(
+        Ok(r) if r.has_redactions() && r.text.contains("[REDACTED") => check(
             "test scrub",
             Status::Pass,
             format!("caught {} secret(s) in test input", r.count),

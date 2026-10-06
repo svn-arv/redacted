@@ -3,25 +3,25 @@
 
 use sha2::{Digest, Sha256};
 
-use super::{ScrubResult, Scrubber, tail};
+use super::{ScrubResult, Scrubber, last_chars};
 
 impl Scrubber {
     /// Shapes first, then exact hashes on the rewritten text, so a span a shape
     /// already redacted is a marker and cannot match again.
     pub(super) fn scrub_learned(&self, result: &mut ScrubResult) {
-        for (name, re) in &self.shapes {
+        for (name, re) in &self.learned_shapes {
             let spans = re
                 .find_iter(&result.text)
                 .map(|m| (m.start(), m.end(), name.as_str()))
                 .collect();
             replace_spans(result, spans);
         }
-        if self.exact.is_empty() {
+        if self.learned_name_by_hash.is_empty() {
             return;
         }
         // A value holding `@`, `(` or quotes spans several safe runs, so whitespace-delimited
         // runs go second, on the rewritten text so a marker is never matched again.
-        for run_regex in [&self.safe_run, &self.word_run] {
+        for run_regex in [&self.value_char_run, &self.non_whitespace_run] {
             let runs = run_regex
                 .find_iter(&result.text)
                 .map(|m| (m.start(), m.end()))
@@ -44,10 +44,10 @@ impl Scrubber {
             );
             for start in starts {
                 for (s, e) in unwrap_candidates(text, start, run_end) {
-                    if s >= e || !self.exact_lens.contains(&(e - s)) {
+                    if s >= e || !self.learned_byte_lengths.contains(&(e - s)) {
                         continue;
                     }
-                    if let Some(name) = self.exact.get(&sha256_hex(&text[s..e])) {
+                    if let Some(name) = self.learned_name_by_hash.get(&sha256_hex(&text[s..e])) {
                         spans.push((s, e, name.as_str()));
                         // One learned match per run, then on to the next run.
                         continue 'runs;
@@ -86,7 +86,7 @@ pub fn learned_hint(value: &str) -> &str {
     if value.chars().count() < 12 {
         return "";
     }
-    tail(value, 4)
+    last_chars(value, 4)
 }
 
 /// Rewrites sorted, non-overlapping spans as learned markers.
@@ -110,7 +110,7 @@ fn replace_spans(result: &mut ScrubResult, spans: Vec<(usize, usize, &str)>) {
     out.push_str(&text[last..]);
     result.text = out;
     for (_, _, name) in spans {
-        result.add(name, 1);
+        result.add_redactions(name, 1);
     }
 }
 
@@ -119,7 +119,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, EngineConfig};
     use crate::fake_secrets;
-    use crate::scrub::tests::{value_only, with_learned};
+    use crate::scrub::tests::{scrubber_with_learned, value_only_marker};
 
     fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::Learned {
         crate::config::Learned {
@@ -133,8 +133,8 @@ mod tests {
     #[test]
     fn learned_exact_value_is_redacted_as_a_token_or_assignment_value() {
         let v = fake_secrets::alnum(24);
-        let s = with_learned(vec![learned("db_pass", &v, None)]);
-        let marker = value_only("db_pass", &v);
+        let s = scrubber_with_learned(vec![learned("db_pass", &v, None)]);
+        let marker = value_only_marker("db_pass", &v);
         for (input, want) in [
             (format!("pw {v} end"), format!("pw {marker} end")),
             (format!("DB_PASS={v}"), format!("DB_PASS={marker}")),
@@ -146,7 +146,7 @@ mod tests {
         ] {
             let r = s.scrub(&input);
             assert_eq!(r.text, want);
-            assert_eq!(r.by_pattern.get("db_pass"), Some(&1));
+            assert_eq!(r.counts_by_pattern.get("db_pass"), Some(&1));
         }
         // A different value of the same length, or the value inside a longer token, is not it.
         let other = fake_secrets::alnum(24);
@@ -159,7 +159,7 @@ mod tests {
     fn learned_short_value_gets_no_hint() {
         // The 4-char hint would be most or all of a short value.
         let v = "Pw9xQz7k";
-        let s = with_learned(vec![learned("pin", v, None)]);
+        let s = scrubber_with_learned(vec![learned("pin", v, None)]);
         assert_eq!(s.scrub(&format!("PIN={v}")).text, "PIN=[REDACTED:pin]");
     }
 
@@ -167,7 +167,7 @@ mod tests {
     fn learned_value_with_characters_outside_the_token_set_is_redacted() {
         // `@` splits the token rule's runs, so the whitespace-delimited run must catch it.
         let v = "P@ssw0rd2024";
-        let s = with_learned(vec![learned("db_password", v, None)]);
+        let s = scrubber_with_learned(vec![learned("db_password", v, None)]);
         let marker = "[REDACTED:db_password ...2024]";
         for (input, want) in [
             (format!("pw {v} here"), format!("pw {marker} here")),
@@ -184,7 +184,7 @@ mod tests {
     fn learned_quoted_value_is_redacted_inside_its_quotes() {
         // Env, JSON and YAML quote the value, so the candidate after `=`/`:` carries quotes.
         let v = "P@ssw0rd2024";
-        let s = with_learned(vec![learned("db_password", v, None)]);
+        let s = scrubber_with_learned(vec![learned("db_password", v, None)]);
         let m = "[REDACTED:db_password ...2024]";
         for (input, want) in [
             (format!("PASSWORD=\"{v}\""), format!("PASSWORD=\"{m}\"")),
@@ -206,14 +206,14 @@ mod tests {
         // Peeling trailing punctuation after the quotes would drop the `)`, so the
         // quote-only stage must stay a candidate.
         let v = "Pa55w0rd(x)";
-        let s = with_learned(vec![learned("db_password", v, None)]);
+        let s = scrubber_with_learned(vec![learned("db_password", v, None)]);
         let r = s.scrub(&format!("KEY=\"{v}\""));
         assert_eq!(r.text, "KEY=\"[REDACTED:db_password]\"");
     }
 
     #[test]
     fn quoted_non_secret_is_untouched() {
-        let s = with_learned(vec![learned("db_password", "P@ssw0rd2024", None)]);
+        let s = scrubber_with_learned(vec![learned("db_password", "P@ssw0rd2024", None)]);
         for input in [
             "PASSWORD=\"N0t@Secret99\"",
             "PASSWORD=\"P@ssw0rd2024x\"",
@@ -227,19 +227,19 @@ mod tests {
     fn learned_shape_catches_a_rotated_value_and_wins_over_exact() {
         let v = format!("acme_{}", fake_secrets::alnum(24));
         let shape = r"\bacme_[a-zA-Z0-9]{20,28}\b";
-        let s = with_learned(vec![learned("acme_key", &v, Some(shape))]);
+        let s = scrubber_with_learned(vec![learned("acme_key", &v, Some(shape))]);
         let rotated = format!("acme_{}", fake_secrets::alnum(27));
         let r = s.scrub(&format!("{v} {rotated}"));
         assert_eq!(
             r.text,
             format!(
                 "{} {}",
-                value_only("acme_key", &v),
-                value_only("acme_key", &rotated)
+                value_only_marker("acme_key", &v),
+                value_only_marker("acme_key", &rotated)
             )
         );
         assert_eq!(r.count, 2, "same span must not be redacted twice");
-        assert_eq!(r.by_pattern.get("acme_key"), Some(&2));
+        assert_eq!(r.counts_by_pattern.get("acme_key"), Some(&2));
     }
 
     #[test]
