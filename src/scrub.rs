@@ -1,13 +1,19 @@
 //! Detection tiers: vendor signatures (engine.yml `patterns:` plus user patterns),
 //! learned secrets, and the opt-in entropy heuristic.
 
+mod go_regex;
+mod learned;
+mod skip;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use regex::Regex;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::config::{Config, EngineConfig, Heuristic};
+use go_regex::go_regex;
+// Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
+pub use learned::{learned_hint, sha256_hex};
 
 const ENGINE_YML: &str = include_str!("engine.yml");
 
@@ -187,61 +193,6 @@ impl Scrubber {
         result
     }
 
-    /// Shapes first, then exact hashes on the rewritten text, so a span a shape
-    /// already redacted is a marker and cannot match again.
-    fn scrub_learned(&self, result: &mut ScrubResult) {
-        for (name, re) in &self.shapes {
-            let spans = re
-                .find_iter(&result.text)
-                .map(|m| (m.start(), m.end(), name.as_str()))
-                .collect();
-            replace_spans(result, spans);
-        }
-        if self.exact.is_empty() {
-            return;
-        }
-        let runs: Vec<_> = self
-            .safe_run
-            .find_iter(&result.text)
-            .map(|m| (m.start(), m.end()))
-            .collect();
-        let spans = self.exact_spans(&result.text, runs);
-        replace_spans(result, spans);
-        // A value holding `@`, `(` or quotes spans several safe runs; whitespace-delimited
-        // runs catch it, on the rewritten text so a marker is never matched again.
-        let text = &result.text;
-        let runs: Vec<_> = text
-            .split_ascii_whitespace()
-            .map(|w| {
-                let start = w.as_ptr() as usize - text.as_ptr() as usize;
-                (start, start + w.len())
-            })
-            .collect();
-        let spans = self.exact_spans(text, runs);
-        replace_spans(result, spans);
-    }
-
-    fn exact_spans(&self, text: &str, runs: Vec<(usize, usize)>) -> Vec<(usize, usize, &str)> {
-        let mut spans = Vec::new();
-        for (run_start, run_end) in runs {
-            let run = &text[run_start..run_end];
-            // `KEY=value` is one run, so also try each suffix after `=` or `:`.
-            let starts = std::iter::once(run_start).chain(
-                run.match_indices(['=', ':'])
-                    .map(|(i, _)| run_start + i + 1),
-            );
-            let hit = starts
-                .flat_map(|start| unwrap_candidates(text, start, run_end))
-                .filter(|&(start, end)| start < end && self.exact_lens.contains(&(end - start)))
-                .find_map(|(start, end)| {
-                    let name = self.exact.get(&sha256_hex(&text[start..end]))?;
-                    Some((start, end, name.as_str()))
-                });
-            spans.extend(hit);
-        }
-        spans
-    }
-
     fn apply_pattern(&self, p: &Pattern, text: &mut String) -> usize {
         let mut out = String::with_capacity(text.len());
         let (mut last, mut count) = (0, 0);
@@ -261,137 +212,6 @@ impl Scrubber {
         }
         count
     }
-
-    fn skip_match(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
-        if self.is_allowed(m) || self.allows_value(p, m, text, end) {
-            return true;
-        }
-        if !p.includes_key {
-            return false;
-        }
-        if matches!(text.as_bytes().get(end), Some(b'(' | b'[')) {
-            return true;
-        }
-        let value = value_of(m);
-        let key = key_of(m);
-        if !key.is_empty() && key.eq_ignore_ascii_case(value) {
-            return true;
-        }
-        if looks_like_identifier(value)
-            || (looks_like_code_reference(value) && !has_random_segment(value))
-        {
-            return true;
-        }
-        if separator_lenient(m)
-            && looks_like_lenient_identifier(value)
-            && !has_random_segment(value)
-        {
-            return true;
-        }
-        if (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_lowercase()) {
-            return true;
-        }
-        p.scored && self.skip_scored(m, value, text, end)
-    }
-
-    /// Go's secret_value guards: identifier keys, URLs, and values that don't score as random.
-    fn skip_scored(&self, m: &str, value: &str, text: &str, end: usize) -> bool {
-        let key = key_of(m);
-        is_identifier_key(key)
-            || inside_url(text, end - m.len())
-            || (!self.secret_like(value) && !hex_under_key_suffix(key, value))
-    }
-
-    /// Lower + upper + digit together is what lets UUIDs, hashes and timestamps through.
-    fn secret_like(&self, v: &str) -> bool {
-        if v.contains("://") {
-            return false;
-        }
-        let decoded = percent_decode(v);
-        // Decoding that reveals a space or control byte means encoded prose.
-        if decoded != v.as_bytes() && decoded.iter().any(|&c| c < 0x21 || c == 0x7f) {
-            return false;
-        }
-        let v = String::from_utf8_lossy(&decoded);
-        let h = &self.thresholds;
-        let len = v.chars().count();
-        (h.min_length..=h.max_length).contains(&len)
-            && char_classes(&v) >= h.min_char_classes
-            && shannon_entropy(&v) >= h.min_entropy
-    }
-
-    fn is_allowed(&self, m: &str) -> bool {
-        if self.allow.is_empty() {
-            return false;
-        }
-        let upper = m.to_uppercase();
-        self.allow.iter().any(|name| upper.contains(name.as_str()))
-    }
-
-    fn allows_value(&self, p: &Pattern, m: &str, text: &str, end: usize) -> bool {
-        if self.allow_values.is_empty() {
-            return false;
-        }
-        let candidate = if p.includes_key {
-            allow_value_token(m, text, end)
-        } else {
-            m.to_string()
-        };
-        self.allow_values.iter().any(|re| re.is_match(&candidate))
-    }
-}
-
-/// Punctuation and quotes around a value stay inside its run, so try each stage of
-/// peeling them: trailing `.:!?,;)}]`, then one matching quote pair, then trailing again.
-/// Every stage is a candidate, so a quoted value ending in `)` still matches.
-fn unwrap_candidates(text: &str, start: usize, end: usize) -> [(usize, usize); 4] {
-    const TRAIL: [char; 9] = ['.', ':', '!', '?', ',', ';', ')', '}', ']'];
-    let trailed = start + text[start..end].trim_end_matches(TRAIL).len();
-    let (qs, qe) = match text.as_bytes()[start..trailed] {
-        [q @ (b'"' | b'\''), .., l] if q == l => (start + 1, trailed - 1),
-        _ => (start, trailed),
-    };
-    let again = qs + text[qs..qe].trim_end_matches(TRAIL).len();
-    [(start, end), (start, trailed), (qs, qe), (qs, again)]
-}
-
-pub fn sha256_hex(s: &str) -> String {
-    Sha256::digest(s.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-/// The 4-char hint, left out when it would be a third or more of the value.
-pub fn learned_hint(value: &str) -> &str {
-    if value.chars().count() < 12 {
-        return "";
-    }
-    tail(value, 4)
-}
-
-/// Rewrites sorted, non-overlapping spans as learned markers.
-fn replace_spans(result: &mut ScrubResult, spans: Vec<(usize, usize, &str)>) {
-    if spans.is_empty() {
-        return;
-    }
-    let text = &result.text;
-    let mut out = String::with_capacity(text.len());
-    let mut last = 0;
-    for &(start, end, name) in &spans {
-        out.push_str(&text[last..start]);
-        let hint = learned_hint(&text[start..end]);
-        if hint.is_empty() {
-            out.push_str(&format!("[REDACTED:{name}]"));
-        } else {
-            out.push_str(&format!("[REDACTED:{name} ...{hint}]"));
-        }
-        last = end;
-        *result.by_pattern.entry(name.to_string()).or_default() += 1;
-    }
-    out.push_str(&text[last..]);
-    result.count += spans.len();
-    result.text = out;
 }
 
 fn redact(name: &str, m: &str, includes_key: bool) -> String {
@@ -409,75 +229,6 @@ fn tail(s: &str, n: usize) -> &str {
         Some((i, _)) => &s[i..],
         None => s,
     }
-}
-
-/// Rewrites Go RE2 syntax so it matches the same text under Rust's regex:
-/// Go's \s \d \w \b are ASCII-only (\s without \v), and Go reads `[`, `&&`,
-/// `--`, `~~` inside a class as literals where Rust nests or combines sets.
-fn go_regex(expr: &str) -> String {
-    let mut out = String::with_capacity(expr.len() + 16);
-    let mut chars = expr.chars().peekable();
-    let mut in_class = false;
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                let Some(n) = chars.next() else {
-                    out.push('\\');
-                    break;
-                };
-                out.push_str(match (n, in_class) {
-                    ('s', false) => r"[\t\n\f\r ]",
-                    ('s', true) => r"\t\n\f\r ",
-                    ('S', _) => r"[^\t\n\f\r ]",
-                    ('d', false) => "[0-9]",
-                    ('d', true) => "0-9",
-                    ('D', _) => "[^0-9]",
-                    ('w', false) => "[0-9A-Za-z_]",
-                    ('w', true) => "0-9A-Za-z_",
-                    ('W', _) => "[^0-9A-Za-z_]",
-                    ('b', false) => r"(?-u:\b)",
-                    _ => {
-                        out.push('\\');
-                        out.push(n);
-                        continue;
-                    }
-                });
-            }
-            '[' if !in_class => {
-                in_class = true;
-                out.push('[');
-                if chars.peek() == Some(&'^') {
-                    out.push('^');
-                    chars.next();
-                }
-                if chars.peek() == Some(&']') {
-                    out.push_str(r"\]");
-                    chars.next();
-                }
-            }
-            '[' if chars.peek() == Some(&':') => {
-                // [:alpha:] inside a class: copy through the closing :]
-                out.push('[');
-                for c in chars.by_ref() {
-                    out.push(c);
-                    if c == ']' {
-                        break;
-                    }
-                }
-            }
-            ']' if in_class => {
-                in_class = false;
-                out.push(']');
-            }
-            '[' | '&' | '~' if in_class => {
-                out.push('\\');
-                out.push(c);
-            }
-            '-' if in_class && chars.peek() == Some(&'-') => out.push_str(r"\-"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Zero thresholds take the engine.yml defaults, like Go.
@@ -509,208 +260,16 @@ fn heuristic_regex(min_length: usize, safe_char: &str) -> String {
     )
 }
 
-fn hex_under_key_suffix(key: &str, value: &str) -> bool {
-    if key.len() < 4 || value.len() < 24 || !value.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return false;
-    }
-    let upper = key.to_uppercase();
-    upper.ends_with("_KEY") || upper.ends_with("-KEY")
-}
-
-/// Whether the token holding `start` begins with a URL scheme (Go caps the walk at 2048).
-fn inside_url(text: &str, start: usize) -> bool {
-    let b = text.as_bytes();
-    let mut i = start;
-    while i > 0 && start - i < 2048 && !is_token_boundary(b[i - 1]) {
-        i -= 1;
-    }
-    b[i..start].windows(3).any(|w| w == b"://")
-}
-
-fn is_identifier_key(key: &str) -> bool {
-    let k = key.to_lowercase();
-    k == "id"
-        || k == "uuid"
-        || ["_id", "-id", "_uuid", "-uuid"]
-            .iter()
-            .any(|s| k.ends_with(s))
-        || key.ends_with("Id")
-        || key.ends_with("Uuid")
-}
-
-/// Each %XX becomes its byte; a malformed `%` stays literal and `+` is never a space.
-fn percent_decode(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = |c: u8| (c as char).to_digit(16);
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    out
-}
-
-fn key_of(m: &str) -> &str {
-    match m.find(['=', ':']) {
-        Some(i) => m[..i]
-            .trim_end_matches([' ', '\t'])
-            .trim_matches(['"', '\'']),
-        None => "",
-    }
-}
-
-fn value_of(m: &str) -> &str {
-    let Some(i) = m.find(['=', ':']) else {
-        return "";
-    };
-    let v = m[i + 1..].strip_prefix('>').unwrap_or(&m[i + 1..]);
-    let v = v.trim_start_matches([' ', '\t']);
-    v.strip_prefix(['\'', '"']).unwrap_or(v)
-}
-
-fn allow_value_token(m: &str, text: &str, end: usize) -> String {
-    let rest = &text[end..];
-    let n = rest
-        .bytes()
-        .position(is_token_boundary)
-        .unwrap_or(rest.len());
-    format!("{}{}", value_of(m), &rest[..n])
-}
-
-fn is_token_boundary(c: u8) -> bool {
-    matches!(
-        c,
-        b' ' | b'\t'
-            | b'\n'
-            | b'\r'
-            | b'"'
-            | b'\''
-            | b'`'
-            | b'('
-            | b')'
-            | b'['
-            | b']'
-            | b'{'
-            | b'}'
-            | b'<'
-            | b'>'
-            | b','
-            | b';'
-    )
-}
-
-fn looks_like_identifier(v: &str) -> bool {
-    let (mut lower, mut upper, mut sep) = (false, false, false);
-    for c in v.chars() {
-        match c {
-            'a'..='z' => lower = true,
-            'A'..='Z' => upper = true,
-            '_' | '.' => sep = true,
-            _ => return false,
-        }
-    }
-    sep && lower != upper
-}
-
-fn looks_like_code_reference(v: &str) -> bool {
-    let (mut sep, mut lower, mut upper) = (false, false, false);
-    for c in v.chars() {
-        match c {
-            'a'..='z' => lower = true,
-            'A'..='Z' => upper = true,
-            '0'..='9' | '_' => {}
-            '.' | ':' => sep = true,
-            _ => return false,
-        }
-    }
-    sep && lower && upper
-}
-
-fn has_random_segment(value: &str) -> bool {
-    value
-        .split(['.', ':'])
-        .filter(|s| !s.is_empty())
-        .any(|s| char_classes(s) >= MIN_CHAR_CLASSES && shannon_entropy(s) >= MIN_ENTROPY)
-}
-
-fn char_classes(v: &str) -> usize {
-    [
-        v.bytes().any(|c| c.is_ascii_lowercase()),
-        v.bytes().any(|c| c.is_ascii_uppercase()),
-        v.bytes().any(|c| c.is_ascii_digit()),
-    ]
-    .iter()
-    .filter(|&&b| b)
-    .count()
-}
-
-fn shannon_entropy(s: &str) -> f64 {
-    let mut counts: HashMap<char, usize> = HashMap::new();
-    for c in s.chars() {
-        *counts.entry(c).or_default() += 1;
-    }
-    let total = s.chars().count() as f64;
-    counts
-        .values()
-        .map(|&n| {
-            let p = n as f64 / total;
-            -p * p.log2()
-        })
-        .sum()
-}
-
-fn separator_lenient(m: &str) -> bool {
-    let b = m.as_bytes();
-    for (i, &c) in b.iter().enumerate() {
-        match c {
-            b':' => return true,
-            b'=' => {
-                if b.get(i + 1) == Some(&b'>') {
-                    return true;
-                }
-                let spaced = |c: Option<&u8>| matches!(c, Some(b' ' | b'\t'));
-                return i > 0 && spaced(b.get(i - 1)) && spaced(b.get(i + 1));
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-fn looks_like_lenient_identifier(v: &str) -> bool {
-    let v = v.strip_suffix(['?', '!']).unwrap_or(v);
-    let (mut letter, mut upper, mut lower, mut digit, mut sep) =
-        (false, false, false, false, false);
-    for c in v.bytes() {
-        match c {
-            b'a'..=b'z' => (lower, letter) = (true, true),
-            b'A'..=b'Z' => (upper, letter) = (true, true),
-            b'0'..=b'9' => digit = true,
-            b'_' | b'.' | b'&' | b'#' => sep = true,
-            _ => return false,
-        }
-    }
-    letter && (sep || (!digit && upper && lower))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fake;
 
-    fn default_scrubber() -> Scrubber {
+    pub(super) fn default_scrubber() -> Scrubber {
         Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap()
     }
 
-    fn value_only(name: &str, secret: &str) -> String {
+    pub(super) fn value_only(name: &str, secret: &str) -> String {
         format!("[REDACTED:{name} ...{}]", fake::hint(secret))
     }
 
@@ -909,40 +468,7 @@ mod tests {
         assert!(Scrubber::new(&Config::default(), &eng).is_err());
     }
 
-    #[test]
-    fn keyed_identifier_values_are_skipped() {
-        // Same includes_key guards as Go: method calls and identifiers are code, not secrets.
-        let s = default_scrubber();
-        for input in [
-            "SPACES_SECRET_KEY=spaces.secret_key",
-            "SPACES_SECRET_KEY=SPACES_SECRET_KEY",
-            "SPACES_SECRET_KEY=ENV.fetch(KEY)",
-            "SPACES_SECRET_KEY=placeholder",
-        ] {
-            assert_eq!(s.scrub(input).text, input);
-        }
-    }
-
-    #[test]
-    fn go_perl_classes_stay_ascii() {
-        // Go's \b is ASCII-only, so a letter like é before SK is still a boundary.
-        let sid = fake::twilio_sid("SK");
-        let r = default_scrubber().scrub(&format!("é{sid}"));
-        assert_eq!(r.text, format!("é{}", value_only("twilio_api_key", &sid)));
-        // Go's \s excludes NBSP, so it ends the PEM body match.
-        assert_eq!(go_regex(r"[^\s]\s\b"), r"[^\t\n\f\r ][\t\n\f\r ](?-u:\b)");
-    }
-
-    fn learned(name: &str, value: &str, shape: Option<&str>) -> crate::config::Learned {
-        crate::config::Learned {
-            name: name.into(),
-            sha256: sha256_hex(value),
-            len: value.len(),
-            shape: shape.map(Into::into),
-        }
-    }
-
-    fn with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
+    pub(super) fn with_learned(entries: Vec<crate::config::Learned>) -> Scrubber {
         let cfg = Config {
             learned: entries,
             ..Default::default()
@@ -950,123 +476,7 @@ mod tests {
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    #[test]
-    fn learned_exact_value_is_redacted_as_a_token_or_assignment_value() {
-        let v = fake::alnum(24);
-        let s = with_learned(vec![learned("db_pass", &v, None)]);
-        let marker = value_only("db_pass", &v);
-        for (input, want) in [
-            (format!("pw {v} end"), format!("pw {marker} end")),
-            (format!("DB_PASS={v}"), format!("DB_PASS={marker}")),
-            (format!("\"DB_PASS={v}\""), format!("\"DB_PASS={marker}\"")),
-            (format!("db_pass: '{v}'"), format!("db_pass: '{marker}'")),
-            (format!("x:y={v}"), format!("x:y={marker}")),
-            (format!("it is {v}."), format!("it is {marker}.")),
-            (format!("K={v}:!"), format!("K={marker}:!")),
-        ] {
-            let r = s.scrub(&input);
-            assert_eq!(r.text, want);
-            assert_eq!(r.by_pattern.get("db_pass"), Some(&1));
-        }
-        // A different value of the same length, or the value inside a longer token, is not it.
-        let other = fake::alnum(24);
-        assert_eq!(s.scrub(&other).text, other);
-        let longer = format!("{v}x");
-        assert_eq!(s.scrub(&longer).text, longer);
-    }
-
-    #[test]
-    fn learned_short_value_gets_no_hint() {
-        // The 4-char hint would be most or all of a short value.
-        let v = "Pw9xQz7k";
-        let s = with_learned(vec![learned("pin", v, None)]);
-        assert_eq!(s.scrub(&format!("PIN={v}")).text, "PIN=[REDACTED:pin]");
-    }
-
-    #[test]
-    fn learned_value_with_characters_outside_the_token_set_is_redacted() {
-        // `@` splits the token rule's runs, so the whitespace-delimited run must catch it.
-        let v = "P@ssw0rd2024";
-        let s = with_learned(vec![learned("db_password", v, None)]);
-        let marker = "[REDACTED:db_password ...2024]";
-        for (input, want) in [
-            (format!("pw {v} here"), format!("pw {marker} here")),
-            (format!("DB_PASSWORD={v}"), format!("DB_PASSWORD={marker}")),
-            (format!("it is {v}."), format!("it is {marker}.")),
-        ] {
-            let r = s.scrub(&input);
-            assert_eq!(r.text, want);
-            assert_eq!(r.count, 1);
-        }
-    }
-
-    #[test]
-    fn learned_quoted_value_is_redacted_inside_its_quotes() {
-        // Env, JSON and YAML quote the value, so the candidate after `=`/`:` carries quotes.
-        let v = "P@ssw0rd2024";
-        let s = with_learned(vec![learned("db_password", v, None)]);
-        let m = "[REDACTED:db_password ...2024]";
-        for (input, want) in [
-            (format!("PASSWORD=\"{v}\""), format!("PASSWORD=\"{m}\"")),
-            (
-                format!("\"password\":\"{v}\","),
-                format!("\"password\":\"{m}\","),
-            ),
-            (format!("db_pass: '{v}'"), format!("db_pass: '{m}'")),
-            (format!("PASSWORD={v}"), format!("PASSWORD={m}")),
-        ] {
-            let r = s.scrub(&input);
-            assert_eq!(r.text, want);
-            assert_eq!(r.count, 1);
-        }
-        // A quoted value that ends in a strip character keeps it.
-        let v = "Pa55w0rd(x)";
-        let s = with_learned(vec![learned("db_password", v, None)]);
-        let r = s.scrub(&format!("KEY=\"{v}\""));
-        assert_eq!(r.text, "KEY=\"[REDACTED:db_password]\"");
-    }
-
-    #[test]
-    fn quoted_non_secret_is_untouched() {
-        let s = with_learned(vec![learned("db_password", "P@ssw0rd2024", None)]);
-        for input in [
-            "PASSWORD=\"N0t@Secret99\"",
-            "PASSWORD=\"P@ssw0rd2024x\"",
-            "\"P@ssw0rd2024x\",",
-        ] {
-            assert_eq!(s.scrub(input).text, input);
-        }
-    }
-
-    #[test]
-    fn learned_shape_catches_a_rotated_value_and_wins_over_exact() {
-        let v = format!("acme_{}", fake::alnum(24));
-        let shape = r"\bacme_[a-zA-Z0-9]{20,28}\b";
-        let s = with_learned(vec![learned("acme_key", &v, Some(shape))]);
-        let rotated = format!("acme_{}", fake::alnum(27));
-        let r = s.scrub(&format!("{v} {rotated}"));
-        assert_eq!(
-            r.text,
-            format!(
-                "{} {}",
-                value_only("acme_key", &v),
-                value_only("acme_key", &rotated)
-            )
-        );
-        assert_eq!(r.count, 2, "same span must not be redacted twice");
-        assert_eq!(r.by_pattern.get("acme_key"), Some(&2));
-    }
-
-    #[test]
-    fn bad_learned_shape_is_an_error() {
-        let cfg = Config {
-            learned: vec![learned("x", "abc_def", Some("("))],
-            ..Default::default()
-        };
-        assert!(Scrubber::new(&cfg, &EngineConfig::default()).is_err());
-    }
-
-    fn with_heuristic(h: crate::config::Heuristic) -> Scrubber {
+    pub(super) fn with_heuristic(h: crate::config::Heuristic) -> Scrubber {
         let cfg = Config {
             heuristic: h,
             ..Default::default()
@@ -1074,7 +484,7 @@ mod tests {
         Scrubber::new(&cfg, &EngineConfig::default()).unwrap()
     }
 
-    fn heuristic_on() -> crate::config::Heuristic {
+    pub(super) fn heuristic_on() -> crate::config::Heuristic {
         crate::config::Heuristic {
             enabled: true,
             ..Default::default()
@@ -1115,25 +525,6 @@ mod tests {
             ..heuristic_on()
         };
         assert!(with_heuristic(loose).scrub(short).redacted());
-    }
-
-    #[test]
-    fn heuristic_keeps_the_go_skip_guards() {
-        let s = with_heuristic(heuristic_on());
-        for input in [
-            "session_id=Xy7aB3kQ9mZ2pL5nR8tW",
-            "url=https://Xy7aB3kQ9mZ2pL5nR8tW.example.com/a",
-            "see https://host.example.com:8080/Xy7aB3kQ9mZ2pL5nR8tW",
-            "FOO_CONF=Xy7aB3kQ9mZ2pL5nR8tW(arg)",
-            "FOO_CONF=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e",
-            "MSG=Hello%20World%20From%20Abc123",
-        ] {
-            assert_eq!(s.scrub(input).text, input, "{input}");
-        }
-        // Hex under a *_KEY name still redacts though the scorer rejects 2-class hex.
-        assert!(s
-            .scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
-            .redacted());
     }
 
     #[test]
