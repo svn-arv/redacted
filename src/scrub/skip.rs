@@ -57,12 +57,12 @@ impl Scrubber {
         if decoded != v.as_bytes() && decoded.iter().any(|&c| c < 0x21 || c == 0x7f) {
             return false;
         }
-        let v = String::from_utf8_lossy(&decoded);
+        let decoded_text = String::from_utf8_lossy(&decoded);
         let h = &self.thresholds;
-        let len = v.chars().count();
+        let len = decoded_text.chars().count();
         (h.min_length..=h.max_length).contains(&len)
-            && char_classes(&v) >= h.min_char_classes
-            && shannon_entropy(&v) >= h.min_entropy
+            && char_classes(&decoded_text) >= h.min_char_classes
+            && shannon_entropy(&decoded_text) >= h.min_entropy
     }
 
     fn name_allowed(&self, m: &str) -> bool {
@@ -263,10 +263,10 @@ fn separator_lenient(m: &str) -> bool {
 }
 
 fn looks_like_lenient_identifier(v: &str) -> bool {
-    let v = v.strip_suffix(['?', '!']).unwrap_or(v);
+    let stem = v.strip_suffix(['?', '!']).unwrap_or(v);
     let (mut letter, mut upper, mut lower, mut digit, mut sep) =
         (false, false, false, false, false);
-    for c in v.bytes() {
+    for c in stem.bytes() {
         match c {
             b'a'..=b'z' => (lower, letter) = (true, true),
             b'A'..=b'Z' => (upper, letter) = (true, true),

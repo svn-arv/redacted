@@ -28,11 +28,11 @@ fn prompt_and_install(env: Option<PathBuf>, local: bool) -> Result<(), String> {
     let home = config::home().ok_or("cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
-    let env = match env {
+    let env_file = match env {
         Some(path) => Some(path),
         None => pick_env_file(&cwd)?,
     };
-    match env {
+    match env_file {
         Some(path) => learn_from_env(&path, &home)?,
         None => println!("No .env file found; installing the hook only."),
     }
@@ -250,9 +250,9 @@ fn preselect(value: &str) -> bool {
     classes.iter().filter(|&&has| has).count() >= 2
 }
 
-fn row(key: &str, value: &str, l: &Result<Learned, &str>) -> String {
-    let l = match l {
-        Ok(l) => l,
+fn row(key: &str, value: &str, learned: &Result<Learned, &str>) -> String {
+    let entry = match learned {
+        Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),
     };
     let hint = match learned_hint(value) {
@@ -261,7 +261,7 @@ fn row(key: &str, value: &str, l: &Result<Learned, &str>) -> String {
     };
     format!(
         "{key}  {hint}  {}",
-        l.shape.as_deref().unwrap_or("exact only")
+        entry.shape.as_deref().unwrap_or("exact only")
     )
 }
 
