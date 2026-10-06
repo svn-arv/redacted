@@ -14,23 +14,13 @@ pub(super) fn go_regex(expr: &str) -> String {
                     out.push('\\');
                     break;
                 };
-                out.push_str(match (n, in_class) {
-                    ('s', false) => r"[\t\n\f\r ]",
-                    ('s', true) => r"\t\n\f\r ",
-                    ('S', _) => r"[^\t\n\f\r ]",
-                    ('d', false) => "[0-9]",
-                    ('d', true) => "0-9",
-                    ('D', _) => "[^0-9]",
-                    ('w', false) => "[0-9A-Za-z_]",
-                    ('w', true) => "0-9A-Za-z_",
-                    ('W', _) => "[^0-9A-Za-z_]",
-                    ('b', false) => r"(?-u:\b)",
-                    _ => {
+                match translate_escape(n, in_class) {
+                    Some(ascii) => out.push_str(ascii),
+                    None => {
                         out.push('\\');
                         out.push(n);
-                        continue;
                     }
-                });
+                }
             }
             '[' if !in_class => {
                 in_class = true;
@@ -67,6 +57,25 @@ pub(super) fn go_regex(expr: &str) -> String {
         }
     }
     out
+}
+
+/// The ASCII-only Rust spelling of Go's `\s` `\d` `\w` `\b` (or `\S` `\D` `\W`), given
+/// the letter after the backslash; bare ranges inside `[...]`. None: both read it alike.
+fn translate_escape(n: char, in_class: bool) -> Option<&'static str> {
+    let ascii = match (n, in_class) {
+        ('s', false) => r"[\t\n\f\r ]",
+        ('s', true) => r"\t\n\f\r ",
+        ('S', _) => r"[^\t\n\f\r ]",
+        ('d', false) => "[0-9]",
+        ('d', true) => "0-9",
+        ('D', _) => "[^0-9]",
+        ('w', false) => "[0-9A-Za-z_]",
+        ('w', true) => "0-9A-Za-z_",
+        ('W', _) => "[^0-9A-Za-z_]",
+        ('b', false) => r"(?-u:\b)",
+        _ => return None,
+    };
+    Some(ascii)
 }
 
 #[cfg(test)]

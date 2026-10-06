@@ -122,42 +122,31 @@ fn check_hooks(home_dir: Option<&Path>, cwd: &str) -> Vec<Check> {
 
 fn check_settings_file(path: &Path, label: &'static str) -> Check {
     let shown = path.display();
+    let fail = |detail: String| check(label, Status::Fail, detail);
     let data = match fs::read(path) {
         Ok(d) => d,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return check(label, Status::Fail, format!("file not found: {shown}"))
+            return fail(format!("file not found: {shown}"))
         }
-        Err(e) => return check(label, Status::Fail, format!("cannot read {shown}: {e}")),
+        Err(e) => return fail(format!("cannot read {shown}: {e}")),
     };
     let settings: Value = match serde_json::from_slice(&data) {
         Ok(s) => s,
-        Err(e) => {
-            return check(
-                label,
-                Status::Fail,
-                format!("{shown} contains invalid JSON: {e}"),
-            )
-        }
+        Err(e) => return fail(format!("{shown} contains invalid JSON: {e}")),
     };
     if settings::post_tool_use(&settings).is_empty() {
-        return check(
-            label,
-            Status::Fail,
-            format!("no PostToolUse hooks in {shown}, run: redacted init"),
-        );
+        return fail(format!(
+            "no PostToolUse hooks in {shown}, run: redacted init"
+        ));
     }
     let Some(entry) = settings::find_ours(&settings) else {
-        return check(
-            label,
-            Status::Fail,
-            "PostToolUse exists but has no redacted entry, run: redacted init",
-        );
+        return fail("PostToolUse exists but has no redacted entry, run: redacted init".into());
     };
     // The entry exists; make sure the binary it points to still does.
     for command in settings::our_commands(entry) {
         let bin = command.trim_end_matches(" scrub");
         if fs::metadata(bin).is_err() {
-            return check(label, Status::Fail, format!(
+            return fail(format!(
                 "hook command references {bin} but that binary doesn't exist, reinstall or run: redacted init"
             ));
         }
@@ -166,30 +155,22 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
 }
 
 fn check_config(home_dir: Option<&Path>, cwd: &str, cfg: &Config, eng: &EngineConfig) -> Check {
-    // The global paths are None without a HOME.
+    let project = Path::new(cwd);
     let files = [
         ("global config", home_dir.map(config::global_path)),
-        (
-            "project config",
-            Some(Path::new(cwd).join(".redacted.yaml")),
-        ),
+        ("project config", Some(project.join(".redacted.yaml"))),
         (
             "global engine",
             home_dir.map(|h| h.join(".config/redacted/engine.yml")),
         ),
-        (
-            "project engine",
-            Some(Path::new(cwd).join(".redacted.engine.yml")),
-        ),
+        ("project engine", Some(project.join(".redacted.engine.yml"))),
     ];
-    let mut sources = Vec::new();
-    for (label, path) in &files {
-        if let Some(path) = path {
-            if path.exists() {
-                sources.push(*label);
-            }
-        }
-    }
+    // A global path is None without a HOME, which counts as not found.
+    let sources: Vec<&str> = files
+        .iter()
+        .filter(|(_, path)| path.as_deref().is_some_and(Path::exists))
+        .map(|(label, _)| *label)
+        .collect();
     if sources.is_empty() {
         return check(
             "config files",
