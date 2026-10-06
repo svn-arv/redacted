@@ -104,7 +104,7 @@ pub struct EngineConfig {
 
 /// Generic over the file's type: `DeserializeOwned` means "can be built from
 /// text without borrowing it", so one reader serves Config and EngineConfig.
-fn read<T: serde::de::DeserializeOwned>(path: PathBuf) -> Option<T> {
+fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_yaml::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
@@ -135,8 +135,9 @@ fn paths(
 /// a project `override: true` drops the global file. Unreadable files are skipped.
 pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Config {
     let (g, p) = paths(home, cwd, "config.yaml", ".redacted.yaml");
-    let global: Option<Config> = g.and_then(read);
-    let project: Option<Config> = p.and_then(read);
+    // as_deref() lends the PathBuf inside the Option as a `&Path` for `read` to borrow.
+    let global: Option<Config> = g.as_deref().and_then(read);
+    let project: Option<Config> = p.as_deref().and_then(read);
     // Learned hashes and the heuristic are global only, even under a project override.
     let (version, learned, heuristic) = match &global {
         Some(g) => (g.version, g.learned.clone(), g.heuristic.clone()),
@@ -173,15 +174,15 @@ pub fn vendor_only(cfg: &Config) -> bool {
 
 /// Learned entries in <cwd>/.redacted.yaml, which `load` ignores; verify warns on them.
 pub fn project_learned_count(cwd: &Path) -> usize {
-    let project: Option<Config> = read(cwd.join(".redacted.yaml"));
+    let project: Option<Config> = read(&cwd.join(".redacted.yaml"));
     project.map_or(0, |c| c.learned.len())
 }
 
 /// Global engine.yml merged with <cwd>/.redacted.engine.yml, same override rule.
 pub fn load_engine(home: Option<&Path>, cwd: Option<&Path>) -> EngineConfig {
     let (g, p) = paths(home, cwd, "engine.yml", ".redacted.engine.yml");
-    let global: Option<EngineConfig> = g.and_then(read);
-    let project: Option<EngineConfig> = p.and_then(read);
+    let global: Option<EngineConfig> = g.as_deref().and_then(read);
+    let project: Option<EngineConfig> = p.as_deref().and_then(read);
     match (global, project) {
         (None, None) => EngineConfig::default(),
         (Some(g), None) => g,
