@@ -6,12 +6,11 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config::{self, Config, EngineConfig};
 use crate::scrub::Scrubber;
-use crate::{hook, init, stats};
+use crate::{hook, init, settings, stats};
 
 #[derive(Parser)]
 #[command(
@@ -290,31 +289,6 @@ fn check_hooks(cwd: &str) -> Vec<Check> {
     out
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct Settings {
-    hooks: Hooks,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct Hooks {
-    #[serde(rename = "PostToolUse")]
-    post_tool_use: Vec<HookEntry>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct HookEntry {
-    hooks: Vec<HookCommand>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct HookCommand {
-    command: String,
-}
-
 fn check_settings_file(path: &Path, label: &'static str) -> Check {
     let shown = path.display();
     let data = match fs::read(path) {
@@ -324,7 +298,7 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
         }
         Err(e) => return check(label, Status::Fail, format!("cannot read {shown}: {e}")),
     };
-    let settings: Settings = match serde_json::from_slice(&data) {
+    let settings: Value = match serde_json::from_slice(&data) {
         Ok(s) => s,
         Err(e) => {
             return check(
@@ -334,20 +308,14 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
             )
         }
     };
-    if settings.hooks.post_tool_use.is_empty() {
+    if settings::post_tool_use(&settings).is_empty() {
         return check(
             label,
             Status::Fail,
             format!("no PostToolUse hooks in {shown}, run: redacted init"),
         );
     }
-    let is_ours = |h: &HookCommand| h.command.ends_with("redacted scrub");
-    let Some(entry) = settings
-        .hooks
-        .post_tool_use
-        .iter()
-        .find(|e| e.hooks.iter().any(is_ours))
-    else {
+    let Some(entry) = settings::find_ours(&settings) else {
         return check(
             label,
             Status::Fail,
@@ -355,8 +323,8 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
         );
     };
     // The entry exists; make sure the binary it points to still does.
-    for h in entry.hooks.iter().filter(|h| is_ours(h)) {
-        let bin = h.command.trim_end_matches(" scrub");
+    for command in settings::our_commands(entry) {
+        let bin = command.trim_end_matches(" scrub");
         if fs::metadata(bin).is_err() {
             return check(label, Status::Fail, format!(
                 "hook command references {bin} but that binary doesn't exist, reinstall or run: redacted init"

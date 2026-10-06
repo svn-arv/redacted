@@ -181,10 +181,19 @@ fn version_matches_cobra_format() {
 #[test]
 fn verify_reports_checks_and_fails_without_a_hook() {
     let dir = sandbox("verify");
+    // A PostToolUse that is not a list holds no hooks; it is not a JSON error.
+    let settings = dir.join("home/.claude/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(&settings, r#"{"hooks":{"PostToolUse":{}}}"#).unwrap();
     let o = run(&dir, &["verify"], "");
     let out = stdout(&o);
     assert!(!o.status.success());
+    let no_hooks = format!(
+        "[FAIL] global hook - no PostToolUse hooks in {}, run: redacted init",
+        settings.display()
+    );
     for line in [
+        no_hooks.as_str(),
         "[PASS] binary in PATH",
         "[FAIL] hook registered",
         "[PASS] config files - none found (using built-in defaults)",
