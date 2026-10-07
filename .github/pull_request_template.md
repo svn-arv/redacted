@@ -15,6 +15,6 @@ Closes #
 
 ## Testing
 
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` and `gofmt -l .` are clean
+- [ ] `cargo test` passes
+- [ ] `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean
 - [ ] Detection changes: corpus recall and precision still green

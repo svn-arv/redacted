@@ -320,7 +320,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 <div class="hero"><div class="wrap"><div class="grid">
   <div>
     <h1>Your <button type="button" class="rb" aria-label="Reveal the redacted word">secrets</button> never reach the model.</h1>
-    <p class="sub">A local hook scrubs every tool result before your coding assistant reads it. No allow-lists, no judgment calls.</p>
+    <p class="sub">A local hook scrubs every tool result before your coding assistant reads it. It catches vendor keys, the secrets you teach it from your .env, and, if you turn it on, random-looking values.</p>
     <div class="cta">
       <div class="cmdline">
         <code><span class="pr">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
@@ -356,7 +356,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 <section id="why"><div class="wrap"><div class="why">
   <div class="head" data-reveal>
     <h2>Nobody has to run a dangerous command.</h2>
-    <p class="note">The model is smart enough not to <code>cat .env</code>. That was never the way keys get in.</p>
+    <p class="note">The model knows not to run <code>cat .env</code>. Keys get in through ordinary output instead.</p>
   </div>
   <div class="claims" data-reveal>
     <div class="claim">
@@ -408,35 +408,35 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 <!-- ============ detection tiers ============ -->
 <section id="detection"><div class="wrap">
   <div data-reveal>
-    <h2 class="lede">Three tiers, most precise first.</h2>
-    <p class="note">Each tag names the pattern that matched. An entropy-only guess prints without a name, so you can tell the two apart.</p>
+    <h2 class="lede">Three tiers, run in this order.</h2>
+    <p class="note">Signature and learned hits name what matched, as in [REDACTED:aws_access_key ...0001]. Keyed and entropy hits keep the key instead, as in KEY= [REDACTED ...abcd].</p>
   </div>
   <div class="tiers" style="margin-top:36px" data-reveal>
     <div class="tier lead">
-      <span class="n">34</span>
-      <span class="unit">vendor signatures</span>
-      <h3>Provider patterns</h3>
-      <p>AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Twilio and more, matched on their exact key shape. Near-zero false positives.</p>
+      <span class="n">46</span>
+      <span class="unit">built-in patterns</span>
+      <h3>Vendor signatures</h3>
+      <p>AWS, GitHub, Stripe, OpenAI, Anthropic, Slack, Twilio and more, matched on each key's prefix and shape. Add your own in engine.yml.</p>
     </div>
     <div class="tier">
-      <span class="n">22</span>
-      <span class="unit">credential keywords</span>
-      <h3>Named keys</h3>
-      <p>Any variable whose name contains SECRET, TOKEN, PASSWORD, API_KEY and the rest. Works in env files, shell exports, and YAML.</p>
+      <span class="n">0</span>
+      <span class="unit">plaintext values stored</span>
+      <h3>Learned secrets</h3>
+      <p><code>redacted init</code> learns the values you pick from your .env and stores only a sha256, a length and, for prefixed keys, a shape. It replaces the keyword rules of 0.7.</p>
     </div>
     <div class="tier">
       <span class="n">3.5</span>
       <span class="unit">bits per character</span>
-      <h3>Entropy scorer</h3>
-      <p>Unknown keys whose value runs 16 to 128 characters, mixes case with digits, and scores above that threshold. Catches what no signature names.</p>
+      <h3>Entropy heuristic</h3>
+      <p>Off by default. When enabled, a KEY=value pair is redacted if the value runs 16 to 128 characters, mixes lowercase, uppercase and digits, and reaches this entropy.</p>
     </div>
   </div>
 </div></section>
 
 <!-- ============ coverage ============ -->
 <section><div class="wrap" data-reveal>
-  <h2 class="lede">The signature list.</h2>
-  <p class="note">Hover or tap a block to reveal it.</p>
+  <h2 class="lede">Some of the signatures.</h2>
+  <p class="note">The README lists all 46 patterns. Hover or tap a block to reveal it.</p>
   <div class="chips">
     <button type="button" class="rb">AWS</button>
     <button type="button" class="rb">GitHub</button>
@@ -470,7 +470,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
   <div class="guards">
     <div class="guard">
       <h3>Reach the network</h3>
-      <p>A single Go binary that runs on your machine. No calls out, no telemetry, no account.</p>
+      <p>A single Rust binary that runs on your machine. No calls out, no telemetry, no account.</p>
     </div>
     <div class="guard">
       <h3>Fail open</h3>
@@ -478,7 +478,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
     </div>
     <div class="guard">
       <h3>Store a value</h3>
-      <p>Stats keep a timestamp, the tool name, and per-pattern counts. Never the matched text.</p>
+      <p>Stats keep a timestamp, the tool name and per-pattern counts. Learned secrets are stored as a sha256 and a length. Never the text itself.</p>
     </div>
     <div class="guard">
       <h3>Leave you guessing</h3>
@@ -490,7 +490,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 <!-- ============ install ============ -->
 <section id="install"><div class="wrap" data-reveal>
   <h2 class="lede">Install, then init.</h2>
-  <p class="note">One command registers the PostToolUse hook. Safe to run again at any time.</p>
+  <p class="note">redacted init learns secrets from your .env, shows the config and asks before writing it, then registers the PostToolUse hook. Safe to run again.</p>
 
   <div class="methods">
     <div class="method">
@@ -505,16 +505,15 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
   </div>
   <div class="initrow">
     <code><span class="pr" style="color:var(--accent)">$</span> redacted init</code>
-    <span>Add <code>--local</code> to wire it into this project only, instead of every project.</span>
+    <span>Add <code>--local</code> to register the hook for this project only, or --env PATH to pick the env file.</span>
     <button class="copy" type="button" data-copy="redacted init" style="padding:10px 18px">Copy</button>
   </div>
-  <p class="gopath">Also on Go: <b>go install github.com/svn-arv/redacted@latest</b></p>
 </div></section>
 
 </main>
 
 <footer><div class="wrap">
-  <span>redacted, MIT licensed</span>
+  <span>redacted 1.0.0, written in Rust, MIT licensed</span>
   <span><a href="https://github.com/svn-arv/redacted">github.com/svn-arv/redacted</a></span>
   <span><a href="https://github.com/svn-arv/redacted/releases">Releases</a></span>
 </div></footer>

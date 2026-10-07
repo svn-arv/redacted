@@ -1,0 +1,10 @@
+-----BEGIN RSA PRIVATE KEY-----
+{{b64:64}}
+{{b64:64}}
+-----END RSA PRIVATE KEY-----
+then a key cut off by the capture limit:
+-----BEGIN OPENSSH PRIVATE KEY-----
+{{b64:64}}
+{{b64:40}}
+retrying
+{"type": "service_account", "private_key_id": "{{hex:40}}", "private_key": "-----BEGIN PRIVATE KEY-----\n{{b64:64}}\n{{b64:20}}
