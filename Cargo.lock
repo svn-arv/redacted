@@ -417,7 +417,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "redacted"
+name = "redacted-cli"
 version = "1.0.0"
 dependencies = [
  "clap",

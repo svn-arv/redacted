@@ -1,9 +1,10 @@
 [package]
-name = "redacted"
+name = "redacted-cli"
 version = "1.0.0"
 edition = "2024"
 description = "Claude Code PostToolUse hook that scrubs secrets from tool output"
 license = "MIT"
+repository = "https://github.com/svn-arv/redacted"
 
 [[bin]]
 name = "redacted"
