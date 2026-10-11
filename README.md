@@ -55,6 +55,13 @@ brew install redacted
 redacted init
 ```
 
+### Cargo
+
+```bash
+cargo install redacted-cli
+redacted init
+```
+
 ### Pre-built binaries
 
 Download from [GitHub Releases](https://github.com/svn-arv/redacted/releases) for Linux and macOS (amd64/arm64) and Windows (amd64).
