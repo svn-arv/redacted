@@ -266,7 +266,7 @@ section{padding:var(--sec) 0;border-top:1px solid var(--line)}
 
 /* ---------- install ---------- */
 .methods{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;background:var(--line-hard);border:1px solid var(--line-hard);margin-top:32px}
-@media (min-width:820px){.methods{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}}
+@media (min-width:820px){.methods{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr)}}
 .method{background:var(--paper);padding:22px 20px;min-width:0}
 .method .lab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex;gap:10px;align-items:baseline}
 .method .lab b{color:var(--accent);font-weight:700}
@@ -501,6 +501,10 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
       <div class="lab">Homebrew</div>
       <pre><span class="pr">$</span> brew tap svn-arv/tap
 <span class="pr">$</span> brew install redacted</pre>
+    </div>
+    <div class="method">
+      <div class="lab">Cargo</div>
+      <pre><span class="pr">$</span> cargo install redacted-cli</pre>
     </div>
   </div>
   <div class="initrow">
