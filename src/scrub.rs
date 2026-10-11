@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::config::{Config, EngineConfig, HeuristicConfig};
+use crate::config::{Config, CustomPattern, EngineConfig, HeuristicConfig};
 use go_regex::go_to_rust_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use guards::percent_decode;
@@ -112,27 +112,36 @@ fn compile_go_regex(expr: &str) -> Result<Regex, String> {
     Regex::new(&go_to_rust_regex(expr)).map_err(|e| format!("invalid regex {expr:?}: {e}"))
 }
 
+/// The engine.yml patterns followed by the user's, each compiled from Go syntax.
+fn compile_vendor_patterns(
+    builtin: Vec<BuiltinPatternYaml>,
+    user: &[CustomPattern],
+) -> Result<Vec<Pattern>, String> {
+    let mut patterns = Vec::new();
+    for pattern in builtin {
+        patterns.push(Pattern {
+            regex: compile_go_regex(&pattern.regex)?,
+            name: pattern.name,
+            includes_key: pattern.includes_key,
+            prefilters: pattern.prefilters,
+            prefilters_ignore_case: pattern.prefilters_ignore_case,
+            is_heuristic: false,
+        });
+    }
+    for pattern in user {
+        patterns.push(Pattern::unkeyed(
+            pattern.name.clone(),
+            compile_go_regex(&pattern.regex)?,
+        ));
+    }
+    Ok(patterns)
+}
+
 impl Scrubber {
     pub fn new(config: &Config, user_engine: &EngineConfig) -> Result<Self, String> {
         let builtin: BuiltinEngine =
             serde_yaml::from_str(BUILTIN_ENGINE_YML).map_err(|e| format!("engine.yml: {e}"))?;
-        let mut patterns = Vec::new();
-        for pattern in builtin.patterns {
-            patterns.push(Pattern {
-                regex: compile_go_regex(&pattern.regex)?,
-                name: pattern.name,
-                includes_key: pattern.includes_key,
-                prefilters: pattern.prefilters,
-                prefilters_ignore_case: pattern.prefilters_ignore_case,
-                is_heuristic: false,
-            });
-        }
-        for pattern in &user_engine.patterns {
-            patterns.push(Pattern::unkeyed(
-                pattern.name.clone(),
-                compile_go_regex(&pattern.regex)?,
-            ));
-        }
+        let patterns = compile_vendor_patterns(builtin.patterns, &user_engine.patterns)?;
         let allow_values = builtin
             .allow_values
             .iter()
@@ -141,7 +150,11 @@ impl Scrubber {
             .collect::<Result<_, _>>()?;
         let heuristic_pattern = compile_heuristic(&config.heuristic, &builtin.value_safe_char)?;
         let mut learned_shapes = Vec::new();
+        let mut learned_name_by_hash = HashMap::new();
+        let mut learned_byte_lengths = HashSet::new();
         for learned in &config.learned {
+            learned_name_by_hash.insert(learned.sha256.clone(), learned.name.clone());
+            learned_byte_lengths.insert(learned.byte_len);
             if let Some(shape) = &learned.shape {
                 learned_shapes.push((learned.name.clone(), compile_go_regex(shape)?));
             }
@@ -156,16 +169,8 @@ impl Scrubber {
                 .collect(),
             allow_values,
             learned_shapes,
-            learned_name_by_hash: config
-                .learned
-                .iter()
-                .map(|learned| (learned.sha256.clone(), learned.name.clone()))
-                .collect(),
-            learned_byte_lengths: config
-                .learned
-                .iter()
-                .map(|learned| learned.byte_len)
-                .collect(),
+            learned_name_by_hash,
+            learned_byte_lengths,
             value_char_run: compile_go_regex(&format!("{}+", builtin.value_safe_char))?,
             non_whitespace_run: compile_go_regex(r"[^ \t\n\x0C\r]+")?,
             heuristic_pattern,
@@ -313,106 +318,17 @@ mod tests {
 
     fn builtin_pattern_cases() -> Vec<PatternCase> {
         let mut cases = Vec::new();
-        let mut value_only_case = |name: &'static str, secret: String| {
+        let value_only_secrets = generated_secrets().into_iter().chain(prefixed_secrets());
+        for (name, secret) in value_only_secrets {
             cases.push(PatternCase {
                 name,
                 input: secret.clone(),
                 expected: value_only_marker(name, &secret),
                 secret,
             });
-        };
-        value_only_case("aws_access_key", fake_secrets::aws_access_key());
-        value_only_case("github_fine_grained", fake_secrets::github_fine_grained());
-        value_only_case("github_token", fake_secrets::github_token("ghp_"));
-        value_only_case("github_oauth", fake_secrets::github_token("gho_"));
-        value_only_case("github_refresh", fake_secrets::github_token("ghr_"));
-        value_only_case("stripe_live", fake_secrets::stripe_key("sk_live_"));
-        value_only_case("stripe_test", fake_secrets::stripe_key("pk_test_"));
-        value_only_case("twilio_api_key", fake_secrets::twilio_sid("SK"));
-        value_only_case("twilio_account_sid", fake_secrets::twilio_sid("AC"));
-        value_only_case("digitalocean_token", fake_secrets::digitalocean_token());
-        value_only_case("sentry_dsn", fake_secrets::sentry_dsn());
-        value_only_case("slack_token", fake_secrets::slack_token("xoxb"));
-        value_only_case("sendgrid_key", fake_secrets::sendgrid_key());
-        value_only_case("hubspot_key", fake_secrets::hubspot_pat("na1"));
-        value_only_case("private_key", fake_secrets::private_key("RSA "));
-        value_only_case(
-            "private_key_truncated",
-            fake_secrets::private_key_truncated(""),
-        );
-        value_only_case("jwt", fake_secrets::jwt());
-        value_only_case(
-            "anthropic_key",
-            format!("sk-ant-{}", fake_secrets::alnum(90)),
-        );
-        value_only_case(
-            "circleci_token",
-            format!("CCIPAT_{}", fake_secrets::alnum(30)),
-        );
-        value_only_case(
-            "sentry_user_token",
-            format!("sntryu_{}", fake_secrets::alnum(40)),
-        );
-        value_only_case(
-            "rubygems_key",
-            format!("rubygems_{}", fake_secrets::alnum(30)),
-        );
-        value_only_case("newrelic_key", format!("NRAK-{}", fake_secrets::alnum(27)));
-        value_only_case("openai_key", format!("sk-proj-{}", fake_secrets::alnum(48)));
-        value_only_case(
-            "openai_classic_key",
-            format!("sk-{}", fake_secrets::alnum(48)),
-        );
-        value_only_case(
-            "google_api_key",
-            format!("AIza{}", fake_secrets::base64url(35)),
-        );
-        value_only_case(
-            "google_api_key_v2",
-            format!("AQ.{}", fake_secrets::base64url(50)),
-        );
-        value_only_case(
-            "stripe_webhook_secret",
-            format!("whsec_{}", fake_secrets::alnum(32)),
-        );
-        value_only_case(
-            "huggingface_token",
-            format!("hf_{}", fake_secrets::alnum(34)),
-        );
-        value_only_case("groq_key", format!("gsk_{}", fake_secrets::alnum(52)));
-        value_only_case(
-            "openrouter_key",
-            format!("sk-or-v1-{}", fake_secrets::hex(64)),
-        );
-        value_only_case("xai_key", format!("xai-{}", fake_secrets::alnum(80)));
-        value_only_case(
-            "perplexity_key",
-            format!("pplx-{}", fake_secrets::alnum(48)),
-        );
-        value_only_case("tavily_key", format!("tvly-{}", fake_secrets::alnum(32)));
-        value_only_case(
-            "langsmith_key",
-            format!(
-                "lsv2_pt_{}_{}",
-                fake_secrets::alnum(32),
-                fake_secrets::alnum(10)
-            ),
-        );
-        value_only_case("gitlab_pat", format!("glpat-{}", fake_secrets::alnum(20)));
-        value_only_case("npm_token", fake_secrets::npm_token());
-        value_only_case("slack_webhook", fake_secrets::slack_webhook());
-        value_only_case("pypi_token", format!("pypi-{}", fake_secrets::alnum(60)));
-        value_only_case(
-            "database_url",
-            fake_secrets::database_url("postgres", "db.example.com"),
-        );
-        value_only_case(
-            "credentialed_url",
-            fake_secrets::database_url("postgis", "db.example.com"),
-        );
-
+        }
         // includes_key patterns keep the key and separator and drop the label.
-        let mut keyed_case = |name: &'static str, key: &str, sep: &str, value: String| {
+        for (name, key, sep, value) in keyed_secrets() {
             let expected = format!(
                 "{key}{} [REDACTED ...{}]",
                 sep.trim_end(),
@@ -424,41 +340,117 @@ mod tests {
                 expected,
                 secret: value,
             });
-        };
-        keyed_case(
-            "aws_secret_key",
-            "aws_secret_access_key",
-            "=",
-            fake_secrets::aws_secret_key(),
-        );
-        keyed_case(
-            "digitalocean_spaces",
-            "SPACES_SECRET_KEY",
-            "=",
-            fake_secrets::digitalocean_spaces_value(),
-        );
-        keyed_case(
-            "gcp_sa_key_id",
-            r#""private_key_id""#,
-            ": ",
-            format!("\"{}\"", fake_secrets::hex(40)),
-        );
-        keyed_case(
-            "auth_header",
-            "Authorization",
-            ": ",
-            format!("Bearer {}", fake_secrets::alnum(32)),
-        );
-        let gcp = fake_secrets::gcp_private_key_field();
-        let value = gcp.trim_start_matches(r#""private_key": "#).to_string();
-        keyed_case("gcp_sa_private_key", r#""private_key""#, ": ", value);
-        keyed_case(
-            "password_assignment",
-            "DB_PASSWORD",
-            "=",
-            fake_secrets::password(),
-        );
+        }
         cases
+    }
+
+    /// Value-only patterns whose secret comes from a dedicated fake_secrets builder.
+    fn generated_secrets() -> Vec<(&'static str, String)> {
+        vec![
+            ("aws_access_key", fake_secrets::aws_access_key()),
+            ("github_fine_grained", fake_secrets::github_fine_grained()),
+            ("github_token", fake_secrets::github_token("ghp_")),
+            ("github_oauth", fake_secrets::github_token("gho_")),
+            ("github_refresh", fake_secrets::github_token("ghr_")),
+            ("stripe_live", fake_secrets::stripe_key("sk_live_")),
+            ("stripe_test", fake_secrets::stripe_key("pk_test_")),
+            ("twilio_api_key", fake_secrets::twilio_sid("SK")),
+            ("twilio_account_sid", fake_secrets::twilio_sid("AC")),
+            ("digitalocean_token", fake_secrets::digitalocean_token()),
+            ("sentry_dsn", fake_secrets::sentry_dsn()),
+            ("slack_token", fake_secrets::slack_token("xoxb")),
+            ("sendgrid_key", fake_secrets::sendgrid_key()),
+            ("hubspot_key", fake_secrets::hubspot_pat("na1")),
+            ("private_key", fake_secrets::private_key("RSA ")),
+            (
+                "private_key_truncated",
+                fake_secrets::private_key_truncated(""),
+            ),
+            ("jwt", fake_secrets::jwt()),
+            ("npm_token", fake_secrets::npm_token()),
+            ("slack_webhook", fake_secrets::slack_webhook()),
+            (
+                "database_url",
+                fake_secrets::database_url("postgres", "db.example.com"),
+            ),
+            (
+                "credentialed_url",
+                fake_secrets::database_url("postgis", "db.example.com"),
+            ),
+        ]
+    }
+
+    /// Value-only patterns whose secret is a vendor prefix plus a random body.
+    fn prefixed_secrets() -> Vec<(&'static str, String)> {
+        let prefix_and_body = [
+            ("anthropic_key", "sk-ant-", fake_secrets::alnum(90)),
+            ("circleci_token", "CCIPAT_", fake_secrets::alnum(30)),
+            ("sentry_user_token", "sntryu_", fake_secrets::alnum(40)),
+            ("rubygems_key", "rubygems_", fake_secrets::alnum(30)),
+            ("newrelic_key", "NRAK-", fake_secrets::alnum(27)),
+            ("openai_key", "sk-proj-", fake_secrets::alnum(48)),
+            ("openai_classic_key", "sk-", fake_secrets::alnum(48)),
+            ("google_api_key", "AIza", fake_secrets::base64url(35)),
+            ("google_api_key_v2", "AQ.", fake_secrets::base64url(50)),
+            ("stripe_webhook_secret", "whsec_", fake_secrets::alnum(32)),
+            ("huggingface_token", "hf_", fake_secrets::alnum(34)),
+            ("groq_key", "gsk_", fake_secrets::alnum(52)),
+            ("openrouter_key", "sk-or-v1-", fake_secrets::hex(64)),
+            ("xai_key", "xai-", fake_secrets::alnum(80)),
+            ("perplexity_key", "pplx-", fake_secrets::alnum(48)),
+            ("tavily_key", "tvly-", fake_secrets::alnum(32)),
+            (
+                "langsmith_key",
+                "lsv2_pt_",
+                format!("{}_{}", fake_secrets::alnum(32), fake_secrets::alnum(10)),
+            ),
+            ("gitlab_pat", "glpat-", fake_secrets::alnum(20)),
+            ("pypi_token", "pypi-", fake_secrets::alnum(60)),
+        ];
+        let mut secrets = Vec::new();
+        for (name, prefix, body) in prefix_and_body {
+            secrets.push((name, format!("{prefix}{body}")));
+        }
+        secrets
+    }
+
+    /// includes_key patterns: name, key, separator and the secret value after them.
+    fn keyed_secrets() -> Vec<(&'static str, &'static str, &'static str, String)> {
+        let gcp = fake_secrets::gcp_private_key_field();
+        let gcp_value = gcp.trim_start_matches(r#""private_key": "#).to_string();
+        vec![
+            (
+                "aws_secret_key",
+                "aws_secret_access_key",
+                "=",
+                fake_secrets::aws_secret_key(),
+            ),
+            (
+                "digitalocean_spaces",
+                "SPACES_SECRET_KEY",
+                "=",
+                fake_secrets::digitalocean_spaces_value(),
+            ),
+            (
+                "gcp_sa_key_id",
+                r#""private_key_id""#,
+                ": ",
+                format!("\"{}\"", fake_secrets::hex(40)),
+            ),
+            (
+                "auth_header",
+                "Authorization",
+                ": ",
+                format!("Bearer {}", fake_secrets::alnum(32)),
+            ),
+            ("gcp_sa_private_key", r#""private_key""#, ": ", gcp_value),
+            (
+                "password_assignment",
+                "DB_PASSWORD",
+                "=",
+                fake_secrets::password(),
+            ),
+        ]
     }
 
     #[test]

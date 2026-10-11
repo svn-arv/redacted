@@ -60,24 +60,7 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     if pairs.is_empty() {
         return Ok(());
     }
-    let learn_results: Vec<_> = pairs.iter().map(|(key, value)| learn(key, value)).collect();
-    let rows: Vec<String> = pairs
-        .iter()
-        .zip(&learn_results)
-        .map(|((key, value), learned)| picker_row(key, value, learned))
-        .collect();
-    let defaults: Vec<usize> = (0..rows.len())
-        .filter(|&i| learn_results[i].is_ok() && should_preselect(&pairs[i].1))
-        .collect();
-    let picked = MultiSelect::new("Secrets to learn:", rows)
-        .with_default(&defaults)
-        .raw_prompt()
-        .map_err(|e| e.to_string())?;
-    // Ticked rows that cannot be learned are skipped, not written.
-    let chosen: Vec<LearnedSecret> = picked
-        .iter()
-        .filter_map(|picked_row| learn_results[picked_row.index].clone().ok())
-        .collect();
+    let chosen = pick_secrets_to_learn(&pairs)?;
     let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
         Ok(s) => s,
@@ -101,6 +84,29 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
         config_path.display()
     );
     Ok(())
+}
+
+/// The secrets the user ticks among `pairs`, with likely secrets ticked up front.
+fn pick_secrets_to_learn(pairs: &[(String, String)]) -> Result<Vec<LearnedSecret>, String> {
+    let learn_results: Vec<_> = pairs.iter().map(|(key, value)| learn(key, value)).collect();
+    let rows: Vec<String> = pairs
+        .iter()
+        .zip(&learn_results)
+        .map(|((key, value), learned)| picker_row(key, value, learned))
+        .collect();
+    let defaults: Vec<usize> = (0..rows.len())
+        .filter(|&i| learn_results[i].is_ok() && should_preselect(&pairs[i].1))
+        .collect();
+    let picked = MultiSelect::new("Secrets to learn:", rows)
+        .with_default(&defaults)
+        .raw_prompt()
+        .map_err(|e| e.to_string())?;
+    // Ticked rows that cannot be learned are skipped, not written.
+    let chosen: Vec<LearnedSecret> = picked
+        .iter()
+        .filter_map(|picked_row| learn_results[picked_row.index].clone().ok())
+        .collect();
+    Ok(chosen)
 }
 
 /// Registers the hook globally or for this project, then warns when only the

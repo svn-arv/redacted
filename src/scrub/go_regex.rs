@@ -1,5 +1,8 @@
 //! Translation of Go RE2 regex syntax into Rust's `regex` dialect.
 
+use std::iter::Peekable;
+use std::str::Chars;
+
 /// Rewrites Go RE2 syntax so it matches the same text under Rust's regex:
 /// Go's \s \d \w \b are ASCII-only (\s without \v), and Go reads `[`, `&&`,
 /// `--`, `~~` inside a class as literals where Rust nests or combines sets.
@@ -9,19 +12,7 @@ pub(super) fn go_to_rust_regex(expr: &str) -> String {
     let mut in_class = false;
     while let Some(c) = chars.next() {
         match c {
-            '\\' => {
-                let Some(escaped) = chars.next() else {
-                    out.push('\\');
-                    break;
-                };
-                match translate_escape(escaped, in_class) {
-                    Some(ascii) => out.push_str(ascii),
-                    None => {
-                        out.push('\\');
-                        out.push(escaped);
-                    }
-                }
-            }
+            '\\' => push_translated_escape(&mut chars, &mut out, in_class),
             '[' if !in_class => {
                 in_class = true;
                 out.push('[');
@@ -57,6 +48,21 @@ pub(super) fn go_to_rust_regex(expr: &str) -> String {
         }
     }
     out
+}
+
+/// Copies the escape after a backslash, in Rust's spelling where the dialects differ.
+fn push_translated_escape(chars: &mut Peekable<Chars>, out: &mut String, in_class: bool) {
+    let Some(escaped) = chars.next() else {
+        out.push('\\');
+        return;
+    };
+    match translate_escape(escaped, in_class) {
+        Some(ascii) => out.push_str(ascii),
+        None => {
+            out.push('\\');
+            out.push(escaped);
+        }
+    }
 }
 
 /// The ASCII-only Rust spelling of Go's `\s` `\d` `\w` `\b` (or `\S` `\D` `\W`), given

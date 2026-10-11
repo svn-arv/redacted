@@ -320,23 +320,20 @@ fn uninstall_removes_both_scopes_keeps_config_and_is_idempotent() {
     }
     let config = dir.join("home/.config/redacted/config.yaml");
     fs::write(&config, "version: 2\n").unwrap();
+    // current_dir() is canonical (/private/var on macOS).
+    let local_shown = local
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .join("settings.local.json");
 
     let output = run_redacted(&dir, &["uninstall"], "");
     let out = stdout(&output);
     assert!(output.status.success(), "{out}");
     for line in [
         format!("Removed redacted hook from {}", global.display()),
-        // current_dir() is canonical (/private/var on macOS).
-        format!(
-            "Removed redacted hook from {}",
-            local
-                .parent()
-                .unwrap()
-                .canonicalize()
-                .unwrap()
-                .join("settings.local.json")
-                .display()
-        ),
+        format!("Removed redacted hook from {}", local_shown.display()),
         format!("Config kept at {}", config.display()),
     ] {
         assert!(out.contains(&line), "missing {line:?} in:\n{out}");

@@ -90,13 +90,6 @@ fn run_scrub() -> Result<(), String> {
         .map_err(|e| format!("scrub: read stdin: {e}"))?;
     let is_hook_payload = looks_like_hook_payload(&stdin_bytes);
     let payload: Value = serde_json::from_slice(&stdin_bytes).unwrap_or(Value::Null);
-    let payload_string = |key: &str| {
-        payload
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
     // An absent or empty cwd reads no project config, not one under the process cwd.
     let cwd = payload
         .get("cwd")
@@ -126,15 +119,27 @@ fn run_scrub() -> Result<(), String> {
         Ok(scrubber) => hook::scrub_payload_or_withhold(&stdin_bytes, &|text| scrubber.scrub(text)),
         Err(_) => (hook::withheld_output(&stdin_bytes), BTreeMap::new()),
     };
-    record_stats(&payload_string("tool_name"), &counts_by_pattern);
+    record_stats(&payload_string(&payload, "tool_name"), &counts_by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
     let is_pre_v2_config = config.version == 0
         && home_dir.is_some_and(|home| config::global_config_path(home).exists());
-    if is_pre_v2_config && !out.is_empty() && mark_session_notified(&payload_string("session_id")) {
+    if is_pre_v2_config
+        && !out.is_empty()
+        && mark_session_notified(&payload_string(&payload, "session_id"))
+    {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
     let _ = io::stdout().write_all(&out);
     Ok(())
+}
+
+/// The string at `key`, or "" when it is absent or not a string.
+fn payload_string(payload: &Value, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Prints the scrubbed text, and the redaction count on stderr, for a person testing by hand.
