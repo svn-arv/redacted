@@ -368,7 +368,7 @@ cargo test
 
 ### Releasing
 
-Bump `version` in `Cargo.toml` to match the tag (it is what `--version` prints), then tag and push. GoReleaser builds binaries for all platforms, creates the GitHub release and updates the Homebrew tap.
+Bump `version` in `Cargo.toml` to match the tag (it is what `--version` prints), then tag and push. The workflow fails if they differ. GoReleaser builds binaries for all platforms, creates the GitHub release and updates the Homebrew tap, then `cargo publish` pushes the crate to crates.io (needs the `CARGO_REGISTRY_TOKEN` secret).
 
 ```bash
 git tag vX.Y.Z
