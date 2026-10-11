@@ -1,0 +1,10 @@
+Values the allow_values list clears even though a vendor pattern matches.
+postgres://user:password@db.example.com:5432/app
+mysql://root:pass@localhost/app
+amqp://GUEST_USER:GUEST_PASSWORD@rabbit.example.com/vhost
+postgres://user:<password>@host/db
+redis://localhost:6379/0
+postgres://127.0.0.1:5432/app
+template postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/app
+Near misses that must stay: AKIAYO4TUFQQ1P58G94 SK8f3b6663ba4f04c9cab6834f445dbc2 sk-ant-short ghp_yeogNaaat784uP8966yK
+call foo([REDACTED:aws_access_key ...Y0IP]) and [[REDACTED:twilio_account_sid ...227d]]

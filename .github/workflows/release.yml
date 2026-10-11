@@ -16,9 +16,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+
+      # goreleaser's rust builder cross-compiles every target through cargo-zigbuild.
+      - uses: mlugg/setup-zig@v2
+
+      - run: cargo install --locked cargo-zigbuild
 
       - uses: goreleaser/goreleaser-action@v7
         with:

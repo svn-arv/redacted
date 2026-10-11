@@ -1,0 +1,254 @@
+# engine.yml — single source of truth for secret detection.
+# Compiled into the binary (include_str! in src/scrub.rs).
+#
+# Order matters: specific patterns run first, catch-alls last.
+# If a specific pattern redacts a value, the catch-all won't re-match it.
+
+# Character class for catch-all values. Excludes whitespace, code syntax
+# (brackets, parens, braces, angle brackets), quotes (single, double, backtick),
+# separators (comma, semicolon), Ruby instance-var marker (@), and backslash —
+# so matches stay inside a single token and can't leak past a string literal
+# or expression boundary in source code.
+value_safe_char: '[^\s\[\]()@,;"''`{}<>\\]'
+
+# Value-shape allow-list: a candidate whose VALUE (key=value) or whole MATCH
+# (value-only) matches one of these is never redacted.
+allow_values:
+  # Anthropic transcript ids (toolu_/msg_/req_) — identifiers, not credentials.
+  - '^(toolu|msg|req)_[A-Za-z0-9_]+$'
+  # Placeholder doc-URL creds: lowercase pass/password in the userinfo.
+  - '://[^:@/\s]*:(pass|password)@'
+  # Placeholder doc-URL creds: ALL-CAPS USER:PASSWORD userinfo.
+  - '://[A-Z_]+:[A-Z_]+@'
+  # Placeholder doc-URL creds: <password> angle-bracket userinfo.
+  - '://[^:@/\s]*:<[^>]*>@'
+  # GitHub ticket refs (org/repo#123), one optional trailing punctuation.
+  - '^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+#[0-9]+[.,;:)]?$'
+  # Version tails (Release/v1.2.3.4 PR titles) — dotted numeric, not a secret.
+  - '(^|/)v?[0-9]+(\.[0-9]+){2,3}$'
+  # Credential-free localhost service URLs (host immediately follows scheme).
+  - '^(redis|rediss|postgres|postgresql|mysql|mongodb|amqps?)://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:[0-9]{1,5})?(/[A-Za-z0-9_-]*)?$'
+  # Password placeholders: a masked value, and doc filler under a password key.
+  - '^\*{8,}$'
+  - '(?i)^your[-_]password[-_]here$'
+  - '^password[0-9]*$'
+
+# A pattern may declare `prefilters`: literal strings, at least one of which
+# must appear in the text before its regex runs. A cheap substring gate that
+# skips the expensive scan. `prefilters` matches case-sensitively;
+# `prefilters_ignore_case` matches against a lowercased copy, for (?i) patterns.
+patterns:
+  # === Specific patterns (value only) ===
+
+  # ASIA is the temporary STS form of the same 16-char body as AKIA.
+  - name: aws_access_key
+    regex: 'A(?:KIA|SIA)[0-9A-Z]{16}'
+    prefilters: ['AKIA', 'ASIA']
+
+  - name: aws_secret_key
+    regex: '(?i)aws[_\-]?secret[_\-]?access[_\-]?key[ \t]*[=:][ \t]*[A-Za-z0-9/+=]{40}'
+    includes_key: true
+    prefilters_ignore_case: ['aws']
+
+  - name: github_fine_grained
+    regex: 'github_pat_[A-Za-z0-9_]{22,}'
+    prefilters: ['github_pat_']
+
+  # ghu_ is the user-to-server token an app exchanges for a user's OAuth code.
+  - name: github_token
+    regex: 'gh[psu]_[A-Za-z0-9_]{36,}'
+    prefilters: ['ghp_', 'ghs_', 'ghu_']
+
+  - name: github_oauth
+    regex: 'gho_[A-Za-z0-9_]{36,}'
+    prefilters: ['gho_']
+
+  - name: github_refresh
+    regex: 'ghr_[A-Za-z0-9_]{36,}'
+    prefilters: ['ghr_']
+
+  - name: stripe_live
+    regex: '[srp]k_live_[A-Za-z0-9]{24,}'
+    prefilters: ['k_live_']
+
+  - name: stripe_test
+    regex: '[srp]k_test_[A-Za-z0-9]{24,}'
+    prefilters: ['k_test_']
+
+  - name: twilio_api_key
+    regex: '\bSK[0-9a-fA-F]{32}\b'
+    prefilters: ['SK']
+
+  - name: twilio_account_sid
+    regex: '\bAC[0-9a-fA-F]{32}\b'
+    prefilters: ['AC']
+
+  - name: digitalocean_token
+    regex: 'dop_v1_[a-f0-9]{64}'
+    prefilters: ['dop_v1_']
+
+  - name: digitalocean_spaces
+    regex: '(?i)SPACES[_\-](ACCESS[_\-]KEY|SECRET[_\-]KEY)[ \t]*[=:][ \t]*[A-Za-z0-9/+=_\-]{8,}'
+    includes_key: true
+    prefilters_ignore_case: ['spaces']
+
+  - name: sentry_dsn
+    regex: 'https://[a-f0-9]{32}@[a-z0-9.\-]+\.ingest\.[a-z.]*sentry\.io/[0-9]+'
+    prefilters: ['.ingest.']
+
+  # xoxe- is the rotating refresh token; it mints new xoxb/xoxp tokens.
+  - name: slack_token
+    regex: 'xox[baeprs]-[A-Za-z0-9\-]{10,}'
+    prefilters: ['xox']
+
+  - name: sendgrid_key
+    regex: 'SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}'
+    prefilters: ['SG.']
+
+  - name: hubspot_key
+    regex: '(?i)pat-[a-z0-9]{2,3}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    prefilters_ignore_case: ['pat-']
+
+  - name: private_key
+    regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+    prefilters: ['PRIVATE KEY-----']
+
+  # GCP service-account JSON: the private_key field with a \n-escaped PEM.
+  # A literal multi-line PEM is caught by private_key above; this covers the
+  # single-line JSON form, including dumps truncated before the END marker.
+  - name: gcp_sa_private_key
+    regex: '"private_key"[ \t]*:[ \t]*"-----BEGIN[^"]+'
+    includes_key: true
+    prefilters: ['"private_key"']
+
+  # Backstop for service-account excerpts that show only the hex key id.
+  - name: gcp_sa_key_id
+    regex: '"private_key_id"[ \t]*:[ \t]*"[0-9a-f]{12,}"'
+    includes_key: true
+    prefilters: ['"private_key_id"']
+
+  # Fallback for a PEM cut off before its END marker, which is what tool output
+  # hands back when a key is longer than the capture limit. Runs after the two
+  # bounded patterns above so complete keys keep their label. The 16-char floor
+  # per line stops it eating trailing prose (`retrying` is base64-shaped at 8).
+  - name: private_key_truncated
+    regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----(?:\s*[A-Za-z0-9+/=]{16,})+'
+    prefilters: ['PRIVATE KEY-----']
+
+  - name: jwt
+    regex: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+    prefilters: ['eyJ']
+
+  - name: anthropic_key
+    regex: 'sk-ant-[A-Za-z0-9_-]{20,}'
+    prefilters: ['sk-ant-']
+
+  - name: circleci_token
+    regex: 'CCIPAT_[A-Za-z0-9_]{20,}'
+    prefilters: ['CCIPAT_']
+
+  - name: sentry_user_token
+    regex: 'sntryu_[A-Za-z0-9]{20,}'
+    prefilters: ['sntryu_']
+
+  - name: rubygems_key
+    regex: 'rubygems_[A-Za-z0-9]{20,}'
+    prefilters: ['rubygems_']
+
+  - name: newrelic_key
+    regex: 'NRAK-[A-Za-z0-9]{20,}'
+    prefilters: ['NRAK-']
+
+  - name: openai_key
+    regex: 'sk-(proj|svcacct|admin)-[A-Za-z0-9_-]{20,}'
+    prefilters: ['sk-']
+
+  # Classic OpenAI key: sk- + exactly 48 chars. \b stops it matching sk-ant- (Anthropic).
+  - name: openai_classic_key
+    regex: '\bsk-[A-Za-z0-9]{48}\b'
+    prefilters: ['sk-']
+
+  - name: google_api_key
+    regex: 'AIza[A-Za-z0-9_-]{35}'
+    prefilters: ['AIza']
+
+  # Newer Google/Gemini API key: AQ. + a base64url body. The dot is why the
+  # catch-alls miss it, so the value needs a pattern of its own.
+  - name: google_api_key_v2
+    regex: 'AQ\.[A-Za-z0-9_-]{40,}'
+    prefilters: ['AQ.']
+
+  - name: stripe_webhook_secret
+    regex: 'whsec_[A-Za-z0-9]{24,}'
+    prefilters: ['whsec_']
+
+  # AI-stack vendor tokens. The prefix carries the signal; the length bounds are
+  # floors, not exact formats, so a vendor lengthening its body still matches.
+  - name: huggingface_token
+    regex: 'hf_[A-Za-z0-9]{30,}'
+    prefilters: ['hf_']
+
+  - name: groq_key
+    regex: 'gsk_[A-Za-z0-9]{40,}'
+    prefilters: ['gsk_']
+
+  - name: openrouter_key
+    regex: 'sk-or-v1-[a-f0-9]{48,}'
+    prefilters: ['sk-or-v1-']
+
+  - name: xai_key
+    regex: 'xai-[A-Za-z0-9]{60,}'
+    prefilters: ['xai-']
+
+  - name: perplexity_key
+    regex: 'pplx-[A-Za-z0-9]{32,}'
+    prefilters: ['pplx-']
+
+  - name: tavily_key
+    regex: 'tvly-(?:dev-)?[A-Za-z0-9]{24,}'
+    prefilters: ['tvly-']
+
+  - name: langsmith_key
+    regex: 'lsv2_(?:pt|sk)_[A-Za-z0-9]{24,}_[A-Za-z0-9]{8,}'
+    prefilters: ['lsv2_']
+
+  - name: gitlab_pat
+    regex: 'glpat-[A-Za-z0-9_-]{20,}'
+    prefilters: ['glpat-']
+
+  - name: npm_token
+    regex: 'npm_[A-Za-z0-9]{36}'
+    prefilters: ['npm_']
+
+  - name: slack_webhook
+    regex: 'https://hooks\.slack\.com/services/[A-Za-z0-9/]+'
+    prefilters: ['hooks.slack.com']
+
+  - name: pypi_token
+    regex: 'pypi-[A-Za-z0-9_-]{50,}'
+    prefilters: ['pypi-']
+
+  # Opaque Authorization headers (bearer/basic/token schemes). Runs after jwt
+  # so a bearer JWT keeps the more specific label.
+  - name: auth_header
+    regex: '(?i)\b(proxy-)?authorization[ \t]*:[ \t]*(bearer|basic|token)[ \t]+[A-Za-z0-9._~+/=-]{8,}'
+    includes_key: true
+    prefilters_ignore_case: ['authorization']
+
+  # The char class excludes ${ } so ${VAR} placeholders in connection-string
+  # templates don't match (issue #1); real credentialed URLs contain none.
+  - name: database_url
+    regex: '(?i)(postgres(?:ql)?|mysql|mongodb|mongodb\+srv|rediss?|amqps?)://[^\s"''`\\${}]+'
+    prefilters: ['://']
+
+  # scheme://user:pass@host for any scheme (e.g. postgis), catching passworded URLs database_url doesn't list. Runs after it so known schemes keep their label.
+  - name: credentialed_url
+    regex: '(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]*:[^\s:/@]+@[^\s"''`\\${}]+'
+    prefilters: ['://']
+
+  # A value under a key ending in password or passwd (env, YAML, JSON, libpq).
+  # The value cannot start with $ or @ so ${VAR} and @ivar references pass; 8+ chars.
+  - name: password_assignment
+    regex: '(?i)\b[a-z0-9_.\-]*(?:password|passwd)["'']?[ \t]*[=:][ \t]*["'']?[^\s\[\]()@,;"''`{}<>\\$][^\s\[\](),;"''`{}<>\\]{7,}'
+    includes_key: true
+    prefilters_ignore_case: ['password', 'passwd']

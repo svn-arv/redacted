@@ -1,0 +1,4 @@
+line one
+ghp_{{alnum:40}}
+AKIA{{upper:16}}
+last line without newline
