@@ -11,6 +11,7 @@ The tool reduces exposure to secrets in tool output. It never prevents it.
 - Each built-in pattern gets one fake value per placement, generated at run time by `src/fake_secrets.rs`. Keyed patterns are planted with their key, since the key is part of the match.
 - Each value is planted mid-file in a `corpus/clean/*.txt` file. Files rotate across rows.
 - Caught means at least one new redaction and no 8-character run of the value left outside a redaction marker.
+- Seed 1791860933376006001. Replay with `REDACTED_BENCHMARK_SEED=1791860933376006001`.
 
 ## Misses
 
@@ -84,7 +85,7 @@ Redactions in files that hold no secret. Zero is correct.
 ## How to reproduce
 
 ```bash
-REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark
+REDACTED_BENCHMARK_SEED=1791860933376006001 REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark
 ```
 
 ## What this does not show
@@ -93,4 +94,5 @@ REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark
 - The hook envelope path (JSON in, JSON out) is tested in `tests/cli.rs` and `tests/golden.rs`, not here.
 - No competitor numbers. Other tools were not run.
 - The placements were chosen by the author. Real output can hold shapes not listed here.
+- The floors run on fresh values on every `cargo test`. Counts on the expected-miss rows can move by a few between seeds.
 - Contributions of failing samples are welcome: open an issue with the shape, never a real secret.
