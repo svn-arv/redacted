@@ -16,6 +16,11 @@ thread_local! {
     );
 }
 
+/// Fixes this thread's sequence, so the benchmark page comes out identical every run.
+pub fn reseed(seed: u64) {
+    PRNG_STATE.with(|s| s.set(seed | 1));
+}
+
 // xorshift64*: enough randomness for fixtures, no crate needed.
 fn next_random() -> u64 {
     PRNG_STATE.with(|s| {

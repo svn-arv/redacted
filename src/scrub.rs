@@ -3,6 +3,8 @@
 
 // Child modules add `impl Scrubber` blocks and read its private fields; what this
 // file calls from them (and the shared test helpers) is marked `pub(super)`.
+#[cfg(test)]
+mod benchmark;
 mod go_regex;
 mod guards;
 mod learned;
@@ -309,14 +311,14 @@ mod tests {
 
     /// One engine.yml pattern: an input, its exact expected output, and the
     /// secret part that must not survive.
-    struct PatternCase {
-        name: &'static str,
-        input: String,
+    pub(super) struct PatternCase {
+        pub(super) name: &'static str,
+        pub(super) input: String,
         expected: String,
-        secret: String,
+        pub(super) secret: String,
     }
 
-    fn builtin_pattern_cases() -> Vec<PatternCase> {
+    pub(super) fn builtin_pattern_cases() -> Vec<PatternCase> {
         let mut cases = Vec::new();
         let value_only_secrets = generated_secrets().into_iter().chain(prefixed_secrets());
         for (name, secret) in value_only_secrets {
@@ -797,7 +799,7 @@ mod tests {
         }
     }
 
-    fn clean_corpus() -> Vec<(String, String)> {
+    pub(super) fn clean_corpus() -> Vec<(String, String)> {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/clean");
         let mut files: Vec<(String, String)> = std::fs::read_dir(dir)
             .unwrap()

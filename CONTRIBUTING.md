@@ -41,6 +41,7 @@ Built-in patterns live in `src/engine.yml`, not in Rust.
 6. Golden fixtures (`tests/fixtures/*.txt` with `.golden` and `.stderr.golden`) pin raw-mode output recorded from the Go 0.7 binary.
    - There is no script to regenerate them.
    - A change that alters existing golden output breaks 0.7 parity on purpose or by mistake. Say which in the PR, and edit the golden by hand.
+7. Regenerate the benchmark page: `REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark`.
 
 ## Pull requests
 
