@@ -13,9 +13,6 @@ use crate::hook;
 
 const WEBSOCKET_DENIED: &str = "redacted cannot filter WebSocket frames; monitor a command instead";
 
-/// Found in every command we wrap, so a wrapped command is never wrapped again.
-const STREAM_FILTER: &str = "scrub --stream";
-
 #[derive(Serialize)]
 struct PreToolUseOutput {
     #[serde(rename = "hookSpecificOutput")]
@@ -45,8 +42,7 @@ pub fn respond(payload: &Value, exe: io::Result<PathBuf>) -> Vec<u8> {
     // Fail closed: an unhandled error or panic would exit non-zero, and Claude
     // Code then runs the command unfiltered.
     let decision = match panic::catch_unwind(AssertUnwindSafe(|| wrap_monitor_call(payload, exe))) {
-        Ok(Ok(None)) => return Vec::new(),
-        Ok(Ok(Some(decision))) => decision,
+        Ok(Ok(decision)) => decision,
         Ok(Err(error)) => deny(format!(
             "redacted could not wrap the Monitor command: {error}"
         )),
@@ -58,28 +54,24 @@ pub fn respond(payload: &Value, exe: io::Result<PathBuf>) -> Vec<u8> {
     .expect("strings and parsed Values always serialize")
 }
 
-/// The decision for one Monitor call, or None when it is already wrapped.
-/// Error messages name fields only: the model reads them, the payload may hold secrets.
+/// The decision for one Monitor call. Error messages name fields only: the model reads them, the payload may hold secrets.
 fn wrap_monitor_call(
     payload: &Value,
     exe: io::Result<PathBuf>,
-) -> Result<Option<PreToolUseDecision>, String> {
+) -> Result<PreToolUseDecision, String> {
     let mut tool_input = payload
         .get("tool_input")
         .and_then(Value::as_object)
         .ok_or("tool_input is not an object")?
         .clone();
     if tool_input.contains_key("ws") {
-        return Ok(Some(deny(WEBSOCKET_DENIED.into())));
+        return Ok(deny(WEBSOCKET_DENIED.into()));
     }
     let command = match tool_input.get("command") {
         Some(Value::String(command)) => command,
         Some(_) => return Err("command is not a string".into()),
         None => return Err("tool_input has no command".into()),
     };
-    if command.contains(STREAM_FILTER) {
-        return Ok(None);
-    }
     // An empty --cwd would read the project config of whatever directory the shell is in.
     let cwd = payload
         .get("cwd")
@@ -91,19 +83,21 @@ fn wrap_monitor_call(
         .to_str()
         .ok_or("the redacted binary path is not UTF-8")?;
     // 2>&1: Monitor turns only stdout into events, but stderr lands in a file the model can Read.
-    // The newline before `)` keeps a trailing `# comment` or heredoc terminator from swallowing it.
+    // The command is one quoted word, never shell syntax: `true ); cat .env; ( true`
+    // cannot close the wrapper early. bash, so bash-isms in model-written commands keep working.
     let wrapped = format!(
-        "( {command}\n) 2>&1 | {} {STREAM_FILTER} --cwd {}",
+        "bash -c {} 2>&1 | {} scrub --stream --cwd {}",
+        shell_quote(command),
         shell_quote(exe),
         shell_quote(cwd)
     );
     tool_input.insert("command".into(), Value::String(wrapped));
-    Ok(Some(PreToolUseDecision {
+    Ok(PreToolUseDecision {
         hook_event_name: "PreToolUse",
         permission_decision: None,
         permission_decision_reason: None,
         updated_input: Some(Value::Object(tool_input)),
-    }))
+    })
 }
 
 fn deny(reason: String) -> PreToolUseDecision {

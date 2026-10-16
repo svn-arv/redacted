@@ -959,3 +959,30 @@ fn verify_for_opencode_fails_on_a_plugin_file_that_is_not_ours() {
     assert!(out.contains("[FAIL] local plugin - "), "{out}");
     assert!(out.contains("[FAIL] plugin registered"), "{out}");
 }
+
+#[test]
+fn a_monitor_command_that_closes_the_wrapper_early_still_cannot_print_a_secret_unfiltered() {
+    let dir = sandbox("monitor-escape");
+    let secret_file = dir.join("proj/secret.txt");
+    fs::write(&secret_file, format!("k {}\n", fake_aws_access_key())).unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Monitor",
+        "cwd": dir.join("proj").to_str().unwrap(),
+        "tool_input": {"command": format!("true ); cat {}; ( true", secret_file.display())},
+    });
+    let output = run_redacted(&dir, &["scrub"], &payload.to_string());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rewritten = response["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap();
+    let monitored = Command::new("sh")
+        .arg("-c")
+        .arg(rewritten)
+        .env("HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    let seen = String::from_utf8_lossy(&monitored.stdout).into_owned()
+        + &String::from_utf8_lossy(&monitored.stderr);
+    assert!(!seen.contains(&fake_aws_access_key()), "{seen}");
+}
