@@ -687,7 +687,8 @@ fn hook_mode_withholds_even_clean_output_when_the_config_does_not_parse_and_says
 }
 
 #[test]
-fn raw_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
+fn raw_mode_exits_1_with_the_parse_error_so_nothing_is_scrubbed_on_defaults_that_drop_learned_secrets()
+ {
     let (dir, config) = sandbox_with_malformed_global_config("raw-bad-config");
     let output = run_redacted(&dir, &["scrub"], "plain text\n");
     let err = String::from_utf8_lossy(&output.stderr);
@@ -704,7 +705,8 @@ fn raw_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
 }
 
 #[test]
-fn stream_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
+fn stream_mode_exits_1_with_the_parse_error_so_nothing_is_scrubbed_on_defaults_that_drop_learned_secrets()
+ {
     let (dir, config) = sandbox_with_malformed_global_config("stream-bad-config");
     let output = run_redacted(&dir, &["scrub", "--stream"], "plain text\n");
     let err = String::from_utf8_lossy(&output.stderr);
@@ -721,7 +723,7 @@ fn stream_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
 }
 
 #[test]
-fn verify_fails_config_files_with_the_parse_error_and_still_runs_the_other_checks() {
+fn verify_fails_config_files_with_the_parse_error_so_the_user_finds_the_broken_file() {
     let (dir, config) = sandbox_with_malformed_global_config("verify-bad-config");
     let output = run_redacted(&dir, &["verify"], "");
     let out = stdout(&output);
