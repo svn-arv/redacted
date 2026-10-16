@@ -810,6 +810,156 @@ fn verify_fails_config_files_with_the_parse_error_so_the_user_finds_the_broken_f
     assert!(out.contains("[PASS] patterns load"), "{out}");
 }
 
+/// OpenCode's payload for one call of its `bash` tool, as the plugin sends it.
+fn opencode_payload(command_output: &str) -> String {
+    serde_json::json!({
+        "tool": "bash", "sessionID": "ses_1", "callID": "call_1", "args": {"command": "env"},
+        "output": {"title": "env", "output": command_output, "metadata": {"exit": 0}},
+    })
+    .to_string()
+}
+
+#[test]
+fn opencode_format_prints_the_whole_output_with_the_secret_scrubbed_and_records_stats() {
+    let dir = sandbox("opencode");
+    let payload = opencode_payload(&format!("k {}", fake_aws_access_key()));
+    let output = run_redacted(&dir, &["scrub", "--format", "opencode"], &payload);
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        "{\"metadata\":{\"exit\":0},\"output\":\"k [REDACTED:aws_access_key ...Q7Q7]\",\"title\":\"env\"}\n"
+    );
+    let stats = fs::read_to_string(dir.join("stats.jsonl")).unwrap();
+    assert!(
+        stats.ends_with("\"tool\":\"bash\",\"by\":{\"aws_access_key\":1}}\n"),
+        "{stats}"
+    );
+}
+
+#[test]
+fn opencode_format_reads_the_project_engine_config_from_cwd_because_the_plugin_passes_opencodes_directory()
+ {
+    let dir = sandbox("opencode-cwd");
+    // Outside the process cwd, so only --cwd can find it.
+    let project = dir.join("elsewhere");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join(".redacted.engine.yml"),
+        "patterns: [{name: canary, regex: 'canary-[0-9]{6}'}]\n",
+    )
+    .unwrap();
+    let payload = opencode_payload("seen canary-424242");
+
+    let without_cwd = run_redacted(&dir, &["scrub", "--format", "opencode"], &payload);
+    assert!(
+        stdout(&without_cwd).contains("canary-424242"),
+        "global config only by default"
+    );
+
+    let args = [
+        "scrub",
+        "--format",
+        "opencode",
+        "--cwd",
+        project.to_str().unwrap(),
+    ];
+    let out = stdout(&run_redacted(&dir, &args, &payload));
+    assert!(out.contains("[REDACTED:canary"), "{out}");
+    assert!(!out.contains("424242"), "{out}");
+}
+
+#[test]
+fn opencode_format_answers_an_unparsable_payload_with_the_withheld_notice_and_exit_0() {
+    // Exit 0 with JSON, so the plugin swaps in the notice instead of failing on a crash.
+    let dir = sandbox("opencode-bad");
+    let payload = format!(
+        "{{\"tool\":\"bash\",\"output\":\"k {}",
+        fake_aws_access_key()
+    );
+    let output = run_redacted(&dir, &["scrub", "--format", "opencode"], &payload);
+    assert_eq!(output.status.code(), Some(0));
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        printed.as_str().unwrap().contains("tool output withheld"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn init_for_opencode_refuses_without_a_terminal_and_writes_neither_the_plugin_nor_claude_settings()
+{
+    let dir = sandbox("init-opencode-notty");
+    fs::write(dir.join("proj/.env"), "").unwrap();
+    let output = run_redacted(&dir, &["init", "--format", "opencode", "--env", ".env"], "");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!dir.join("home/.config/opencode").exists());
+    assert!(!dir.join("home/.claude").exists());
+}
+
+/// Writes `text` at `path`, creating its folder.
+fn write_file(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+#[test]
+fn uninstall_for_opencode_removes_our_plugin_files_and_leaves_claude_settings_and_other_plugins() {
+    let dir = sandbox("uninstall-opencode");
+    let global = dir.join("home/.config/opencode/plugins/redacted.ts");
+    let local = dir.join("proj/.opencode/plugins/redacted.ts");
+    let marker = "// redacted: OpenCode plugin that scrubs secrets\n";
+    write_file(&global, marker);
+    write_file(&local, marker);
+    let other = dir.join("home/.config/opencode/plugins/mine.ts");
+    write_file(&other, "export const Mine = async () => ({})\n");
+    let claude = dir.join("home/.claude/settings.json");
+    let claude_settings = r#"{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"/opt/bin/redacted scrub"}]}]}}"#;
+    write_file(&claude, claude_settings);
+
+    let output = run_redacted(&dir, &["uninstall", "--format", "opencode"], "");
+    let out = stdout(&output);
+    assert!(output.status.success(), "{out}");
+    assert!(
+        out.contains(&format!("Removed redacted hook from {}", global.display())),
+        "{out}"
+    );
+    assert!(!global.exists() && !local.exists());
+    assert!(other.exists());
+    assert_eq!(fs::read_to_string(&claude).unwrap(), claude_settings);
+}
+
+#[test]
+fn verify_for_opencode_passes_on_our_plugin_file_without_asking_for_claude_hooks() {
+    let dir = sandbox("verify-opencode");
+    let plugin = dir.join("home/.config/opencode/plugins/redacted.ts");
+    write_file(
+        &plugin,
+        "// redacted: OpenCode plugin that scrubs secrets\n",
+    );
+    let output = run_redacted(&dir, &["verify", "--format", "opencode"], "");
+    let out = stdout(&output);
+    assert!(output.status.success(), "{out}");
+    let pass_line = format!("[PASS] global plugin - {}", plugin.display());
+    assert!(out.contains(&pass_line), "missing {pass_line:?} in:\n{out}");
+    assert!(out.contains("[SKIP] local plugin"), "{out}");
+    assert!(
+        !out.contains("monitor hook") && !out.contains("global hook"),
+        "{out}"
+    );
+}
+
+#[test]
+fn verify_for_opencode_fails_on_a_plugin_file_that_is_not_ours() {
+    let dir = sandbox("verify-opencode-theirs");
+    let plugin = dir.join("proj/.opencode/plugins/redacted.ts");
+    write_file(&plugin, "export const Mine = async () => ({})\n");
+    let output = run_redacted(&dir, &["verify", "--format", "opencode"], "");
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{out}");
+    assert!(out.contains("[FAIL] local plugin - "), "{out}");
+    assert!(out.contains("[FAIL] plugin registered"), "{out}");
+}
+
 #[test]
 fn a_monitor_command_that_closes_the_wrapper_early_still_cannot_print_a_secret_unfiltered() {
     let dir = sandbox("monitor-escape");

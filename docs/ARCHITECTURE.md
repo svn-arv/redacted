@@ -44,6 +44,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/scrub/benchmark.rs` | Test only (`#[cfg(test)]`): detection benchmark that plants each built-in pattern in 17 placements and writes `docs/BENCHMARK.md`. |
 | `src/engine.yml` | Built-in patterns and `allow_values`, compiled in with `include_str!`. |
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
+| `src/opencode.rs` | `redacted scrub --format opencode`: OpenCode's `tool.execute.after` contract, fail closed with the withheld shape; the plugin file `init --format opencode` writes. |
 | `src/stream.rs` | `redacted scrub --stream`: line-by-line scrub with PEM block buffering, fail closed per line. |
 | `src/pre_hook.rs` | PreToolUse protocol: rewrites a Monitor command to pipe through `scrub --stream`, denies `ws` monitors, fails closed with a deny. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
@@ -55,6 +56,7 @@ Other paths:
 | Path | Contents |
 | --- | --- |
 | `tests/cli.rs` | End-to-end tests of the binary. |
+| `plugins/opencode/redacted.ts` | The OpenCode plugin, compiled into the binary with `include_str!`; `smoke.mjs` runs it under Bun. |
 | `tests/golden.rs`, `tests/fixtures/` | Raw-mode output pinned to goldens. |
 | `corpus/clean/` | Clean text for the precision and recall tests. |
 | `scripts/migration-check.sh` | Fresh install, v1 upgrade and v2 config in a throwaway `HOME`. |
@@ -186,6 +188,17 @@ A hit prints one line:
   ```
   A `ws` call, or one that cannot be rewritten (bad `tool_input`, no `command`, no `cwd`, no binary path), gets `"permissionDecision":"deny"` with a `permissionDecisionReason` that names fields only, never payload content. The command is one single-quoted word (`shell_quote`), never interpolated into shell syntax, and every Monitor command is wrapped.
 - Pre-v2 notice: when the global config exists with no `version`, the first hit in each `session_id` gets `[redacted] config is v1: run `redacted init` to learn your secrets.` above its `reason` (`hook::prepend_reason`). Seen sessions are stored in `notified.txt` next to the stats file.
+
+## OpenCode format
+
+`--format <claude|opencode>` on `scrub`, `init`, `uninstall` and `verify` picks the tool; `claude` is the default.
+
+- stdin: `{"tool", "sessionID", "callID", "args", "output"}` from the plugin. `--cwd` loads the project config, as `scrub --stream` does.
+- stdout: `output` as JSON, hit or not, with every string leaf and key scrubbed by `hook::scrub_json`. Exit 0.
+- `ignore_internal_tools` passes every tool but `bash` through unchanged.
+- Fail closed: a bad payload, a config or scrubber error, or a panic prints `output` with every string withheld (`hook::withhold_strings`), or the bare `WITHHELD` string without a usable `output`.
+- Stats record `tool`. No pre-v2 notice: OpenCode has no field for it.
+- The plugin throws on a non-zero exit or unparsable stdout, which fails the tool call.
 
 ## Stats file
 

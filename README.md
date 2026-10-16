@@ -370,11 +370,27 @@ printf 'key AKIAEXAMPLEKEYID0001\n' | redacted scrub
 | Tool | Status |
 | --- | --- |
 | Claude Code | Works today. |
-| OpenCode, Gemini CLI, GitHub Copilot CLI, Codex CLI, Amp | Hooks can replace tool output. Adapters are planned. |
+| OpenCode | Works through the plugin below. |
+| Gemini CLI, GitHub Copilot CLI, Codex CLI, Amp | Hooks can replace tool output. Adapters are planned. |
 | Cursor | Hooks can replace MCP tool output only. |
 | Windsurf, Cline, Roo Code, Kiro, Zed | No hook can replace tool output. |
 
-The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 removes it: the `redacted` binary is the only scrubber. An OpenCode adapter that calls the binary is planned.
+The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 removed it: the `redacted` binary is the only scrubber. The OpenCode plugin below calls the binary instead.
+
+### OpenCode
+
+```bash
+redacted init --format opencode           # ~/.config/opencode/plugins/redacted.ts
+redacted init --format opencode --local   # .opencode/plugins/redacted.ts
+```
+
+- `init --format opencode` learns from `.env` as usual, then writes the plugin file instead of touching Claude Code settings. Copying [`plugins/opencode/redacted.ts`](plugins/opencode/redacted.ts) into either folder works too.
+- `init` pins the absolute path of the binary it runs from, as it does for the Claude Code hook, so a writable `PATH` directory cannot swap the scrubber. A hand-copied file runs `redacted` from `PATH`. `REDACTED_BIN` overrides either.
+- After every tool call it pipes the output through `redacted scrub --format opencode --cwd <project>` and puts the result in place of the output the model reads. The project config in that folder applies, as in hook mode.
+- Every string in the output is scrubbed: built-in tools' `title`, `output` and `metadata`, and an MCP tool's raw result as a whole.
+- With `ignore_internal_tools: true`, only the `bash` tool is scrubbed.
+- If the binary is missing, crashes or prints no JSON, the plugin throws and OpenCode fails the tool call, so no raw output shows. A config that does not parse withholds every string instead.
+- `redacted verify --format opencode` checks the plugin file is ours. `redacted uninstall --format opencode` removes it and leaves other plugins alone.
 
 ### Streaming
 

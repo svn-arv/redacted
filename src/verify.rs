@@ -6,9 +6,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::cli::Format;
 use crate::config::{self, Config, EngineConfig};
 use crate::scrub::Scrubber;
-use crate::settings;
+use crate::{opencode, settings};
 
 #[derive(Clone, Copy, PartialEq)]
 enum CheckStatus {
@@ -47,7 +48,7 @@ impl Check {
 }
 
 /// `redacted verify`: prints one line per check and fails if any check failed.
-pub fn run() -> Result<(), String> {
+pub fn run(format: Format) -> Result<(), String> {
     let home_dir = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
@@ -68,8 +69,7 @@ pub fn run() -> Result<(), String> {
         }
     };
     let mut checks = vec![check_binary()];
-    checks.extend(check_hooks(home_dir, cwd));
-    checks.push(check_monitor_hook(home_dir, cwd));
+    checks.extend(check_registration(format, home_dir, cwd));
     checks.push(config_files);
     checks.push(check_patterns(&config, &engine_config));
     checks.push(check_test_scrub());
@@ -99,8 +99,20 @@ fn check_binary() -> Check {
     }
 }
 
+/// Where `format` registers the hook; its own function to keep `run` under the line limit.
+fn check_registration(format: Format, home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
+    match format {
+        Format::Claude => {
+            let mut checks = check_hooks(home_dir, cwd);
+            checks.push(check_monitor_hook(home_dir, cwd));
+            checks
+        }
+        Format::Opencode => check_opencode_plugins(home_dir, cwd),
+    }
+}
+
 fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
-    let mut global = match home_dir {
+    let global = match home_dir {
         Some(home) => check_settings_file(&home.join(".claude/settings.json"), "global hook"),
         None => Check::new(
             "global hook",
@@ -108,7 +120,7 @@ fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
             "cannot determine home directory",
         ),
     };
-    let mut local = match cwd {
+    let local = match cwd {
         Some(dir) => check_settings_file(&dir.join(".claude/settings.local.json"), "local hook"),
         None => Check::new(
             "local hook",
@@ -116,23 +128,66 @@ fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
             "cannot determine working directory",
         ),
     };
+    let missing = Check::new(
+        "hook registered",
+        CheckStatus::Fail,
+        "not found in either settings file, run: redacted init",
+    );
+    one_scope_is_enough(global, local, missing)
+}
 
-    // One registration is enough; the missing other is a skip, not a failure.
+/// OpenCode loads every file in either plugin folder, so one of ours is enough.
+fn check_opencode_plugins(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
+    let global = match home_dir {
+        Some(home) => check_plugin_file(&opencode::global_plugin_path(home), "global plugin"),
+        None => Check::new(
+            "global plugin",
+            CheckStatus::Fail,
+            "cannot determine home directory",
+        ),
+    };
+    let local = match cwd {
+        Some(dir) => check_plugin_file(&opencode::local_plugin_path(dir), "local plugin"),
+        None => Check::new(
+            "local plugin",
+            CheckStatus::Fail,
+            "cannot determine working directory",
+        ),
+    };
+    let missing = Check::new(
+        "plugin registered",
+        CheckStatus::Fail,
+        "not found in either plugin folder, run: redacted init --format opencode",
+    );
+    one_scope_is_enough(global, local, missing)
+}
+
+fn check_plugin_file(path: &Path, label: &'static str) -> Check {
+    let shown = path.display();
+    if !path.exists() {
+        return Check::new(label, CheckStatus::Fail, format!("file not found: {shown}"));
+    }
+    if !opencode::is_our_plugin(path) {
+        let detail =
+            format!("{shown} is not the redacted plugin, run: redacted init --format opencode");
+        return Check::new(label, CheckStatus::Fail, detail);
+    }
+    Check::new(label, CheckStatus::Pass, shown.to_string())
+}
+
+/// One registration is enough; the missing other is a skip, not a failure.
+/// `missing` is added when neither scope passed.
+fn one_scope_is_enough(mut global: Check, mut local: Check, missing: Check) -> Vec<Check> {
     if global.status == CheckStatus::Pass && local.status == CheckStatus::Fail {
         local.status = CheckStatus::Skip;
     }
     if local.status == CheckStatus::Pass && global.status == CheckStatus::Fail {
         global.status = CheckStatus::Skip;
     }
-    let no_hook_registered =
-        global.status != CheckStatus::Pass && local.status != CheckStatus::Pass;
+    let is_registered = global.status == CheckStatus::Pass || local.status == CheckStatus::Pass;
     let mut out = vec![global, local];
-    if no_hook_registered {
-        out.push(Check::new(
-            "hook registered",
-            CheckStatus::Fail,
-            "not found in either settings file, run: redacted init",
-        ));
+    if !is_registered {
+        out.push(missing);
     }
     out
 }

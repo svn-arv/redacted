@@ -10,21 +10,27 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use inquire::{Confirm, MultiSelect, Select};
+use serde_json::Value;
 
+use crate::cli::Format;
 use crate::config::{self, LearnedSecret};
 use crate::scrub::{learned_value_hint, percent_decode, sha256_hex};
-use crate::settings;
+use crate::{opencode, settings};
 
 /// Prompting happens only here and in the steps below; every function they call
 /// is tested without a TTY.
-pub fn run(env_file: Option<PathBuf>, local: bool) -> Result<(), String> {
+pub fn run(env_file: Option<PathBuf>, local: bool, format: Format) -> Result<(), String> {
     if !io::stdin().is_terminal() {
         return Err("init needs an interactive terminal".to_string());
     }
-    prompt_and_install(env_file, local).map_err(|e| format!("init: {e}"))
+    prompt_and_install(env_file, local, format).map_err(|e| format!("init: {e}"))
 }
 
-fn prompt_and_install(env_file: Option<PathBuf>, local: bool) -> Result<(), String> {
+fn prompt_and_install(
+    env_file: Option<PathBuf>,
+    local: bool,
+    format: Format,
+) -> Result<(), String> {
     let home = config::home_dir().ok_or("cannot determine home directory".to_string())?;
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine working directory: {e}"))?;
@@ -36,7 +42,7 @@ fn prompt_and_install(env_file: Option<PathBuf>, local: bool) -> Result<(), Stri
         Some(path) => learn_from_env(&path, &home)?,
         None => println!("No .env file found; installing the hook only."),
     }
-    install(local, &cwd, &home)
+    install(format, local, &cwd, &home)
 }
 
 /// The only `.env*` file in `cwd`, or the user's pick when there are several.
@@ -120,23 +126,37 @@ fn pick_secrets_to_learn(
 
 /// Registers the hook globally or for this project, then warns when only the
 /// vendor tier would be active.
-fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
+fn install(format: Format, local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
     // Loaded before anything is written: a hook over a malformed config would withhold every output.
     // The global config alone (no cwd), so a re-run with no .env does not warn a user who has entries.
     let global_config = config::load(Some(home), None)?;
-    let bin = this_executable_path()?;
-    let settings_path = if local {
-        cwd.join(".claude/settings.local.json")
-    } else {
-        home.join(".claude/settings.json")
-    };
-    settings::install_hook(&settings_path, &bin)?;
     let scope = if local { "local" } else { "global" };
+    let hook_path = hook_path(format, local, if local { cwd } else { home });
+    let bin = this_executable_path()?;
+    let binary = match format {
+        Format::Claude => {
+            settings::install_hook(&hook_path, &bin)?;
+            format!("{bin} scrub")
+        }
+        // The shipped file falls back to `redacted` on PATH for a hand copy; init pins
+        // this binary instead. A JSON string is also a valid TypeScript string literal.
+        Format::Opencode => {
+            let pinned = format!("process.env.REDACTED_BIN || {}", Value::from(bin.as_str()));
+            let source = opencode::PLUGIN_SOURCE.replace(opencode::PLUGIN_BIN_DEFAULT, &pinned);
+            if let Some(dir) = hook_path.parent() {
+                fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+            }
+            // A rerun overwrites the file, so an upgrade picks up the plugin this binary ships.
+            fs::write(&hook_path, source)
+                .map_err(|e| format!("writing {}: {e}", hook_path.display()))?;
+            format!("{bin} (REDACTED_BIN overrides it)")
+        }
+    };
     println!(
         "Installed redacted hook ({scope}) in {}",
-        settings_path.display()
+        hook_path.display()
     );
-    println!("Binary: {bin} scrub");
+    println!("Binary: {binary}");
     if config::is_vendor_only(&global_config) {
         println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
@@ -393,6 +413,16 @@ fn write_config(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Where `format`'s hook lives under `dir`: the home directory, or the project with `local`.
+fn hook_path(format: Format, local: bool, dir: &Path) -> PathBuf {
+    match (format, local) {
+        (Format::Claude, true) => dir.join(".claude/settings.local.json"),
+        (Format::Claude, false) => dir.join(".claude/settings.json"),
+        (Format::Opencode, true) => opencode::local_plugin_path(dir),
+        (Format::Opencode, false) => opencode::global_plugin_path(dir),
+    }
+}
+
 /// This executable, never a `redacted` found on PATH: a writable PATH directory
 /// could otherwise register its own binary as the hook.
 fn this_executable_path() -> Result<String, String> {
@@ -402,10 +432,10 @@ fn this_executable_path() -> Result<String, String> {
         .map_err(|e| format!("cannot determine redacted binary path: {e}"))
 }
 
-/// `redacted uninstall`: removes the hook from both settings files (or the local
-/// one only); the global config is kept so a reinstall keeps its learned secrets.
+/// `redacted uninstall`: removes the hook from both scopes (or the local one
+/// only); the global config is kept so a reinstall keeps its learned secrets.
 /// A file that fails is reported and skipped, so the other one is still cleaned.
-pub fn uninstall(local: bool) -> Result<(), String> {
+pub fn uninstall(local: bool, format: Format) -> Result<(), String> {
     let home = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home = home.as_deref();
@@ -413,13 +443,17 @@ pub fn uninstall(local: bool) -> Result<(), String> {
     let mut paths = Vec::new();
     // Without a HOME there is no global file, only the local one.
     if !local && let Some(home) = home {
-        paths.push(home.join(".claude/settings.json"));
+        paths.push(hook_path(format, false, home));
     }
-    paths.push(cwd.join(".claude/settings.local.json"));
+    paths.push(hook_path(format, true, &cwd));
+    let remove_hook = match format {
+        Format::Claude => settings::remove_hook,
+        Format::Opencode => opencode::remove_plugin,
+    };
     let mut removed = 0;
     let mut errors = Vec::new();
     for path in paths {
-        match settings::remove_hook(&path) {
+        match remove_hook(&path) {
             Ok(true) => {
                 println!("Removed redacted hook from {}", path.display());
                 removed += 1;

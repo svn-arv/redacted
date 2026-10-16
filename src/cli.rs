@@ -9,12 +9,12 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{self, Config, ConfigError, EngineConfig};
 use crate::scrub::Scrubber;
-use crate::{hook, init, pre_hook, stats, stream, verify};
+use crate::{hook, init, opencode, pre_hook, stats, stream, verify};
 
 #[derive(Parser)]
 #[command(
@@ -37,12 +37,19 @@ enum CliCommand {
         /// Scrub and print each line as it arrives, never reading stdin as a hook payload
         #[arg(long)]
         stream: bool,
-        /// Also read the project config in DIR (stream mode only)
-        #[arg(long, value_name = "DIR", requires = "stream")]
+        /// Also read the project config in DIR (--stream or --format opencode only)
+        #[arg(long, value_name = "DIR")]
         cwd: Option<PathBuf>,
+        /// The hook contract stdin and stdout speak
+        #[arg(long, value_enum, default_value_t = Format::Claude, conflicts_with = "stream")]
+        format: Format,
     },
     /// Check that redacted is installed and working
-    Verify,
+    Verify {
+        /// The tool whose hook registration is checked
+        #[arg(long, value_enum, default_value_t = Format::Claude)]
+        format: Format,
+    },
     /// Show how often each pattern has redacted secrets
     Stats,
     /// Learn secrets from a .env file and install the hook
@@ -50,9 +57,12 @@ enum CliCommand {
         /// Env file to learn from (skips the .env* search in this directory)
         #[arg(long = "env", value_name = "ENV")]
         env_file: Option<PathBuf>,
-        /// Install to .claude/settings.local.json (this project only)
+        /// Install for this project only (.claude/settings.local.json, or .opencode/plugins/)
         #[arg(long)]
         local: bool,
+        /// The tool to install the hook for
+        #[arg(long, value_enum, default_value_t = Format::Claude)]
+        format: Format,
     },
     /// Print the global config, or open it in the editor with --edit
     Config {
@@ -60,12 +70,24 @@ enum CliCommand {
         #[arg(long)]
         edit: bool,
     },
-    /// Remove the redacted hook from Claude Code settings (keeps the config)
+    /// Remove the redacted hook (keeps the config)
     Uninstall {
-        /// Remove from .claude/settings.local.json only
+        /// Remove from this project only (.claude/settings.local.json, or .opencode/plugins/)
         #[arg(long)]
         local: bool,
+        /// The tool to remove the hook from
+        #[arg(long, value_enum, default_value_t = Format::Claude)]
+        format: Format,
     },
+}
+
+/// The coding assistant whose hook contract `scrub`, `init`, `uninstall` and `verify` speak.
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+pub enum Format {
+    /// Claude Code's PostToolUse and PreToolUse hooks
+    Claude,
+    /// OpenCode's `tool.execute.after` plugin hook
+    Opencode,
 }
 
 /// Runs the CLI. Commands return `Err(message)` on failure; this is the one
@@ -77,12 +99,27 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let result = match cli.command {
-        Some(CliCommand::Scrub { stream: true, cwd }) => stream::run(cwd.as_deref()),
+        Some(CliCommand::Scrub {
+            stream: true, cwd, ..
+        }) => stream::run(cwd.as_deref()),
+        Some(CliCommand::Scrub {
+            format: Format::Opencode,
+            cwd,
+            ..
+        }) => run_opencode_scrub(cwd.as_deref()),
+        // Claude Code's payload carries its own cwd.
+        Some(CliCommand::Scrub { cwd: Some(_), .. }) => {
+            Err("scrub: --cwd needs --stream or --format opencode".to_string())
+        }
         Some(CliCommand::Scrub { .. }) => run_scrub(),
-        Some(CliCommand::Verify) => verify::run(),
+        Some(CliCommand::Verify { format }) => verify::run(format),
         Some(CliCommand::Stats) => show_stats(),
-        Some(CliCommand::Init { env_file, local }) => init::run(env_file, local),
-        Some(CliCommand::Uninstall { local }) => init::uninstall(local),
+        Some(CliCommand::Init {
+            env_file,
+            local,
+            format,
+        }) => init::run(env_file, local, format),
+        Some(CliCommand::Uninstall { local, format }) => init::uninstall(local, format),
         Some(CliCommand::Config { edit: true }) => edit_global_config(),
         Some(CliCommand::Config { edit: false }) => show_global_config(),
         None => {
@@ -136,6 +173,25 @@ fn run_scrub() -> Result<(), String> {
         return Ok(());
     }
     respond_to_hook(&stdin_bytes, &payload, home_dir, loaded);
+    Ok(())
+}
+
+/// Always exits 0 with a JSON value on stdout: OpenCode's plugin swaps it in for
+/// the tool output, and fails the tool call on anything else.
+fn run_opencode_scrub(cwd: Option<&Path>) -> Result<(), String> {
+    let mut stdin_bytes = Vec::new();
+    // A failed read is answered like a bad payload: withheld, never partial.
+    if io::stdin().read_to_end(&mut stdin_bytes).is_err() {
+        stdin_bytes.clear();
+    }
+    let home_dir = config::home_dir();
+    let home_dir = home_dir.as_deref();
+    let loaded = config::load(home_dir, cwd)
+        .and_then(|config| Ok((config, config::load_engine(home_dir, cwd)?)));
+    let (out, counts_by_pattern) = opencode::respond(&stdin_bytes, loaded);
+    let payload: Value = serde_json::from_slice(&stdin_bytes).unwrap_or(Value::Null);
+    record_stats(&payload_string(&payload, "tool"), &counts_by_pattern);
+    let _ = io::stdout().write_all(&out);
     Ok(())
 }
 
