@@ -211,7 +211,9 @@ pii:
 - Not caught:
   - documentation and bot addresses: `example.com`, `example.net`, `example.org`, the `.example`, `.test`, `.invalid` and `.localhost` TLDs, `noreply@` and `no-reply@` senders, `*.noreply.github.com`;
   - the `user@host` part of a URL login (`scheme://user:pass@host`), which the URL patterns own;
-  - bare digit runs, and numbers glued to a word, version, IP or timestamp;
+  - ssh-style logins: `user@host:` (scp, git remotes, shell prompts) and `user@host` after `ssh`, `scp`, `sftp`, `rsync` or `ssh-copy-id`. A bare `user@host` with neither is still redacted;
+  - a `+` number at the start of a line in text holding a diff hunk header (`@@ `). Phones on added lines were never caught anyway: their own `+` follows the diff's `+`;
+  - bare digit runs, and numbers glued to a word, version, IP or timestamp. A spaced `+` number in code, such as `x = y +12345678`, is still redacted;
   - dotted `415.555.0123`, which the version allow-list claims first, and `1-415-555-0123` without a `+`;
   - names and postal addresses.
 - Read from the global config only. `whitelist: [email]` or `whitelist: [phone]` turns one off again.
