@@ -29,7 +29,7 @@ fn a_monitor_command_is_piped_through_the_stream_filter_so_each_event_is_scrubbe
         respond_with_exe(payload),
         concat!(
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"#,
-            r#""command":"( tail -f app.log ) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"}}}"#,
+            r#""command":"( tail -f app.log\n) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"}}}"#,
             "\n"
         )
     );
@@ -57,7 +57,7 @@ fn a_cwd_with_a_space_and_a_quote_stays_one_shell_word_so_the_filter_reads_the_r
     let out: Value = serde_json::from_str(&respond_with_exe(payload)).unwrap();
     assert_eq!(
         out["hookSpecificOutput"]["updatedInput"]["command"],
-        r"( tail -f app.log ) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/bob'\''s app'"
+        "( tail -f app.log\n) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/bob'\\''s app'"
     );
 }
 

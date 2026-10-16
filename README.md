@@ -392,8 +392,11 @@ The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 re
 `redacted init` also registers `redacted scrub` as a PreToolUse hook with matcher `Monitor`. Before a Monitor command runs, the hook rewrites it to:
 
 ```
-( <command> ) 2>&1 | '<redacted binary>' scrub --stream --cwd '<project dir>'
+( <command>
+) 2>&1 | '<redacted binary>' scrub --stream --cwd '<project dir>'
 ```
+
+The newline before `)` keeps a command that ends in a `# comment` or a heredoc terminator from swallowing it.
 
 - Each output line reaches the model only after the stream filter, line by line.
 - `2>&1` is deliberate: Monitor turns only stdout into events, but stderr lands in an output file the model can read.

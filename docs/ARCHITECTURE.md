@@ -182,7 +182,7 @@ A hit prints one line:
 - Exit code: always 0 once stdin is read. Only a failed stdin read exits 1.
 - PreToolUse: `cli::run_scrub` sends a payload whose `hook_event_name` is `"PreToolUse"` to `pre_hook::respond` before any config loads. Only `tool_name` `"Monitor"` gets an answer; any other prints nothing. The rewrite (no `permissionDecision`, so Claude Code still asks as usual):
   ```json
-  {"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{<tool_input with command = "( <command> ) 2>&1 | '<exe>' scrub --stream --cwd '<cwd>'">}}}
+  {"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{<tool_input with command = "( <command>\n) 2>&1 | '<exe>' scrub --stream --cwd '<cwd>'">}}}
   ```
   A `ws` call, or one that cannot be rewritten (bad `tool_input`, no `command`, no `cwd`, no binary path), gets `"permissionDecision":"deny"` with a `permissionDecisionReason` that names fields only, never payload content. A command already holding `scrub --stream` prints nothing.
 - Pre-v2 notice: when the global config exists with no `version`, the first hit in each `session_id` gets `[redacted] config is v1: run `redacted init` to learn your secrets.` above its `reason` (`hook::prepend_reason`). Seen sessions are stored in `notified.txt` next to the stats file.

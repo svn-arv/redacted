@@ -91,8 +91,9 @@ fn wrap_monitor_call(
         .to_str()
         .ok_or("the redacted binary path is not UTF-8")?;
     // 2>&1: Monitor turns only stdout into events, but stderr lands in a file the model can Read.
+    // The newline before `)` keeps a trailing `# comment` or heredoc terminator from swallowing it.
     let wrapped = format!(
-        "( {command} ) 2>&1 | {} {STREAM_FILTER} --cwd {}",
+        "( {command}\n) 2>&1 | {} {STREAM_FILTER} --cwd {}",
         shell_quote(exe),
         shell_quote(cwd)
     );

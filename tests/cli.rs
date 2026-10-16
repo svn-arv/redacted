@@ -334,39 +334,39 @@ fn a_monitor_pre_tool_use_payload_gets_a_command_whose_output_comes_back_scrubbe
     // A space and a quote in the project path must survive the shell quoting.
     let project = dir.join("bob's proj");
     fs::create_dir_all(&project).unwrap();
-    let payload = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Monitor",
-        "cwd": project.to_str().unwrap(),
-        "tool_input": {
-            "command": format!("echo k {} >&2", fake_aws_access_key()),
-            "description": "keys",
-            "timeout_ms": 40000,
-        },
-    });
-    let output = run_redacted(&dir, &["scrub"], &payload.to_string());
-    assert!(output.status.success());
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let updated = &response["hookSpecificOutput"]["updatedInput"];
-    assert!(
-        response["hookSpecificOutput"]
-            .get("permissionDecision")
-            .is_none()
-    );
-    assert_eq!(updated["description"], "keys");
+    let key = fake_aws_access_key();
+    // A trailing comment or a heredoc terminator must not swallow the closing `)`.
+    for command in [
+        format!("echo k {key} >&2 # note"),
+        format!("cat <<EOF\nk {key}\nEOF"),
+    ] {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Monitor",
+            "cwd": project.to_str().unwrap(),
+            "tool_input": {"command": command, "description": "keys", "timeout_ms": 40000},
+        });
+        let output = run_redacted(&dir, &["scrub"], &payload.to_string());
+        assert!(output.status.success());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let decision = &response["hookSpecificOutput"];
+        assert!(decision.get("permissionDecision").is_none(), "{command}");
+        assert_eq!(decision["updatedInput"]["description"], "keys");
 
-    // Run the rewritten command as Monitor would: stderr included, secret scrubbed.
-    let monitored = Command::new("sh")
-        .arg("-c")
-        .arg(updated["command"].as_str().unwrap())
-        .env("HOME", dir.join("home"))
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&monitored.stdout),
-        "k [REDACTED:aws_access_key ...Q7Q7]\n"
-    );
-    assert!(monitored.stderr.is_empty());
+        // Run the rewritten command as Monitor would: stderr included, secret scrubbed.
+        let monitored = Command::new("sh")
+            .arg("-c")
+            .arg(decision["updatedInput"]["command"].as_str().unwrap())
+            .env("HOME", dir.join("home"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&monitored.stdout),
+            "k [REDACTED:aws_access_key ...Q7Q7]\n",
+            "{command}"
+        );
+        assert!(monitored.stderr.is_empty(), "{command}");
+    }
 }
 
 #[test]
