@@ -1,4 +1,7 @@
-//! Skip guards: the allow lists and the Go 0.7 guards that keep code, identifiers
+    // The text scan runs only for a `+` at column 0, so other matches stay cheap.
+    matched.starts_with('+')
+        && is_line_start
+        && (text.starts_with("@@ ") || text.contains("\n@@ "))//! Skip guards: the allow lists and the Go 0.7 guards that keep code, identifiers
 //! and URLs from being redacted as secrets.
 
 use std::collections::HashMap;
