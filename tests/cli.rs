@@ -512,7 +512,7 @@ fn config_opens_the_file_in_the_editor_keeps_it_owner_only_and_checks_it_before_
     .unwrap();
     fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_config(&dir, &["config"], &editor);
+    let output = run_config(&dir, &["config", "--edit"], &editor);
     let out = stdout(&output);
     assert!(output.status.success(), "{out}");
     let config = dir.join("home/.config/redacted/config.yaml");
@@ -527,7 +527,7 @@ fn config_opens_the_file_in_the_editor_keeps_it_owner_only_and_checks_it_before_
 fn config_names_the_editor_it_could_not_start_so_the_user_can_fix_visual_or_editor() {
     let dir = sandbox("config-no-editor");
     let missing = dir.join("no-such-editor");
-    let output = run_config(&dir, &["config"], &missing);
+    let output = run_config(&dir, &["config", "--edit"], &missing);
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
     assert!(
@@ -549,7 +549,7 @@ fn config_reports_a_file_that_no_longer_parses_because_the_hook_would_silently_d
     fs::write(&editor, "#!/bin/sh\necho 'learned: [' > \"$1\"\n").unwrap();
     fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_config(&dir, &["config"], &editor);
+    let output = run_config(&dir, &["config", "--edit"], &editor);
     let err = String::from_utf8_lossy(&output.stderr);
     let config = dir.join("home/.config/redacted/config.yaml");
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));

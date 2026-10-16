@@ -47,8 +47,12 @@ enum CliCommand {
         #[arg(long)]
         local: bool,
     },
-    /// Open ~/.config/redacted/config.yaml in $VISUAL, $EDITOR or vi, then check it
-    Config,
+    /// Print the global config, or open it in the editor with --edit
+    Config {
+        /// Open ~/.config/redacted/config.yaml in $VISUAL, $EDITOR or vi, then check it
+        #[arg(long)]
+        edit: bool,
+    },
     /// Remove the redacted hook from Claude Code settings (keeps the config)
     Uninstall {
         /// Remove from .claude/settings.local.json only
@@ -71,7 +75,8 @@ pub fn run() -> ExitCode {
         Some(CliCommand::Stats) => show_stats(),
         Some(CliCommand::Init { env_file, local }) => init::run(env_file, local),
         Some(CliCommand::Uninstall { local }) => init::uninstall(local),
-        Some(CliCommand::Config) => edit_global_config(),
+        Some(CliCommand::Config { edit: true }) => edit_global_config(),
+        Some(CliCommand::Config { edit: false }) => show_global_config(),
         None => {
             let _ = Cli::command().print_help();
             Ok(())
@@ -199,6 +204,22 @@ fn looks_like_hook_payload(data: &[u8]) -> bool {
         Ok(_) => true,
         Err(e) => e.to_string().starts_with("recursion limit exceeded"),
     }
+}
+
+/// Prints the global config as written, comments included.
+fn show_global_config() -> Result<(), String> {
+    let home_dir = config::home_dir().ok_or("config: cannot determine home directory")?;
+    let path = config::global_config_path(&home_dir);
+    let shown = path.display();
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("config: no file at {shown}; run redacted init"));
+        }
+        Err(e) => return Err(format!("config: {shown}: {e}")),
+    };
+    print!("{text}");
+    Ok(())
 }
 
 /// Opens the global config in the user's editor, then compiles its patterns, so a
