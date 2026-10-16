@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use inquire::{Confirm, MultiSelect, Select};
+use serde_json::Value;
 
 use crate::cli::Format;
 use crate::config::{self, LearnedSecret};
@@ -131,21 +132,24 @@ fn install(format: Format, local: bool, cwd: &Path, home: &Path) -> Result<(), S
     let global_config = config::load(Some(home), None)?;
     let scope = if local { "local" } else { "global" };
     let hook_path = hook_path(format, local, if local { cwd } else { home });
+    let bin = this_executable_path()?;
     let binary = match format {
         Format::Claude => {
-            let bin = this_executable_path()?;
             settings::install_hook(&hook_path, &bin)?;
             format!("{bin} scrub")
         }
-        // The plugin names no path, so the same file works when copied by hand.
-        // A rerun overwrites it, so an upgrade picks up the plugin this binary ships.
+        // The shipped file falls back to `redacted` on PATH for a hand copy; init pins
+        // this binary instead. A JSON string is also a valid TypeScript string literal.
         Format::Opencode => {
+            let pinned = format!("process.env.REDACTED_BIN || {}", Value::from(bin.as_str()));
+            let source = opencode::PLUGIN_SOURCE.replace(opencode::PLUGIN_BIN_DEFAULT, &pinned);
             if let Some(dir) = hook_path.parent() {
                 fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
             }
-            fs::write(&hook_path, opencode::PLUGIN_SOURCE)
+            // A rerun overwrites the file, so an upgrade picks up the plugin this binary ships.
+            fs::write(&hook_path, source)
                 .map_err(|e| format!("writing {}: {e}", hook_path.display()))?;
-            "redacted on PATH, or $REDACTED_BIN".to_string()
+            format!("{bin} (REDACTED_BIN overrides it)")
         }
     };
     println!(

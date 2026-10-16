@@ -385,7 +385,7 @@ redacted init --format opencode --local   # .opencode/plugins/redacted.ts
 ```
 
 - `init --format opencode` learns from `.env` as usual, then writes the plugin file instead of touching Claude Code settings. Copying [`plugins/opencode/redacted.ts`](plugins/opencode/redacted.ts) into either folder works too.
-- The plugin runs `redacted` from `PATH`. Set `REDACTED_BIN` to use another binary.
+- `init` pins the absolute path of the binary it runs from, as it does for the Claude Code hook, so a writable `PATH` directory cannot swap the scrubber. A hand-copied file runs `redacted` from `PATH`. `REDACTED_BIN` overrides either.
 - After every tool call it pipes the output through `redacted scrub --format opencode --cwd <project>` and puts the result in place of the output the model reads. The project config in that folder applies, as in hook mode.
 - Every string in the output is scrubbed: built-in tools' `title`, `output` and `metadata`, and an MCP tool's raw result as a whole.
 - With `ignore_internal_tools: true`, only the `bash` tool is scrubbed.

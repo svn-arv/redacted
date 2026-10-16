@@ -19,6 +19,9 @@ use crate::scrub::{ScrubResult, Scrubber};
 /// The plugin `redacted init --format opencode` writes, compiled into the binary.
 pub const PLUGIN_SOURCE: &str = include_str!("../plugins/opencode/redacted.ts");
 
+/// The binary choice in the shipped plugin; `init` swaps the PATH default for its own path.
+pub const PLUGIN_BIN_DEFAULT: &str = r#"process.env.REDACTED_BIN || "redacted""#;
+
 /// The plugin's first line starts with this, so uninstall and verify can tell it from a user's own.
 pub const PLUGIN_MARKER: &str = "// redacted: OpenCode plugin";
 

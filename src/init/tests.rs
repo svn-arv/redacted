@@ -438,12 +438,26 @@ fn install_for_opencode_writes_the_plugin_in_either_scope_and_never_touches_clau
         home.join(".config/opencode/plugins/redacted.ts"),
         cwd.join(".opencode/plugins/redacted.ts"),
     ] {
-        assert_eq!(
-            fs::read_to_string(&plugin).unwrap(),
-            opencode::PLUGIN_SOURCE,
+        let written = fs::read_to_string(&plugin).unwrap();
+        assert!(
+            written.starts_with(opencode::PLUGIN_MARKER),
             "{}",
             plugin.display()
         );
     }
     assert!(!home.join(".claude").exists() && !cwd.join(".claude").exists());
+}
+
+#[test]
+fn install_for_opencode_pins_this_binary_so_a_writable_path_directory_cannot_swap_the_scrubber() {
+    let dir = fresh_temp_dir("install-opencode-pinned");
+    let (home, cwd) = (dir.join("home"), dir.join("proj"));
+    install(Format::Opencode, false, &cwd, &home).unwrap();
+    let written = fs::read_to_string(home.join(".config/opencode/plugins/redacted.ts")).unwrap();
+    let pinned = serde_json::Value::from(this_executable_path().unwrap()).to_string();
+    assert!(
+        written.contains(&format!("process.env.REDACTED_BIN || {pinned}")),
+        "REDACTED_BIN still overrides the pinned path:\n{written}"
+    );
+    assert!(!written.contains(r#"|| "redacted""#), "{written}");
 }
