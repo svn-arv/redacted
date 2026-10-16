@@ -672,15 +672,26 @@ fn hook_mode_withholds_even_clean_output_when_the_config_does_not_parse_and_says
     // Defaults would drop the learned secrets without a word; withholding makes the user fix the file.
     let (dir, config) = sandbox_with_malformed_global_config("hook-bad-config");
     let payload = r#"{"tool_name":"Read","tool_response":"clean"}"#;
+    // A serde message quotes the offending value, which may be a secret pasted in by mistake.
+    fs::write(&config, "whitelist: quoted-config-value\n").unwrap();
     let output = run_redacted(&dir, &["scrub"], payload);
     assert!(output.status.success(), "hook mode never fails the hook");
     let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let notice = reason(&response);
-    assert!(
-        notice.starts_with(&format!("[redacted] {}: ", config.display())),
-        "{notice}"
+    let fixed_line = format!(
+        "[redacted] config file does not parse: {}; run redacted verify\n",
+        config.display()
     );
-    assert!(notice.contains("line"), "the serde message: {notice}");
+    assert!(notice.starts_with(&fixed_line), "{notice}");
+    assert!(
+        !stdout(&output).contains("quoted-config-value"),
+        "the model must not read the file's text: {notice}"
+    );
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        err.starts_with(&format!("{}: ", config.display())) && err.contains("quoted-config-value"),
+        "the full error goes to stderr for the user: {err}"
+    );
     assert!(notice.contains("tool output withheld"), "{notice}");
     let updated = response["hookSpecificOutput"]["updatedToolOutput"].to_string();
     assert!(!updated.contains("clean"), "{updated}");
