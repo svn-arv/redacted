@@ -197,9 +197,12 @@ struct Outcome {
 }
 
 /// Host files rotate across rows, so every corpus file is used and runs repeat exactly.
-fn run_matrix(scrubber: &Scrubber, corpus: &[(String, String)]) -> Vec<Outcome> {
+/// `opt_in` picks the PII rows or the secret rows, never both, so secret totals keep their meaning.
+fn run_matrix(scrubber: &Scrubber, corpus: &[(String, String)], opt_in: bool) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
-    for (i, case) in builtin_pattern_cases().iter().enumerate() {
+    let cases = builtin_pattern_cases();
+    let selected = cases.iter().filter(|case| case.opt_in == opt_in);
+    for (i, case) in selected.enumerate() {
         for (j, placement) in PLACEMENTS.iter().enumerate() {
             let host = &corpus[(i + j) % corpus.len()].1;
             outcomes.push(Outcome {
@@ -230,6 +233,7 @@ fn header(seed: u64) -> String {
          ## What is measured and how\n\n\
          - The scrub engine (`Scrubber`) runs in process, not through the hook binary.\n\
          - Two configurations: default (vendor signatures, heuristic off) and heuristic on. No learned secrets in either.\n\
+         - The PII rows (`email`, `phone`) are measured in a third configuration with both `pii` toggles on, and are left out of the secret totals.\n\
          - Each built-in pattern gets one fake value per placement, generated at run time by `src/fake_secrets.rs`. Keyed patterns are planted with their key, since the key is part of the match.\n\
          - Each value is planted mid-file in a `corpus/clean/*.txt` file. Files rotate across rows.\n\
          - Caught means at least one new redaction and no 8-character run of the value left outside a redaction marker.\n\
@@ -238,10 +242,10 @@ fn header(seed: u64) -> String {
     )
 }
 
-/// Both matrices list the same rows in the same order, so zipping pairs each row's two outcomes.
-fn misses_section(default: &[Outcome], heuristic: &[Outcome]) -> String {
+/// Both secret matrices list the same rows in the same order, so zipping pairs each row's two outcomes.
+fn misses_section(default: &[Outcome], heuristic: &[Outcome], pii: &[Outcome]) -> String {
     let mut out = String::from(
-        "## Misses\n\n| Placement | Patterns missed | Default | Heuristic on |\n| --- | --- | --- | --- |\n",
+        "## Misses\n\n| Placement | Patterns missed | Default | Heuristic on | PII on |\n| --- | --- | --- | --- | --- |\n",
     );
     for placement in PLACEMENTS.iter().filter(|p| p.group != Group::ExpectedMiss) {
         let in_placement = |o: &&Outcome| o.placement.name == placement.name;
@@ -252,17 +256,22 @@ fn misses_section(default: &[Outcome], heuristic: &[Outcome]) -> String {
                 .filter(|o| !o.caught)
                 .count()
         };
-        let union: Vec<String> = default
+        let secret_misses = default
             .iter()
             .zip(heuristic)
             .filter(|(d, h)| in_placement(d) && !(d.caught && h.caught))
-            .map(|(d, _)| format!("`{}`", d.pattern))
-            .collect();
+            .map(|(d, _)| format!("`{}`", d.pattern));
+        let pii_misses = pii
+            .iter()
+            .filter(in_placement)
+            .filter(|o| !o.caught)
+            .map(|o| format!("`{}` (PII on)", o.pattern));
+        let union: Vec<String> = secret_misses.chain(pii_misses).collect();
         if !union.is_empty() {
-            let (d, h) = (missed(default), missed(heuristic));
+            let (d, h, p) = (missed(default), missed(heuristic), missed(pii));
             writeln!(
                 out,
-                "| {} | {} | {d} | {h} |",
+                "| {} | {} | {d} | {h} | {p} |",
                 placement.name,
                 union.join(", ")
             )
@@ -291,6 +300,39 @@ fn placement_section(default: &[Outcome], heuristic: &[Outcome]) -> String {
         o.placement.group == Group::Plain
     });
     row("all placements", "all", &|_| true);
+    out + "\n"
+}
+
+/// PII rows run with both toggles on, apart from the secret tables.
+fn pii_section(pii: &[Outcome]) -> String {
+    let mut out = String::from(
+        "## Opt-in PII rows (both toggles on)\n\n| Placement | Group | PII on |\n| --- | --- | --- |\n",
+    );
+    let mut row = |label: &str, group: &str, keep: &dyn Fn(&Outcome) -> bool| {
+        let rate = recall(pii.iter().filter(|o| keep(o)));
+        writeln!(out, "| {label} | {group} | {rate} |").unwrap();
+    };
+    for placement in PLACEMENTS {
+        row(placement.name, placement.group.label(), &|o| {
+            o.placement.name == placement.name
+        });
+    }
+    row("all plain placements", "plain", &|o| {
+        o.placement.group == Group::Plain
+    });
+    row("all placements", "all", &|_| true);
+    out.push_str(
+        "\nExcludes the expected-miss placements (base64, line-wrapped).\n\n| Pattern | PII on |\n| --- | --- |\n",
+    );
+    for case in builtin_pattern_cases().iter().filter(|case| case.opt_in) {
+        writeln!(
+            out,
+            "| `{}` | {} |",
+            case.name,
+            recall(scored_rows(pii, case.name))
+        )
+        .unwrap();
+    }
     out + "\n"
 }
 
@@ -396,14 +438,15 @@ fn detection_benchmark() {
         default_scrubber(),
         scrubber_with_heuristic(enabled_heuristic()),
     );
-    let default_outcomes = run_matrix(&default, &corpus);
-    let heuristic_outcomes = run_matrix(&heuristic, &corpus);
-    let pii_outcomes = run_matrix(&pii_scrubber(), &corpus);
+    let default_outcomes = run_matrix(&default, &corpus, false);
+    let heuristic_outcomes = run_matrix(&heuristic, &corpus, false);
+    let pii_outcomes = run_matrix(&pii_scrubber(), &corpus, true);
     let precision = precision(&default, &heuristic);
     if let Ok(path) = std::env::var("REDACTED_BENCHMARK_REPORT") {
         let report = header(seed)
-            + &misses_section(&default_outcomes, &heuristic_outcomes)
+            + &misses_section(&default_outcomes, &heuristic_outcomes, &pii_outcomes)
             + &placement_section(&default_outcomes, &heuristic_outcomes)
+            + &pii_section(&pii_outcomes)
             + &pattern_section(&default_outcomes, &heuristic_outcomes)
             + &precision_section(&precision)
             + &footer(seed);
