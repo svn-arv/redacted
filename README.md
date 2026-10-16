@@ -235,7 +235,7 @@ Two kinds of file. Each has a global copy and a project copy.
 - The project file is read from the hook payload's `cwd`. Raw-text mode has no `cwd` and reads the global files only.
 - A project file adds to the global one: lists are concatenated, `ignore_internal_tools` is on if either file sets it.
 - `override: true` in a project file drops the global file. `version`, `learned`, `heuristic` and `pii` still come from the global file.
-- A missing file is skipped. A file that does not parse withholds every hook output, with the parse error in the notice; raw-text and stream modes exit 1 with it.
+- A missing file is skipped. A file that does not parse withholds every hook output. The notice names the file; the parse error goes to stderr only, because it can quote the file. Raw-text and stream modes exit 1 with it.
 
 Full examples: [config.example.yaml](config.example.yaml), [engine.example.yml](engine.example.yml).
 
