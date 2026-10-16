@@ -46,6 +46,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
 | `src/fake_secrets.rs` | Test only (`#[cfg(test)]`): synthetic secret generators. |
+| `src/<module>/tests.rs` | Unit tests for `src/<module>.rs`, declared there as `#[cfg(test)] mod tests;` (for example `src/scrub/tests.rs`, `src/scrub/guards/tests.rs`). |
 
 Other paths:
 
@@ -191,10 +192,10 @@ A hit prints one line:
 
 | Layer | Where | What it pins |
 | --- | --- | --- |
-| Unit | `#[cfg(test)] mod tests` in each file | one case per built-in pattern (`builtin_pattern_cases`), learned matching, shape derivation, config merge, settings round trip, hook envelope bytes, fail closed |
+| Unit | `src/<module>/tests.rs`, a sibling of each implementation file | one case per built-in pattern (`builtin_pattern_cases`), learned matching, shape derivation, config merge, settings round trip, hook envelope bytes, fail closed |
 | CLI | `tests/cli.rs` | the binary end to end: raw mode, hook mode, stats, verify, init without a terminal, uninstall, pre-v2 notice, empty `HOME` |
 | Golden | `tests/golden.rs`, `tests/fixtures/` | raw-mode stdout and stderr byte for byte against goldens recorded from the Go 0.7 binary |
-| Corpus | `corpus/clean/*.txt`, tests in `src/scrub.rs` | precision: no redaction in clean files; recall: every `builtin_pattern_cases` secret and learned secret is caught when planted in each file |
+| Corpus | `corpus/clean/*.txt`, tests in `src/scrub/tests.rs` | precision: no redaction in clean files; recall: every `builtin_pattern_cases` secret and learned secret is caught when planted in each file |
 | Benchmark | `src/scrub/benchmark.rs`, `docs/BENCHMARK.md` | default config: 100% recall on plain placements and no redaction in clean files; the page is regenerated with `REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark` |
 | Migration | `scripts/migration-check.sh` | fresh install, v1 upgrade (notice once per session), v2 config |
 

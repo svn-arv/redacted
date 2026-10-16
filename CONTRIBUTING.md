@@ -33,7 +33,7 @@ Built-in patterns live in `src/engine.yml`, not in Rust.
    - `includes_key: true` when the match includes the key, so the output keeps `KEY=`.
    - Order matters: specific patterns before catch-alls.
 2. Add a generator to `src/fake_secrets.rs` when the secret needs one (`fake_secrets` is test-only).
-3. Add a case to `builtin_pattern_cases` in `src/scrub.rs`. `every_builtin_pattern_has_a_test_case` fails until you do. The case gives the input, the exact expected output and the secret that must not survive.
+3. Add a case to `builtin_pattern_cases` in `src/scrub/tests.rs`. `every_builtin_pattern_has_a_test_case` fails until you do. The case gives the input, the exact expected output and the secret that must not survive.
 4. Run `cargo test`:
    - recall: the new secret is caught when planted in every `corpus/clean/*.txt` file;
    - precision: no clean corpus file gets a redaction.
