@@ -60,7 +60,7 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     if pairs.is_empty() {
         return Ok(());
     }
-    let known = config::load(Some(home), None).learned;
+    let known = config::load(Some(home), None)?.learned;
     let chosen = pick_secrets_to_learn(&pairs, &known)?;
     let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
@@ -136,7 +136,7 @@ fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
     println!("Binary: {bin} scrub");
     // Judged on the written global config alone (no cwd), so a re-run with no .env
     // does not warn a user who has entries.
-    if config::is_vendor_only(&config::load(Some(home), None)) {
+    if config::is_vendor_only(&config::load(Some(home), None)?) {
         println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
     Ok(())

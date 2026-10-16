@@ -692,7 +692,10 @@ fn raw_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
     let output = run_redacted(&dir, &["scrub"], "plain text\n");
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty(), "nothing unscrubbed reaches stdout");
+    assert!(
+        output.stdout.is_empty(),
+        "nothing unscrubbed reaches stdout"
+    );
     assert!(
         err.starts_with(&format!("scrub: {}: ", config.display())),
         "{err}"
@@ -706,7 +709,10 @@ fn stream_mode_exits_1_with_the_parse_error_when_the_config_does_not_parse() {
     let output = run_redacted(&dir, &["scrub", "--stream"], "plain text\n");
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty(), "nothing unscrubbed reaches stdout");
+    assert!(
+        output.stdout.is_empty(),
+        "nothing unscrubbed reaches stdout"
+    );
     assert!(
         err.starts_with(&format!("scrub: {}: ", config.display())),
         "{err}"
@@ -722,9 +728,6 @@ fn verify_fails_config_files_with_the_parse_error_and_still_runs_the_other_check
     assert_eq!(output.status.code(), Some(1));
     let fail_line = format!("[FAIL] config files - {}: ", config.display());
     assert!(out.contains(&fail_line), "missing {fail_line:?} in:\n{out}");
-    assert!(
-        out.contains("other checks use built-in defaults"),
-        "{out}"
-    );
+    assert!(out.contains("other checks use built-in defaults"), "{out}");
     assert!(out.contains("[PASS] patterns load"), "{out}");
 }

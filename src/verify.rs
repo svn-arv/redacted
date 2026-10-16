@@ -53,11 +53,23 @@ pub fn run() -> Result<(), String> {
     let home_dir = home_dir.as_deref();
     let cwd = std::env::current_dir().ok();
     let cwd = cwd.as_deref();
-    let config = config::load(home_dir, cwd);
-    let engine_config = config::load_engine(home_dir, cwd);
+    let loaded = config::load(home_dir, cwd)
+        .and_then(|config| Ok((config, config::load_engine(home_dir, cwd)?)));
+    // A file that does not parse fails its own check; the rest still report, on defaults.
+    let (config, engine_config, config_files) = match loaded {
+        Ok((config, engine_config)) => {
+            let check = check_config_files(home_dir, cwd, &config, &engine_config);
+            (config, engine_config, check)
+        }
+        Err(e) => {
+            let detail = format!("{e}; other checks use built-in defaults");
+            let check = Check::new("config files", CheckStatus::Fail, detail);
+            (Config::default(), EngineConfig::default(), check)
+        }
+    };
     let mut checks = vec![check_binary()];
     checks.extend(check_hooks(home_dir, cwd));
-    checks.push(check_config_files(home_dir, cwd, &config, &engine_config));
+    checks.push(config_files);
     checks.push(check_patterns(&config, &engine_config));
     checks.push(check_test_scrub());
     checks.extend(check_learned(cwd, &config));

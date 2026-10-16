@@ -12,7 +12,7 @@ use std::process::{Command, ExitCode};
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
 
-use crate::config;
+use crate::config::{self, Config, EngineConfig};
 use crate::scrub::Scrubber;
 use crate::{hook, init, stats, stream, verify};
 
@@ -117,38 +117,62 @@ fn run_scrub() -> Result<(), String> {
     let home_dir = config::home_dir();
     // as_deref() turns `Option<PathBuf>` into the borrowed `Option<&Path>`.
     let home_dir = home_dir.as_deref();
-    let config = config::load(home_dir, cwd);
-    let scrubber = Scrubber::new(&config, &config::load_engine(home_dir, cwd));
+    let loaded = config::load(home_dir, cwd)
+        .and_then(|config| Ok((config, config::load_engine(home_dir, cwd)?)));
 
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !is_hook_payload {
-        let scrubber = scrubber.map_err(|e| format!("scrub: {e}"))?;
+        let scrubber = loaded
+            .and_then(|(config, engine_config)| Scrubber::new(&config, &engine_config))
+            .map_err(|e| format!("scrub: {e}"))?;
         scrub_raw_text(&stdin_bytes, &scrubber);
         return Ok(());
     }
+    respond_to_hook(&stdin_bytes, &payload, home_dir, loaded);
+    Ok(())
+}
+
+/// Writes the hook's answer to stdout: nothing for clean output, else the block
+/// or withheld envelope.
+fn respond_to_hook(
+    stdin_bytes: &[u8],
+    payload: &Value,
+    home_dir: Option<&Path>,
+    loaded: Result<(Config, EngineConfig), String>,
+) {
+    // A config that does not parse withholds before it can skip a tool or add the v1 notice.
+    let (config, engine_config) = match loaded {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            let withheld = hook::withheld_output(stdin_bytes);
+            let out = hook::prepend_reason(&withheld, &format!("[redacted] {e}"));
+            let _ = io::stdout().write_all(&out);
+            return;
+        }
+    };
+    let scrubber = Scrubber::new(&config, &engine_config);
 
     // Only a well-formed non-Bash name skips; anything else goes on to fail closed.
     let is_named_non_bash_tool =
         matches!(payload.get("tool_name"), Some(Value::String(tool)) if tool != "Bash");
     if config.ignore_internal_tools && is_named_non_bash_tool {
-        return Ok(());
+        return;
     }
     let (mut out, counts_by_pattern) = match scrubber {
-        Ok(scrubber) => hook::scrub_payload_or_withhold(&stdin_bytes, &|text| scrubber.scrub(text)),
-        Err(_) => (hook::withheld_output(&stdin_bytes), BTreeMap::new()),
+        Ok(scrubber) => hook::scrub_payload_or_withhold(stdin_bytes, &|text| scrubber.scrub(text)),
+        Err(_) => (hook::withheld_output(stdin_bytes), BTreeMap::new()),
     };
-    record_stats(&payload_string(&payload, "tool_name"), &counts_by_pattern);
+    record_stats(&payload_string(payload, "tool_name"), &counts_by_pattern);
     // A global config without `version` is a Go 0.7 install that has no learned secrets.
     let is_pre_v2_config = config.version == 0
         && home_dir.is_some_and(|home| config::global_config_path(home).exists());
     if is_pre_v2_config
         && !out.is_empty()
-        && mark_session_notified(&payload_string(&payload, "session_id"))
+        && mark_session_notified(&payload_string(payload, "session_id"))
     {
         out = hook::prepend_reason(&out, PRE_V2_NOTICE);
     }
     let _ = io::stdout().write_all(&out);
-    Ok(())
 }
 
 /// The string at `key`, or "" when it is absent or not a string.
@@ -268,12 +292,11 @@ fn edit_global_config() -> Result<(), String> {
         .map_err(|e| format!("config: restore mode 0600 on {shown}: {e}"))?;
 
     // The hook skips a file that does not parse, dropping learned secrets without a word.
-    let text = fs::read_to_string(&path).map_err(|e| format!("config: {shown}: {e}"))?;
-    serde_yaml::from_str::<config::Config>(&text).map_err(|e| format!("config: {shown}: {e}"))?;
-
     let cwd = std::env::current_dir().ok();
-    let config = config::load(Some(&home_dir), cwd.as_deref());
-    let engine_config = config::load_engine(Some(&home_dir), cwd.as_deref());
+    let config =
+        config::load(Some(&home_dir), cwd.as_deref()).map_err(|e| format!("config: {e}"))?;
+    let engine_config =
+        config::load_engine(Some(&home_dir), cwd.as_deref()).map_err(|e| format!("config: {e}"))?;
     verify::compile_patterns(&config, &engine_config).map_err(|e| format!("patterns load: {e}"))?;
     println!("patterns load: PASS");
     Ok(())

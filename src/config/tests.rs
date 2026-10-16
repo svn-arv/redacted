@@ -21,7 +21,12 @@ fn missing_files_give_defaults() {
             && config.allowed_keys.is_empty()
             && !config.ignore_internal_tools
     );
-    assert!(load_engine(Some(&home), Some(&cwd)).unwrap().patterns.is_empty());
+    assert!(
+        load_engine(Some(&home), Some(&cwd))
+            .unwrap()
+            .patterns
+            .is_empty()
+    );
 }
 
 #[test]
@@ -281,6 +286,8 @@ fn engine_lists_concatenate_and_project_override_drops_global() {
         "override: true\npatterns: [{name: p, regex: 'p_x'}]\n",
     )
     .unwrap();
-    assert_eq!(load_engine(Some(&home), Some(&cwd)).unwrap().patterns.len(), 1);
+    assert_eq!(
+        load_engine(Some(&home), Some(&cwd)).unwrap().patterns.len(),
+        1
+    );
 }
-
