@@ -14,8 +14,9 @@ coverage.*
 go.work
 go.work.sum
 
-# GoReleaser
+# GoReleaser (cargo-zigbuild leaves .zig-cache in the checkout; cargo publish refuses a dirty tree)
 dist/
+.zig-cache/
 
 # IDE
 .idea/
