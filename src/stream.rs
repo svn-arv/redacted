@@ -17,6 +17,8 @@ const MAX_PEM_BLOCK_LINES: usize = 64;
 /// Builds the scrubber once, then streams stdin to stdout. No stats and no
 /// stderr count: a stream has no end at which to report them.
 pub fn run(cwd: Option<&Path>) -> Result<(), String> {
+    // Silent: a panic message can carry part of the raw line, and stderr is readable under Monitor.
+    panic::set_hook(Box::new(|_| {}));
     let home_dir = config::home_dir();
     let home_dir = home_dir.as_deref();
     let config = config::load(home_dir, cwd);
