@@ -300,6 +300,21 @@ mod tests {
         Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap()
     }
 
+    /// Both PII toggles on, so the opt-in rows run next to the vendor patterns.
+    pub(super) fn pii_scrubber() -> Scrubber {
+        Scrubber::new(&pii_config(), &EngineConfig::default()).unwrap()
+    }
+
+    fn pii_config() -> Config {
+        Config {
+            pii: crate::config::PiiConfig {
+                email: true,
+                phone: true,
+            },
+            ..Default::default()
+        }
+    }
+
     pub(super) fn value_only_marker(name: &str, secret: &str) -> String {
         format!(
             "[REDACTED:{name} ...{}]",
@@ -377,6 +392,8 @@ mod tests {
                 "credentialed_url",
                 fake_secrets::database_url("postgis", "db.example.com"),
             ),
+            ("email", fake_secrets::email()),
+            ("phone", fake_secrets::phone()),
         ]
     }
 
@@ -455,7 +472,7 @@ mod tests {
 
     #[test]
     fn builtin_patterns_redact_with_label_and_hint() {
-        let scrubber = default_scrubber();
+        let scrubber = pii_scrubber();
         // Destructuring in the loop header names the fields; `..` skips the rest.
         for PatternCase {
             name,
@@ -558,6 +575,84 @@ mod tests {
         ] {
             assert_eq!(scrubber.scrub(input).text, input, "{input}");
         }
+    }
+
+    /// The fiction-range numbers from the issue, one per supported shape.
+    const PHONE_SHAPES: [&str; 8] = [
+        "+6281234567890",
+        "+62 812-3456-7890",
+        "+1 415 555 0123",
+        "+44 20 7946 0958",
+        "(415) 555-0123",
+        "415-555-0123",
+        "415.555.0123",
+        "0812-3456-7890",
+    ];
+
+    #[test]
+    fn pii_on_redacts_a_phone_number_in_every_supported_shape_and_placement() {
+        let scrubber = pii_scrubber();
+        for phone in PHONE_SHAPES.into_iter().chain(["0812 3456 7890"]) {
+            let marker = value_only_marker("phone", phone);
+            let line = format!("Call {phone} today");
+            assert_eq!(scrubber.scrub(phone).text, marker, "{phone}");
+            assert_eq!(scrubber.scrub(&line).text, format!("Call {marker} today"));
+        }
+        let json = scrubber.scrub(r#"{"to": "+14155550123"}"#);
+        assert_eq!(json.text, r#"{"to": "[REDACTED:phone ...0123]"}"#);
+        // Only the number goes; the scheme tells the reader what was there.
+        let link = scrubber.scrub("tel:+14155550123");
+        assert_eq!(link.text, "tel:[REDACTED:phone ...0123]");
+    }
+
+    #[test]
+    fn pii_on_redacts_an_email_wherever_tool_output_puts_it() {
+        let scrubber = pii_scrubber();
+        let address = fake_secrets::email();
+        for placement in [
+            format!("SUPPORT_CONTACT={address}"),
+            format!(r#"{{"customer": {{"email": "{address}"}}}}"#),
+            format!("12:00:01 INFO mail queued for {address}, retry in 5s"),
+            format!("Write to [{address}](mailto:{address})."),
+        ] {
+            let result = scrubber.scrub(&placement);
+            assert!(!result.text.contains(&address), "{}", result.text);
+            assert!(
+                result.counts_by_pattern.contains_key("email"),
+                "{placement}"
+            );
+        }
+    }
+
+    #[test]
+    fn pii_is_off_by_default_so_contacts_pass_through_untouched() {
+        let scrubber = default_scrubber();
+        let address = fake_secrets::email();
+        for input in PHONE_SHAPES.into_iter().chain([address.as_str()]) {
+            assert_eq!(scrubber.scrub(input).text, input);
+        }
+    }
+
+    #[test]
+    fn whitelist_turns_off_a_pii_row_by_name() {
+        let cfg = Config {
+            disabled_patterns: vec!["email".into()],
+            ..pii_config()
+        };
+        let address = fake_secrets::email();
+        let scrubber = Scrubber::new(&cfg, &EngineConfig::default()).unwrap();
+        assert_eq!(scrubber.scrub(&address).text, address);
+    }
+
+    #[test]
+    fn an_own_address_in_allow_values_stays_visible() {
+        let address = fake_secrets::email();
+        let eng = EngineConfig {
+            allow_values: vec![format!("^{}$", regex::escape(&address))],
+            ..Default::default()
+        };
+        let scrubber = Scrubber::new(&pii_config(), &eng).unwrap();
+        assert_eq!(scrubber.scrub(&address).text, address);
     }
 
     #[test]
@@ -730,7 +825,7 @@ mod tests {
 
     #[test]
     fn every_builtin_secret_planted_in_the_corpus_is_redacted() {
-        let scrubber = default_scrubber();
+        let scrubber = pii_scrubber();
         for (name, data) in clean_corpus() {
             for case in builtin_pattern_cases() {
                 let planted = format!("{data}\n{}\n", case.input);
@@ -771,6 +866,19 @@ mod tests {
     #[test]
     fn corpus_precision_holds_with_learned_secrets_loaded() {
         let (scrubber, _, _) = learned_corpus_scrubber();
+        for (name, data) in clean_corpus() {
+            let result = scrubber.scrub(&data);
+            assert!(
+                !result.has_redactions(),
+                "false positive in {name}: {:?}",
+                result.counts_by_pattern
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_precision_holds_with_pii_on() {
+        let scrubber = pii_scrubber();
         for (name, data) in clean_corpus() {
             let result = scrubber.scrub(&data);
             assert!(

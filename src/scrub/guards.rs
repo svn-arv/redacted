@@ -306,7 +306,12 @@ fn looks_like_code_expression(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::scrub::tests::{default_scrubber, enabled_heuristic, scrubber_with_heuristic};
+    use crate::config::{Config, EngineConfig};
+    use crate::fake_secrets;
+    use crate::scrub::Scrubber;
+    use crate::scrub::tests::{
+        default_scrubber, enabled_heuristic, pii_scrubber, scrubber_with_heuristic,
+    };
 
     #[test]
     fn code_identifiers_after_a_secret_key_are_not_redacted() {
@@ -341,5 +346,57 @@ mod tests {
                 .scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
                 .has_redactions()
         );
+    }
+
+    #[test]
+    fn pii_leaves_numbers_that_only_look_like_phones_and_unowned_emails_alone() {
+        // Timestamps, IPs, versions and ids fill tool output; redacting them would bury the signal.
+        let scrubber = pii_scrubber();
+        for input in [
+            "2026-10-16T12:34:56+07:00",
+            "2026-10-16 12:34:56",
+            "192.168.100.200",
+            "10.0.0.1:3000",
+            "v2.1.292",
+            "1.2.3",
+            "6f1c2b7e-3d4a-4e8b-9c1d-2a3b4c5d6e7f",
+            "3f9a1c2b7e4d5a6b8c9d0e1f2a3b4c5d6e7f8a9b",
+            "1791860933376006001",
+            "1,234,567.89",
+            "@@ -120,7 +120,8 @@",
+            "978-3-16-148410-0",
+            "4111 1111 1111 1111",
+            "someone@example.com",
+            "admin@mail.example.org",
+            "qa@app.test",
+            "noreply@github.com",
+            "no-reply@accounts.redacted.my.id",
+            "12345678+user@users.noreply.github.com",
+            "https://teams.microsoft.com/l/channel/19%3Aabc@thread.tacv2/General",
+            "postgres://user:pass@db.internal.corp/app",
+        ] {
+            assert_eq!(scrubber.scrub(input).text, input, "{input}");
+        }
+    }
+
+    #[test]
+    fn a_credentialed_url_keeps_its_own_label_and_never_gains_an_email_marker() {
+        // userinfo is user:password@host, so the email row must not split the URL in two.
+        let url = fake_secrets::database_url("postgis", "db.internal.corp");
+        let result = pii_scrubber().scrub(&url);
+        assert_eq!(result.count, 1);
+        assert_eq!(result.counts_by_pattern.get("credentialed_url"), Some(&1));
+
+        // With the URL rows off, the email row sees the raw URL first and must still skip it.
+        let cfg = Config {
+            disabled_patterns: vec!["database_url".into(), "credentialed_url".into()],
+            pii: crate::config::PiiConfig {
+                email: true,
+                phone: true,
+            },
+            ..Default::default()
+        };
+        let scrubber = Scrubber::new(&cfg, &EngineConfig::default()).unwrap();
+        assert_eq!(scrubber.scrub(&url).text, url);
     }
 }
