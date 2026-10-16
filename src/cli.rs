@@ -238,6 +238,10 @@ fn edit_global_config() -> Result<(), String> {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .map_err(|e| format!("config: restore mode 0600 on {shown}: {e}"))?;
 
+    // The hook skips a file that does not parse, dropping learned secrets without a word.
+    let text = fs::read_to_string(&path).map_err(|e| format!("config: {shown}: {e}"))?;
+    serde_yaml::from_str::<config::Config>(&text).map_err(|e| format!("config: {shown}: {e}"))?;
+
     let cwd = std::env::current_dir().ok();
     let config = config::load(Some(&home_dir), cwd.as_deref());
     let engine_config = config::load_engine(Some(&home_dir), cwd.as_deref());
