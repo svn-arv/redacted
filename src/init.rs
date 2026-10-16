@@ -92,10 +92,14 @@ fn pick_secrets_to_learn(pairs: &[(String, String)]) -> Result<Vec<LearnedSecret
     let rows: Vec<String> = pairs
         .iter()
         .zip(&learn_results)
-        .map(|((key, value), learned)| picker_row(key, value, learned))
+        .map(|((key, value), learned)| picker_row(key, value, learned, &[]))
         .collect();
     let defaults: Vec<usize> = (0..rows.len())
-        .filter(|&i| learn_results[i].is_ok() && should_preselect(&pairs[i].1))
+        .filter(|&i| {
+            learn_results[i]
+                .as_ref()
+                .is_ok_and(|entry| should_preselect(entry, &pairs[i].1, &[]))
+        })
         .collect();
     let picked = MultiSelect::new("Secrets to learn:", rows)
         .with_default(&defaults)
@@ -276,7 +280,7 @@ pub fn learn(key: &str, value: &str) -> Result<LearnedSecret, &'static str> {
 
 /// Ticked by default only with 2+ of {lower, upper, digit, other}: `development`
 /// or `3000` are config, not secrets, and would redact everywhere.
-fn should_preselect(value: &str) -> bool {
+fn should_preselect(_entry: &LearnedSecret, value: &str, _known: &[LearnedSecret]) -> bool {
     let classes = [
         value.chars().any(|c| c.is_lowercase()),
         value.chars().any(|c| c.is_uppercase()),
@@ -286,7 +290,12 @@ fn should_preselect(value: &str) -> bool {
     classes.iter().filter(|&&has| has).count() >= 2
 }
 
-fn picker_row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String {
+fn picker_row(
+    key: &str,
+    value: &str,
+    learned: &Result<LearnedSecret, &str>,
+    _known: &[LearnedSecret],
+) -> String {
     let entry = match learned {
         Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),

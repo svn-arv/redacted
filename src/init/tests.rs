@@ -178,7 +178,7 @@ fn learn_rejects_values_under_eight_characters() {
         assert_eq!(learn("K", v).unwrap_err(), "too short", "{v}");
     }
     assert!(learn("K", "Pw9xQz7k").is_ok());
-    assert!(picker_row("PORT", "3000", &learn("PORT", "3000")).contains("too short"));
+    assert!(picker_row("PORT", "3000", &learn("PORT", "3000"), &[]).contains("too short"));
 }
 
 #[test]
@@ -193,7 +193,11 @@ fn only_values_with_two_character_classes_are_preselected() {
         ("P@ssw0rd2024", true),
         (hex, true),
     ] {
-        assert_eq!(should_preselect(v), want, "{v}");
+        assert_eq!(
+            should_preselect(&learn("K", v).unwrap(), v, &[]),
+            want,
+            "{v}"
+        );
     }
 }
 
@@ -208,6 +212,7 @@ fn learn_rejects_a_value_with_spaces() {
         "GREETING",
         "hello there world",
         &learn("GREETING", "hello there world"),
+        &[],
     );
     assert!(
         row.contains("cannot match (contains spaces)") && !row.contains("hello"),
@@ -215,10 +220,58 @@ fn learn_rejects_a_value_with_spaces() {
     );
 }
 
+// A value with one character class: ticked only because the config knows it.
+const WEAK_VALUE: &str = "developmentdb";
+
+#[test]
+fn a_value_already_in_the_config_is_ticked_and_says_learned() {
+    let entry = learn("DB_PASSWORD", WEAK_VALUE).unwrap();
+    let known = [entry.clone()];
+    let row = picker_row("DB_PASSWORD", WEAK_VALUE, &Ok(entry.clone()), &known);
+    assert_eq!(row, "DB_PASSWORD  learned");
+    assert!(should_preselect(&entry, WEAK_VALUE, &known));
+}
+
+#[test]
+fn the_same_value_under_another_key_names_the_entry_that_already_redacts_it() {
+    let known = [learn("DB_PASSWORD", WEAK_VALUE).unwrap()];
+    let entry = learn("REDIS_PASSWORD", WEAK_VALUE).unwrap();
+    let row = picker_row("REDIS_PASSWORD", WEAK_VALUE, &Ok(entry.clone()), &known);
+    assert_eq!(row, "REDIS_PASSWORD  learned as db_password");
+    assert!(should_preselect(&entry, WEAK_VALUE, &known));
+}
+
+#[test]
+fn a_changed_value_shows_the_suffixed_name_it_will_be_written_under() {
+    let known = [learn("DB_PASSWORD", "old-Value-123").unwrap()];
+    let entry = learn("DB_PASSWORD", WEAK_VALUE).unwrap();
+    let row = picker_row("DB_PASSWORD", WEAK_VALUE, &Ok(entry.clone()), &known);
+    assert_eq!(row, "DB_PASSWORD  new value, kept as db_password_2");
+    assert!(should_preselect(&entry, WEAK_VALUE, &known));
+    // The label shown is the label written.
+    let existing = format!(
+        "learned:\n- {{name: db_password, sha256: {}, len: 13}}\n",
+        known[0].sha256
+    );
+    let names = learned_names_after_merge(&existing, &[entry]);
+    assert_eq!(names, ["db_password", "db_password_2"]);
+}
+
+#[test]
+fn without_a_config_rows_and_ticks_are_as_before() {
+    let entry = learn("DB_PASSWORD", WEAK_VALUE).unwrap();
+    let row = picker_row("DB_PASSWORD", WEAK_VALUE, &Ok(entry.clone()), &[]);
+    assert!(
+        !row.contains("learned") && row.contains("exact only"),
+        "{row}"
+    );
+    assert!(!should_preselect(&entry, WEAK_VALUE, &[]));
+}
+
 #[test]
 fn picker_row_shows_key_hint_and_shape_never_the_value() {
     let value = format!("sk_live_{}", "Ab1".repeat(8));
-    let row = picker_row("STRIPE_KEY", &value, &learn("STRIPE_KEY", &value));
+    let row = picker_row("STRIPE_KEY", &value, &learn("STRIPE_KEY", &value), &[]);
     assert!(
         row.contains("STRIPE_KEY") && row.contains("...",) && row.contains("Ab1"),
         "{row}"
@@ -227,7 +280,7 @@ fn picker_row_shows_key_hint_and_shape_never_the_value() {
         row.contains(r"\bsk_live_") && !row.contains(&value),
         "{row}"
     );
-    let short = picker_row("PIN", "Pw9xQz7k", &learn("PIN", "Pw9xQz7k"));
+    let short = picker_row("PIN", "Pw9xQz7k", &learn("PIN", "Pw9xQz7k"), &[]);
     assert!(
         short.contains("exact only") && !short.contains("Qz7k"),
         "{short}"
