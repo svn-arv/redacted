@@ -60,7 +60,8 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     if pairs.is_empty() {
         return Ok(());
     }
-    let chosen = pick_secrets_to_learn(&pairs)?;
+    let known = config::load(Some(home), None).learned;
+    let chosen = pick_secrets_to_learn(&pairs, &known)?;
     let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
         Ok(s) => s,
@@ -86,16 +87,24 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The secrets the user ticks among `pairs`, with likely secrets ticked up front.
-fn pick_secrets_to_learn(pairs: &[(String, String)]) -> Result<Vec<LearnedSecret>, String> {
+/// The secrets the user ticks among `pairs`, with likely and `known` secrets
+/// ticked up front.
+fn pick_secrets_to_learn(
+    pairs: &[(String, String)],
+    known: &[LearnedSecret],
+) -> Result<Vec<LearnedSecret>, String> {
     let learn_results: Vec<_> = pairs.iter().map(|(key, value)| learn(key, value)).collect();
     let rows: Vec<String> = pairs
         .iter()
         .zip(&learn_results)
-        .map(|((key, value), learned)| picker_row(key, value, learned))
+        .map(|((key, value), learned)| picker_row(key, value, learned, known))
         .collect();
     let defaults: Vec<usize> = (0..rows.len())
-        .filter(|&i| learn_results[i].is_ok() && should_preselect(&pairs[i].1))
+        .filter(|&i| {
+            learn_results[i]
+                .as_ref()
+                .is_ok_and(|entry| should_preselect(entry, &pairs[i].1, known))
+        })
         .collect();
     let picked = MultiSelect::new("Secrets to learn:", rows)
         .with_default(&defaults)
@@ -274,23 +283,43 @@ pub fn learn(key: &str, value: &str) -> Result<LearnedSecret, &'static str> {
     })
 }
 
-/// Ticked by default only with 2+ of {lower, upper, digit, other}: `development`
-/// or `3000` are config, not secrets, and would redact everywhere.
-fn should_preselect(value: &str) -> bool {
+/// Ticked by default when the config already holds the key or the value, else
+/// only with 2+ of {lower, upper, digit, other}: `development` or `3000` are
+/// config, not secrets, and would redact everywhere.
+fn should_preselect(entry: &LearnedSecret, value: &str, known: &[LearnedSecret]) -> bool {
+    let is_in_config = known
+        .iter()
+        .any(|learned| learned.sha256 == entry.sha256 || learned.name == entry.name);
     let classes = [
         value.chars().any(|c| c.is_lowercase()),
         value.chars().any(|c| c.is_uppercase()),
         value.chars().any(|c| c.is_ascii_digit()),
         value.chars().any(|c| !c.is_alphanumeric()),
     ];
-    classes.iter().filter(|&&has| has).count() >= 2
+    is_in_config || classes.iter().filter(|&&has| has).count() >= 2
 }
 
-fn picker_row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> String {
+fn picker_row(
+    key: &str,
+    value: &str,
+    learned: &Result<LearnedSecret, &str>,
+    known: &[LearnedSecret],
+) -> String {
     let entry = match learned {
         Ok(entry) => entry,
         Err(reason) => return format!("{key}  {reason}"),
     };
+    // Matched by hash first: the scrubber keeps one label per value, whatever its key.
+    if let Some(same_value) = known.iter().find(|learned| learned.sha256 == entry.sha256) {
+        if same_value.name == entry.name {
+            return format!("{key}  learned");
+        }
+        return format!("{key}  learned as {}", same_value.name);
+    }
+    if known.iter().any(|learned| learned.name == entry.name) {
+        let written_as = unused_name(known, &entry.name);
+        return format!("{key}  new value, kept as {written_as}");
+    }
     let hint = match learned_value_hint(value) {
         Some(hint) => format!("...{hint}"),
         None => "(short)".to_string(),
