@@ -621,6 +621,28 @@ mod tests {
     }
 
     #[test]
+    fn a_token_on_the_line_after_a_key_dump_keeps_its_own_marker() {
+        let body_lines = ["Q7xK".repeat(16), "Zp3/".repeat(16)];
+        let header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let payload = "eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        let signature = format!("{}xYz", "Ab3_".repeat(10));
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let input = format!(
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\n{}\n{header}.{payload}.{signature}\n{url_line}\n",
+            body_lines.join("\n")
+        );
+        let result = default_scrubber().scrub(&input);
+        for line in &body_lines {
+            assert!(!result.text.contains(line.as_str()), "{}", result.text);
+        }
+        assert!(result.text.contains("[REDACTED:jwt"), "{}", result.text);
+        for segment in [header, payload, signature.as_str()] {
+            assert!(!result.text.contains(segment), "{}", result.text);
+        }
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
     fn placeholder_database_urls_are_not_redacted() {
         let input = "postgres://user:password@db.example.com:5432/app";
         assert_eq!(default_scrubber().scrub(input).text, input);
