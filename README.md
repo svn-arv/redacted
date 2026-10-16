@@ -111,6 +111,8 @@ Three tiers run in this order on the same text. Each tier sees the markers the p
 
 The 0.7 keyword tier (`env_secret`, `yaml_secret`) is removed. Learned secrets replace it.
 
+Recall by placement and precision on the clean corpus: see [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
 ### Vendor signatures
 
 The `name` column is what `whitelist` takes. Keyed patterns match `KEY=value` or `KEY: value` and keep the key in the output.

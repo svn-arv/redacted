@@ -41,6 +41,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/scrub/learned.rs` | Learned tier: shape and exact-hash matching, `sha256_hex`, `learned_value_hint`. |
 | `src/scrub/guards.rs` | `should_skip_match`: allow lists and the guards that keep identifiers, code and URLs. |
 | `src/scrub/go_regex.rs` | `go_to_rust_regex`: rewrites Go RE2 syntax so patterns keep their 0.7 meaning under Rust `regex`. |
+| `src/scrub/benchmark.rs` | Test only (`#[cfg(test)]`): detection benchmark that plants each built-in pattern in 17 placements and writes `docs/BENCHMARK.md`. |
 | `src/engine.yml` | Built-in patterns and `allow_values`, compiled in with `include_str!`. |
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
@@ -194,6 +195,7 @@ A hit prints one line:
 | CLI | `tests/cli.rs` | the binary end to end: raw mode, hook mode, stats, verify, init without a terminal, uninstall, pre-v2 notice, empty `HOME` |
 | Golden | `tests/golden.rs`, `tests/fixtures/` | raw-mode stdout and stderr byte for byte against goldens recorded from the Go 0.7 binary |
 | Corpus | `corpus/clean/*.txt`, tests in `src/scrub.rs` | precision: no redaction in clean files; recall: every `builtin_pattern_cases` secret and learned secret is caught when planted in each file |
+| Benchmark | `src/scrub/benchmark.rs`, `docs/BENCHMARK.md` | default config: 100% recall on plain placements and no redaction in clean files; the page is regenerated with `REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark` |
 | Migration | `scripts/migration-check.sh` | fresh install, v1 upgrade (notice once per session), v2 config |
 
 - `src/fake_secrets.rs` builds synthetic secrets at test time, so no real-looking secret is committed.
