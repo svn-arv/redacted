@@ -18,6 +18,12 @@ CI runs these on Linux and macOS. All must pass:
 | `cargo test` | unit, CLI, golden and corpus tests |
 | `sh scripts/migration-check.sh` | fresh install, v1 upgrade, v2 config |
 
+The OpenCode plugin has a smoke test outside CI. It needs [Bun](https://bun.sh), which OpenCode runs on:
+
+```bash
+cargo build && bun plugins/opencode/smoke.mjs
+```
+
 - A behavior change starts with a test that fails for the right reason. Then change the code until it passes.
 - Never commit a real or real-looking secret. Build test secrets at runtime with `src/fake_secrets.rs`, or with a `{{kind:n}}` placeholder in a golden fixture.
 
