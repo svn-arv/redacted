@@ -718,6 +718,54 @@ mod tests {
     }
 
     #[test]
+    fn a_placeholder_login_later_in_the_output_never_unredacts_a_key() {
+        // A truncated dump has no closing quote, so the match must stop at the line end.
+        let body = "Q7xK".repeat(16);
+        let dump = format!(r#""private_key": "-----BEGIN PRIVATE KEY-----\n{body}"#);
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let result = default_scrubber().scrub(&format!("{dump}\n{url_line}\n"));
+        assert!(!result.text.contains(&body), "{}", result.text);
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
+    fn a_raw_newline_dump_under_the_key_loses_every_body_line_not_only_the_first() {
+        let body_lines = ["Q7xK".repeat(16), "Zp3/".repeat(16), "mW8+".repeat(16)];
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let input = format!(
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\n{}\n{url_line}\n",
+            body_lines.join("\n")
+        );
+        let result = default_scrubber().scrub(&input);
+        for line in &body_lines {
+            assert!(!result.text.contains(line.as_str()), "{}", result.text);
+        }
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
+    fn a_token_on_the_line_after_a_key_dump_keeps_its_own_marker() {
+        let body_lines = ["Q7xK".repeat(16), "Zp3/".repeat(16)];
+        let header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let payload = "eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        let signature = format!("{}xYz", "Ab3_".repeat(10));
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let input = format!(
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\n{}\n{header}.{payload}.{signature}\n{url_line}\n",
+            body_lines.join("\n")
+        );
+        let result = default_scrubber().scrub(&input);
+        for line in &body_lines {
+            assert!(!result.text.contains(line.as_str()), "{}", result.text);
+        }
+        assert!(result.text.contains("[REDACTED:jwt"), "{}", result.text);
+        for segment in [header, payload, signature.as_str()] {
+            assert!(!result.text.contains(segment), "{}", result.text);
+        }
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
     fn placeholder_database_urls_are_not_redacted() {
         let input = "postgres://user:password@db.example.com:5432/app";
         assert_eq!(default_scrubber().scrub(input).text, input);

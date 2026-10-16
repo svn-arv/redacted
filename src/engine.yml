@@ -116,8 +116,9 @@ patterns:
   # GCP service-account JSON: the private_key field with a \n-escaped PEM.
   # A literal multi-line PEM is caught by private_key above; this covers the
   # single-line JSON form, including dumps truncated before the END marker.
+  # Crosses a raw newline only into a whole line of base64, so no login or token is split.
   - name: gcp_sa_private_key
-    regex: '"private_key"[ \t]*:[ \t]*"-----BEGIN[^"]+'
+    regex: '(?m)"private_key"[ \t]*:[ \t]*"-----BEGIN[^"\n]+(?:\r?\n[A-Za-z0-9+/=]{16,}\r?$)*'
     includes_key: true
     prefilters: ['"private_key"']
 
