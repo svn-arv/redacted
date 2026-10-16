@@ -237,6 +237,8 @@ Two kinds of file. Each has a global copy and a project copy.
 
 Full examples: [config.example.yaml](config.example.yaml), [engine.example.yml](engine.example.yml).
 
+`redacted config` opens `~/.config/redacted/config.yaml` in `$VISUAL`, `$EDITOR` or `vi`, creating it with mode 0600 when missing. After the editor exits it runs the `patterns load` check from `verify` and exits 1 when a pattern does not compile.
+
 ### config.yaml
 
 ```yaml
