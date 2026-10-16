@@ -235,7 +235,7 @@ Two kinds of file. Each has a global copy and a project copy.
 - The project file is read from the hook payload's `cwd`. Raw-text mode has no `cwd` and reads the global files only.
 - A project file adds to the global one: lists are concatenated, `ignore_internal_tools` is on if either file sets it.
 - `override: true` in a project file drops the global file. `version`, `learned`, `heuristic` and `pii` still come from the global file.
-- A missing or malformed file is skipped.
+- A missing file is skipped. A file that does not parse withholds every hook output, with the parse error in the notice; raw-text and stream modes exit 1 with it.
 
 Full examples: [config.example.yaml](config.example.yaml), [engine.example.yml](engine.example.yml).
 
@@ -296,7 +296,7 @@ Prints one line per check and exits 1 when any check fails.
 | `binary` | Path of the running binary. |
 | `global hook`, `local hook` | FAIL when the settings file is missing or invalid JSON, has no `redacted scrub` entry, or the entry's binary is gone. When one passes, the other shows SKIP. |
 | `hook registered` | FAIL when neither file has the hook. |
-| `config files` | Which of the four files exist. |
+| `config files` | Which of the four files exist. FAIL with the parse error when one does not parse. |
 | `patterns load` | FAIL when a pattern or learned shape does not compile. |
 | `test scrub` | FAIL when the built-in patterns miss a sample database URL. |
 | `learned secrets` | Config version, number of learned entries, heuristic on or off. |
@@ -391,7 +391,6 @@ The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 re
 - Learned secrets match as whole tokens. One embedded mid-token, such as in a URL path, passes unless a vendor pattern catches it.
 - A learned shape also matches a non-secret with the same prefix and similar length. Check the shape `init` shows before confirming.
 - With the heuristic on, a high-entropy identifier that mixes case and digits (some tool or request ids) may be redacted. The 4-character hint makes these easy to spot.
-- A malformed config file is skipped as if it were absent. `verify` still lists it under `config files`.
 - Every pattern scans the full output in turn, after a substring prefilter. Multi-megabyte output adds noticeable latency per call.
 
 ## Development
