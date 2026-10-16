@@ -196,18 +196,39 @@ Off by default. With `heuristic.enabled: true` in the global config, a `KEY=valu
   - lowercase words of 12 characters or fewer, and percent-encoded text that decodes to spaces
 - A hex value of 24+ characters under a key ending in `_KEY` or `-KEY` is redacted even though hex has only 2 character classes.
 
+### PII (opt-in)
+
+Off by default. Catches customer contact data in tool output: it reduces exposure, never prevents it. Turn each type on in the global config:
+
+```yaml
+pii:
+  email: true # marker [REDACTED:email ...y.id]
+  phone: true # marker [REDACTED:phone ...0123]
+```
+
+- `email` catches `local@domain.tld` anywhere in the text.
+- `phone` catches E.164 (`+6281234567890`), `+` country code with spaced or dashed groups (`+44 20 7946 0958`), North American `(415) 555-0123` and `415-555-0123`, and Indonesian local `0812-3456-7890` or `0812 3456 7890`.
+- Not caught:
+  - documentation and bot addresses: `example.com`, `example.net`, `example.org`, the `.example`, `.test`, `.invalid` and `.localhost` TLDs, `noreply@` and `no-reply@` senders, `*.noreply.github.com`;
+  - the `user@host` part of a URL login (`scheme://user:pass@host`), which the URL patterns own;
+  - bare digit runs, and numbers glued to a word, version, IP or timestamp;
+  - dotted `415.555.0123`, which the version allow-list claims first, and `1-415-555-0123` without a `+`;
+  - names and postal addresses.
+- Read from the global config only. `whitelist: [email]` or `whitelist: [phone]` turns one off again.
+- To keep your own address visible, add it to `allow_values` in `engine.yml`, for example `'^jane@acme\.dev$'`.
+
 ## Configuration
 
 Two kinds of file. Each has a global copy and a project copy.
 
 | File | Global | Project | Keys |
 | --- | --- | --- | --- |
-| config.yaml | `~/.config/redacted/config.yaml` | `.redacted.yaml` | `version`, `learned`, `heuristic`, `whitelist`, `allow`, `ignore_internal_tools`, `override` |
+| config.yaml | `~/.config/redacted/config.yaml` | `.redacted.yaml` | `version`, `learned`, `heuristic`, `pii`, `whitelist`, `allow`, `ignore_internal_tools`, `override` |
 | engine.yml | `~/.config/redacted/engine.yml` | `.redacted.engine.yml` | `patterns`, `allow_values`, `override` |
 
 - The project file is read from the hook payload's `cwd`. Raw-text mode has no `cwd` and reads the global files only.
 - A project file adds to the global one: lists are concatenated, `ignore_internal_tools` is on if either file sets it.
-- `override: true` in a project file drops the global file. `version`, `learned` and `heuristic` still come from the global file.
+- `override: true` in a project file drops the global file. `version`, `learned`, `heuristic` and `pii` still come from the global file.
 - A missing or malformed file is skipped.
 
 Full examples: [config.example.yaml](config.example.yaml), [engine.example.yml](engine.example.yml).

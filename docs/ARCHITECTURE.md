@@ -60,7 +60,7 @@ Other paths:
 - `config::load` merges `~/.config/redacted/config.yaml` with `<cwd>/.redacted.yaml`.
 - `config::load_engine` merges `~/.config/redacted/engine.yml` with `<cwd>/.redacted.engine.yml`.
 - Merge rules: lists concatenate, `ignore_internal_tools` is ORed, a project `override: true` drops the global file.
-- `version`, `learned` and `heuristic` always come from the global config, even under `override`.
+- `version`, `learned`, `heuristic` and `pii` always come from the global config, even under `override`.
 - A missing, unreadable or malformed file is treated as absent.
 - `config::home_dir` returns `None` for an unset or empty `HOME`, so no path is built under the working directory.
 - `EngineConfig` ignores the 0.7 keys `keywords`, `heuristic` and `value_safe_char` like any unknown key.
@@ -73,6 +73,7 @@ Other paths:
    - A name in `whitelist` is skipped.
    - `prefilters` (case-sensitive) and `prefilters_ignore_case` (against a lowercased copy) skip a regex when none of its literals appear.
    - `redact_matches` replaces each match unless `should_skip_match` keeps it.
+   - PII rows (`email`, `phone`) carry `opt_in: true` and sit last. `compile_vendor_patterns` drops each one unless its `pii` toggle is on, and `is_pii_lookalike` skips reserved domains, URL logins and numbers glued to versions, IPs or timestamps.
 2. Learned secrets: `scrub_learned` in `src/scrub/learned.rs`.
 3. Entropy heuristic: the `secret_value` pattern, built by `compile_heuristic` only when `heuristic.enabled` is true.
 

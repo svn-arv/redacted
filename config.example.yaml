@@ -25,6 +25,12 @@ heuristic:
   min_char_classes: 3 # of lowercase, uppercase, digit
   min_entropy: 3.5 # Shannon entropy, bits per character
 
+# Opt-in PII tier: email addresses and phone numbers. Read from the global file only.
+# An absent toggle is off. Keep your own address visible with allow_values in engine.yml.
+pii:
+  email: false
+  phone: false
+
 # Turn off vendor or engine.yml patterns by name (see the README table).
 # No effect on learned secrets or the heuristic.
 whitelist:
@@ -42,5 +48,5 @@ allow:
 ignore_internal_tools: false
 
 # In a project file: drop the global file instead of merging.
-# version, learned and heuristic still come from the global file.
+# version, learned, heuristic and pii still come from the global file.
 override: false
