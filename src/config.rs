@@ -19,6 +19,7 @@ pub struct Config {
     pub version: u32,
     pub learned: Vec<LearnedSecret>,
     pub heuristic: HeuristicConfig,
+    pub pii: PiiConfig,
 }
 
 /// A secret learned by `init`: its hash and byte length, never the value.
@@ -87,6 +88,14 @@ fn default_min_entropy() -> f64 {
     DEFAULT_MIN_ENTROPY
 }
 
+/// Opt-in PII tier: each toggle turns on the engine.yml row of the same name.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+pub struct PiiConfig {
+    pub email: bool,
+    pub phone: bool,
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct CustomPattern {
@@ -142,14 +151,20 @@ pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Config {
     // as_deref() lends the PathBuf inside the Option as a `&Path` for `read_yaml` to borrow.
     let global: Option<Config> = global_path.as_deref().and_then(read_yaml);
     let project: Option<Config> = project_path.as_deref().and_then(read_yaml);
-    // Learned hashes and the heuristic are global only, even under a project override.
-    let (version, learned, heuristic) = match &global {
+    // Learned hashes, the heuristic and PII are global only, even under a project override.
+    let (version, learned, heuristic, pii) = match &global {
         Some(global) => (
             global.version,
             global.learned.clone(),
             global.heuristic.clone(),
+            global.pii.clone(),
         ),
-        None => (0, Vec::new(), HeuristicConfig::default()),
+        None => (
+            0,
+            Vec::new(),
+            HeuristicConfig::default(),
+            PiiConfig::default(),
+        ),
     };
     // Matching on the pair covers every combination; `if` guards pick the override case.
     let merged = match (global, project) {
@@ -164,11 +179,12 @@ pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Config {
             ..Default::default()
         },
     };
-    // Struct update: the three named fields, everything else taken from `merged`.
+    // Struct update: the four named fields, everything else taken from `merged`.
     Config {
         version,
         learned,
         heuristic,
+        pii,
         ..merged
     }
 }
@@ -363,6 +379,27 @@ mod tests {
 
         fs::remove_file(home.join(".config/redacted/config.yaml")).unwrap();
         assert!(load(Some(&home), Some(&cwd)).learned.is_empty());
+    }
+
+    #[test]
+    fn pii_toggles_are_off_unless_the_global_file_turns_each_one_on() {
+        // A committed project file must not switch PII scrubbing on or off for everyone.
+        let (home, cwd) = temp_home_and_project("pii-global");
+        let config = load(Some(&home), Some(&cwd));
+        assert!(!config.pii.email && !config.pii.phone);
+
+        fs::write(
+            home.join(".config/redacted/config.yaml"),
+            "pii: {email: true}\n",
+        )
+        .unwrap();
+        fs::write(
+            cwd.join(".redacted.yaml"),
+            "pii: {email: false, phone: true}\n",
+        )
+        .unwrap();
+        let config = load(Some(&home), Some(&cwd));
+        assert!(config.pii.email && !config.pii.phone);
     }
 
     #[test]
