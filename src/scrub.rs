@@ -595,6 +595,17 @@ mod tests {
     }
 
     #[test]
+    fn a_placeholder_login_later_in_the_output_never_unredacts_a_key() {
+        // A truncated dump has no closing quote, so the match must stop at the line end.
+        let body = "Q7xK".repeat(16);
+        let dump = format!(r#""private_key": "-----BEGIN PRIVATE KEY-----\n{body}"#);
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let result = default_scrubber().scrub(&format!("{dump}\n{url_line}\n"));
+        assert!(!result.text.contains(&body), "{}", result.text);
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
     fn placeholder_database_urls_are_not_redacted() {
         let input = "postgres://user:password@db.example.com:5432/app";
         assert_eq!(default_scrubber().scrub(input).text, input);
