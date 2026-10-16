@@ -301,7 +301,8 @@ fn picker_row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> 
     )
 }
 
-/// Merges `entries` by name into the config text, keeping every other field.
+/// Merges `entries` into the config text, keeping every other field and every
+/// learned value: a new value under a taken name gets a numeric suffix.
 fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, String> {
     let mut doc = if existing.trim().is_empty() {
         serde_yaml::Value::Mapping(Default::default())
@@ -318,13 +319,14 @@ fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Resul
         None => Vec::new(),
     };
     for entry in entries {
-        match learned
-            .iter_mut()
-            .find(|existing| existing.name == entry.name)
-        {
-            Some(slot) => *slot = entry.clone(),
-            None => learned.push(entry.clone()),
+        if learned.iter().any(|known| is_same_secret(known, entry)) {
+            continue;
         }
+        let name = unused_name(&learned, &entry.name);
+        learned.push(LearnedSecret {
+            name,
+            ..entry.clone()
+        });
     }
     map.insert("version".into(), 2.into());
     map.insert(
@@ -332,6 +334,22 @@ fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Resul
         serde_yaml::to_value(&learned).map_err(|e| e.to_string())?,
     );
     serde_yaml::to_string(&doc).map_err(|e| e.to_string())
+}
+
+/// Same value under `name` or one of its suffixes, so a re-run adds no copy.
+fn is_same_secret(known: &LearnedSecret, entry: &LearnedSecret) -> bool {
+    let suffix = known.name.strip_prefix(&format!("{}_", entry.name));
+    let is_suffixed = suffix.is_some_and(|digits| digits.parse::<u32>().is_ok());
+    known.sha256 == entry.sha256 && (known.name == entry.name || is_suffixed)
+}
+
+/// `name`, or the first `name_2`, `name_3`, ... not already in `learned`.
+fn unused_name(learned: &[LearnedSecret], name: &str) -> String {
+    let is_taken = |candidate: &str| learned.iter().any(|known| known.name == candidate);
+    std::iter::once(name.to_string())
+        .chain((2..).map(|number| format!("{name}_{number}")))
+        .find(|candidate| !is_taken(candidate))
+        .expect("an unbounded range always has a free name")
 }
 
 /// Owner-only: the file holds hashes of the user's secrets.
