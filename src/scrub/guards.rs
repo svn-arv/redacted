@@ -16,6 +16,7 @@ impl Scrubber {
     ) -> bool {
         if self.contains_allowed_key(matched)
             || self.matches_allow_values(pattern, matched, text, end)
+            || is_pii_lookalike(&pattern.name, matched, text, end - matched.len())
         {
             return true;
         }
@@ -108,6 +109,56 @@ impl Scrubber {
             .iter()
             .any(|allow_regex| allow_regex.is_match(&value_to_check))
     }
+}
+
+/// Domains reserved for documentation (RFC 2606) and bot senders: no person behind them.
+const UNOWNED_EMAIL_DOMAINS: [&str; 8] = [
+    "example.com",
+    "example.net",
+    "example.org",
+    "example",
+    "test",
+    "invalid",
+    "localhost",
+    "noreply.github.com",
+];
+
+/// The PII rows match loose shapes; these are the look-alikes they leave alone.
+fn is_pii_lookalike(pattern_name: &str, matched: &str, text: &str, start: usize) -> bool {
+    match pattern_name {
+        "email" => is_unowned_email(matched) || is_url_userinfo(text, start),
+        "phone" => is_embedded_number(text, start, start + matched.len()),
+        _ => false,
+    }
+}
+
+fn is_unowned_email(address: &str) -> bool {
+    let Some((local_part, domain)) = address.rsplit_once('@') else {
+        return false;
+    };
+    let domain_lower = domain.to_ascii_lowercase();
+    local_part.eq_ignore_ascii_case("noreply")
+        || local_part.eq_ignore_ascii_case("no-reply")
+        // Whole labels only, so mail.example.com is reserved and notexample.com is not.
+        || UNOWNED_EMAIL_DOMAINS.into_iter().any(|parent| {
+            domain_lower == parent || domain_lower.ends_with(&format!(".{parent}"))
+        })
+}
+
+/// `user:password@host` inside a URL is a login the URL rows own, not an address.
+fn is_url_userinfo(text: &str, start: usize) -> bool {
+    matches!(text.as_bytes()[..start].last(), Some(b':' | b'/')) && is_inside_url(text, start)
+}
+
+/// Digits glued to a word, version, IP or timestamp belong to it, not to a phone.
+fn is_embedded_number(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    let is_glued_before = bytes[..start]
+        .last()
+        .is_some_and(|before| before.is_ascii_alphanumeric() || b".-+".contains(before));
+    let is_continued_after = matches!(bytes.get(end), Some(b'.' | b':'))
+        && bytes.get(end + 1).is_some_and(u8::is_ascii_digit);
+    is_glued_before || is_continued_after
 }
 
 fn is_long_hex_under_key_name(key: &str, value: &str) -> bool {

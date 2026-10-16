@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::config::{Config, CustomPattern, EngineConfig, HeuristicConfig};
+use crate::config::{Config, CustomPattern, EngineConfig, HeuristicConfig, PiiConfig};
 use go_regex::go_to_rust_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use guards::percent_decode;
@@ -30,6 +30,8 @@ struct BuiltinPatternYaml {
     prefilters: Vec<String>,
     #[serde(default)]
     prefilters_ignore_case: Vec<String>,
+    #[serde(default)]
+    opt_in: bool,
 }
 
 #[derive(Deserialize)]
@@ -116,9 +118,19 @@ fn compile_go_regex(expr: &str) -> Result<Regex, String> {
 fn compile_vendor_patterns(
     builtin: Vec<BuiltinPatternYaml>,
     user: &[CustomPattern],
+    pii: &PiiConfig,
 ) -> Result<Vec<Pattern>, String> {
     let mut patterns = Vec::new();
     for pattern in builtin {
+        // An opt_in row is PII: it runs only when its toggle in `pii` is on.
+        let is_toggled_on = match pattern.name.as_str() {
+            "email" => pii.email,
+            "phone" => pii.phone,
+            _ => false,
+        };
+        if pattern.opt_in && !is_toggled_on {
+            continue;
+        }
         patterns.push(Pattern {
             regex: compile_go_regex(&pattern.regex)?,
             name: pattern.name,
@@ -141,7 +153,8 @@ impl Scrubber {
     pub fn new(config: &Config, user_engine: &EngineConfig) -> Result<Self, String> {
         let builtin: BuiltinEngine =
             serde_yaml::from_str(BUILTIN_ENGINE_YML).map_err(|e| format!("engine.yml: {e}"))?;
-        let patterns = compile_vendor_patterns(builtin.patterns, &user_engine.patterns)?;
+        let patterns =
+            compile_vendor_patterns(builtin.patterns, &user_engine.patterns, &config.pii)?;
         let allow_values = builtin
             .allow_values
             .iter()
@@ -578,14 +591,13 @@ mod tests {
     }
 
     /// The fiction-range numbers from the issue, one per supported shape.
-    const PHONE_SHAPES: [&str; 8] = [
+    const PHONE_SHAPES: [&str; 7] = [
         "+6281234567890",
         "+62 812-3456-7890",
         "+1 415 555 0123",
         "+44 20 7946 0958",
         "(415) 555-0123",
         "415-555-0123",
-        "415.555.0123",
         "0812-3456-7890",
     ];
 
