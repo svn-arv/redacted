@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::scrub::ScrubResult;
 
 /// Printed in place of the tool output when scrubbing failed.
-const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
+pub(crate) const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";
 
 // Typed structs rather than `json!`: serde_json sorts `json!` keys, and the
 // envelope's key order is pinned byte for byte. `'a` lets fields borrow strings.
@@ -80,7 +80,7 @@ pub fn withheld_output(data: &[u8]) -> Vec<u8> {
 }
 
 /// Same shape, every string leaf replaced by the WITHHELD sentence.
-fn withhold_strings(value: &Value) -> Value {
+pub(crate) fn withhold_strings(value: &Value) -> Value {
     match value {
         Value::String(_) => Value::String(WITHHELD.into()),
         Value::Object(map) => Value::Object(
@@ -172,7 +172,7 @@ fn scrub_tool_response(
 }
 
 /// Scrubber input: the string itself, or every string in a structured value.
-fn text_to_scrub(response: &Value) -> Result<String, String> {
+pub(crate) fn text_to_scrub(response: &Value) -> Result<String, String> {
     if let Value::String(s) = response {
         return Ok(s.clone());
     }
@@ -209,7 +209,7 @@ fn collect_strings(value: &Value, strings: &mut Vec<String>) {
     }
 }
 
-fn scrub_json(value: &Value, scrub: &dyn Fn(&str) -> ScrubResult) -> Value {
+pub(crate) fn scrub_json(value: &Value, scrub: &dyn Fn(&str) -> ScrubResult) -> Value {
     match value {
         Value::String(s) => Value::String(scrub(s).text),
         Value::Object(map) => Value::Object(

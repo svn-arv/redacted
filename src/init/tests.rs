@@ -420,10 +420,30 @@ fn install_stops_on_a_malformed_config_before_writing_settings_so_no_hook_withho
     let config_path = config::global_config_path(&home);
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     fs::write(&config_path, "learned: [\n").unwrap();
-    let error = install(false, &home, &home).unwrap_err();
+    let error = install(Format::Claude, false, &home, &home).unwrap_err();
     assert!(
         error.starts_with(&format!("{}: ", config_path.display())),
         "{error}"
     );
     assert!(!home.join(".claude/settings.json").exists());
+}
+
+#[test]
+fn install_for_opencode_writes_the_plugin_in_either_scope_and_never_touches_claude_settings() {
+    let dir = fresh_temp_dir("install-opencode");
+    let (home, cwd) = (dir.join("home"), dir.join("proj"));
+    install(Format::Opencode, false, &cwd, &home).unwrap();
+    install(Format::Opencode, true, &cwd, &home).unwrap();
+    for plugin in [
+        home.join(".config/opencode/plugins/redacted.ts"),
+        cwd.join(".opencode/plugins/redacted.ts"),
+    ] {
+        assert_eq!(
+            fs::read_to_string(&plugin).unwrap(),
+            opencode::PLUGIN_SOURCE,
+            "{}",
+            plugin.display()
+        );
+    }
+    assert!(!home.join(".claude").exists() && !cwd.join(".claude").exists());
 }
