@@ -1,0 +1,25 @@
+2026-10-16T12:34:56+07:00 INFO  server started in 1.2.3 mode
+2026-10-16 12:34:56 WARN  retry 3 of 5 for job 1791860933376006001
+[2026-10-16 12:35:01.482] request id=6f1c2b7e-3d4a-4e8b-9c1d-2a3b4c5d6e7f status=200
+
+Proto Recv-Q Send-Q Local Address           Foreign Address         State
+tcp        0      0 192.168.100.200:443     10.0.0.1:3000           ESTABLISHED
+tcp        0      0 127.0.0.1:5432          0.0.0.0:*               LISTEN
+
+## Changelog
+- v2.1.292: fix the retry loop
+- 1.2.3: first release, see ISBN 978-3-16-148410-0 for the reference text
+
+{"order_id": 1791860933376006001, "total": "1,234,567.89", "uuid": "6f1c2b7e-3d4a-4e8b-9c1d-2a3b4c5d6e7f", "test_card": "4111 1111 1111 1111"}
+
+diff --git a/src/scrub.rs b/src/scrub.rs
+@@ -120,7 +120,8 @@ impl Scrubber {
+
+commit 3f9a1c2b7e4d5a6b8c9d0e1f2a3b4c5d6e7f8a9b
+Author: Some Dev <12345678+user@users.noreply.github.com>
+Date:   Fri Oct 16 12:34:56 2026 +0700
+Co-authored-by: dependabot[bot] <noreply@github.com>
+
+Docs: write to someone@example.com or admin@mail.example.org for access.
+Local test inboxes such as qa@app.test and dev@box.localhost never leave the machine.
+DATABASE_URL=postgres://user:pass@db.internal.corp/app
