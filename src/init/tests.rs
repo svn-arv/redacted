@@ -413,3 +413,17 @@ fn this_executable_path_is_not_a_path_lookup() {
     let want = std::path::absolute(std::env::current_exe().unwrap()).unwrap();
     assert_eq!(this_executable_path().unwrap(), want.display().to_string());
 }
+
+#[test]
+fn install_stops_on_a_malformed_config_before_writing_settings_so_no_hook_withholds_every_output() {
+    let home = fresh_temp_dir("install-bad-config");
+    let config_path = config::global_config_path(&home);
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    fs::write(&config_path, "learned: [\n").unwrap();
+    let error = install(false, &home, &home).unwrap_err();
+    assert!(
+        error.starts_with(&format!("{}: ", config_path.display())),
+        "{error}"
+    );
+    assert!(!home.join(".claude/settings.json").exists());
+}
