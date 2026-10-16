@@ -484,3 +484,58 @@ fn the_global_pii_toggle_reaches_the_hook_so_addresses_leave_the_transcript() {
         "mail sent to [REDACTED:email ...y.id]"
     );
 }
+
+/// Runs `redacted config` with `editor` as $EDITOR and no $VISUAL, so no test reaches a real vi.
+fn run_config(dir: &Path, editor: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_redacted"))
+        .arg("config")
+        .current_dir(dir.join("proj"))
+        .env("HOME", dir.join("home"))
+        .env_remove("VISUAL")
+        .env("EDITOR", editor)
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn config_opens_the_file_in_the_editor_keeps_it_owner_only_and_checks_it_before_the_next_hook_call()
+{
+    use std::os::unix::fs::PermissionsExt;
+    let dir = sandbox("config-edit");
+    // Appends a line, then loosens the mode the way an editor that saves through a new file does.
+    let editor = dir.join("editor.sh");
+    fs::write(
+        &editor,
+        "#!/bin/sh\necho 'version: 2' >> \"$1\"\nchmod 644 \"$1\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = run_config(&dir, &editor);
+    let out = stdout(&output);
+    assert!(output.status.success(), "{out}");
+    let config = dir.join("home/.config/redacted/config.yaml");
+    assert_eq!(fs::read_to_string(&config).unwrap(), "version: 2\n");
+    // The file holds hashes of the user's secrets.
+    let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert!(out.trim_end().ends_with("PASS"), "{out}");
+}
+
+#[test]
+fn config_names_the_editor_it_could_not_start_so_the_user_can_fix_visual_or_editor() {
+    let dir = sandbox("config-no-editor");
+    let missing = dir.join("no-such-editor");
+    let output = run_config(&dir, &missing);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        err.starts_with(&format!(
+            "config: cannot start editor {}",
+            missing.display()
+        )),
+        "{err}"
+    );
+    assert_eq!(err.lines().count(), 1, "{err}");
+}
