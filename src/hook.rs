@@ -270,7 +270,7 @@ fn block_output(
 }
 
 /// Go's encoder (HTML escaping off) plus its trailing newline.
-fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     let mut out = to_go_json(value)?.into_bytes();
     out.push(b'\n');
     Ok(out)

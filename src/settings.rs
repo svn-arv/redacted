@@ -1,5 +1,6 @@
 //! Claude Code's settings.json: reading it, and adding or removing our
-//! PostToolUse hook while every other key is written back untouched.
+//! PostToolUse and PreToolUse (Monitor) hooks while every other key is written
+//! back untouched.
 
 use std::fs;
 use std::io;
@@ -33,8 +34,9 @@ pub fn write(path: &Path, settings: &Value) -> Result<(), String> {
     fs::write(path, out).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
-/// Replaces any redacted entry in PostToolUse with one for `bin`; other entries
-/// and settings are kept as-is.
+/// Replaces any redacted entry in PostToolUse and PreToolUse with one for `bin`;
+/// other entries and settings are kept as-is. PreToolUse wraps Monitor commands,
+/// whose events never reach PostToolUse.
 pub fn install_hook(path: &Path, bin: &str) -> Result<(), String> {
     let mut settings = read(path)?.unwrap_or_else(|| json!({}));
     let root = settings
@@ -44,14 +46,23 @@ pub fn install_hook(path: &Path, bin: &str) -> Result<(), String> {
     if !hooks.is_object() {
         *hooks = json!({});
     }
-    // take() moves the old list out and leaves null behind, so nothing is cloned.
-    let mut entries = match hooks["PostToolUse"].take() {
-        Value::Array(entries) => entries,
-        _ => Vec::new(),
-    };
-    entries.retain(|e| !is_redacted_entry(e));
-    entries.push(json!({"hooks": [{"type": "command", "command": format!("{bin} scrub")}]}));
-    hooks["PostToolUse"] = Value::Array(entries);
+    let our_hooks = json!([{"type": "command", "command": format!("{bin} scrub")}]);
+    for (event, entry) in [
+        ("PostToolUse", json!({"hooks": our_hooks.clone()})),
+        (
+            "PreToolUse",
+            json!({"matcher": "Monitor", "hooks": our_hooks}),
+        ),
+    ] {
+        // take() moves the old list out and leaves null behind, so nothing is cloned.
+        let mut entries = match hooks[event].take() {
+            Value::Array(entries) => entries,
+            _ => Vec::new(),
+        };
+        entries.retain(|e| !is_redacted_entry(e));
+        entries.push(entry);
+        hooks[event] = Value::Array(entries);
+    }
     write(path, &settings)
 }
 
@@ -63,16 +74,23 @@ pub fn remove_hook(path: &Path) -> Result<bool, String> {
     let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
         return Ok(false);
     };
-    let Some(entries) = hooks.get_mut("PostToolUse").and_then(Value::as_array_mut) else {
-        return Ok(false);
-    };
-    let before = entries.len();
-    entries.retain(|e| !is_redacted_entry(e));
-    if entries.len() == before {
-        return Ok(false);
+    let mut removed_any = false;
+    for event in ["PostToolUse", "PreToolUse"] {
+        let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let before = entries.len();
+        entries.retain(|e| !is_redacted_entry(e));
+        if entries.len() == before {
+            continue;
+        }
+        removed_any = true;
+        if entries.is_empty() {
+            hooks.remove(event);
+        }
     }
-    if entries.is_empty() {
-        hooks.remove("PostToolUse");
+    if !removed_any {
+        return Ok(false);
     }
     if hooks.is_empty()
         && let Some(root) = settings.as_object_mut()
@@ -83,18 +101,18 @@ pub fn remove_hook(path: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// The PostToolUse entries; empty when the key is missing or not a list.
-pub fn post_tool_use_entries(settings: &Value) -> &[Value] {
+/// The entries under one hook event; empty when the key is missing or not a list.
+pub fn hook_entries<'a>(settings: &'a Value, event: &str) -> &'a [Value] {
     // Indexing a `Value` with a missing key gives null instead of panicking.
-    match settings["hooks"]["PostToolUse"].as_array() {
+    match settings["hooks"][event].as_array() {
         Some(entries) => entries,
         None => &[],
     }
 }
 
-/// The first PostToolUse entry that runs our hook.
-pub fn find_redacted_entry(settings: &Value) -> Option<&Value> {
-    post_tool_use_entries(settings)
+/// The first entry under `event` that runs our hook.
+pub fn find_redacted_entry<'a>(settings: &'a Value, event: &str) -> Option<&'a Value> {
+    hook_entries(settings, event)
         .iter()
         .find(|entry| is_redacted_entry(entry))
 }
