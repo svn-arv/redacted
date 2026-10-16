@@ -1,7 +1,4 @@
-    // The text scan runs only for a `+` at column 0, so other matches stay cheap.
-    matched.starts_with('+')
-        && is_line_start
-        && (text.starts_with("@@ ") || text.contains("\n@@ "))//! Skip guards: the allow lists and the Go 0.7 guards that keep code, identifiers
+//! Skip guards: the allow lists and the Go 0.7 guards that keep code, identifiers
 //! and URLs from being redacted as secrets.
 
 use std::collections::HashMap;
@@ -173,8 +170,8 @@ fn is_ssh_target(text: &str, start: usize, end: usize) -> bool {
 /// In a unified diff, a `+` at column 0 marks an added line, not a country code.
 fn is_diff_added_line(matched: &str, text: &str, start: usize) -> bool {
     let is_line_start = start == 0 || text.as_bytes()[start - 1] == b'\n';
-    let has_hunk_header = text.starts_with("@@ ") || text.contains("\n@@ ");
-    matched.starts_with('+') && is_line_start && has_hunk_header
+    // The text scan runs only for a `+` at column 0, so other matches stay cheap.
+    matched.starts_with('+') && is_line_start && (text.starts_with("@@ ") || text.contains("\n@@ "))
 }
 
 /// Digits glued to a word, version, IP or timestamp belong to it, not to a phone.
