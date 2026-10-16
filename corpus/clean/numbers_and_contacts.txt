@@ -23,3 +23,14 @@ Co-authored-by: dependabot[bot] <noreply@github.com>
 Docs: write to someone@example.com or admin@mail.example.org for access.
 Local test inboxes such as qa@app.test and dev@box.localhost never leave the machine.
 DATABASE_URL=postgres://user:pass@db.internal.corp/app
+
+$ git remote -v
+origin  git@github.com:svn-arv/redacted.git (fetch)
+$ ssh deploy@prod.internal.corp uptime
+$ scp a.txt ops@build.internal.corp:/tmp/
+ubuntu@ip-10-0-0-1.ec2.internal:~$ ls
+
+@@ -3,2 +3,5 @@ fixtures
++123 456 789
++10-16-2026
++1234567890
