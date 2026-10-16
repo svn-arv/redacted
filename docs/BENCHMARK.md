@@ -8,18 +8,19 @@ The tool reduces exposure to secrets in tool output. It never prevents it.
 
 - The scrub engine (`Scrubber`) runs in process, not through the hook binary.
 - Two configurations: default (vendor signatures, heuristic off) and heuristic on. No learned secrets in either.
+- The PII rows (`email`, `phone`) are measured in a third configuration with both `pii` toggles on, and are left out of the secret totals.
 - Each built-in pattern gets one fake value per placement, generated at run time by `src/fake_secrets.rs`. Keyed patterns are planted with their key, since the key is part of the match.
 - Each value is planted mid-file in a `corpus/clean/*.txt` file. Files rotate across rows.
 - Caught means at least one new redaction and no 8-character run of the value left outside a redaction marker.
-- Seed 1791860933376006001. Replay with `REDACTED_BENCHMARK_SEED=1791860933376006001`.
+- Seed 1792136423684321001. Replay with `REDACTED_BENCHMARK_SEED=1792136423684321001`.
 
 ## Misses
 
-| Placement | Patterns missed | Default | Heuristic on |
-| --- | --- | --- | --- |
-| JSON nested as escaped string | `private_key_truncated`, `gcp_sa_key_id`, `gcp_sa_private_key` | 3 | 3 |
-| mid-token | `twilio_api_key`, `twilio_account_sid`, `credentialed_url`, `openai_classic_key`, `auth_header` | 5 | 5 |
-| trailing period | `gcp_sa_private_key` | 1 | 1 |
+| Placement | Patterns missed | Default | Heuristic on | PII on |
+| --- | --- | --- | --- | --- |
+| JSON nested as escaped string | `private_key_truncated`, `gcp_sa_key_id`, `gcp_sa_private_key` | 3 | 3 | 0 |
+| URL path segment | `email` (PII on) | 0 | 0 | 1 |
+| mid-token | `twilio_api_key`, `twilio_account_sid`, `credentialed_url`, `openai_classic_key`, `auth_header` | 5 | 5 | 0 |
 
 Expected-miss placements (base64, line-wrapped) appear in the recall table only.
 
@@ -40,12 +41,43 @@ Expected-miss placements (base64, line-wrapped) appear in the recall table only.
 | quoted in error message | plain | 46/46 (100.0%) | 46/46 (100.0%) |
 | CSV field | plain | 46/46 (100.0%) | 46/46 (100.0%) |
 | mid-token | harder | 41/46 (89.1%) | 41/46 (89.1%) |
-| trailing period | harder | 45/46 (97.8%) | 45/46 (97.8%) |
+| trailing period | harder | 46/46 (100.0%) | 46/46 (100.0%) |
 | trailing comma | harder | 46/46 (100.0%) | 46/46 (100.0%) |
 | base64 of the line | expected miss | 0/46 (0.0%) | 0/46 (0.0%) |
-| line-wrapped at 40 | expected miss | 6/46 (13.0%) | 10/46 (21.7%) |
+| line-wrapped at 40 | expected miss | 5/46 (10.9%) | 9/46 (19.6%) |
 | all plain placements | plain | 460/460 (100.0%) | 460/460 (100.0%) |
 | all placements | all | 687/782 (87.9%) | 691/782 (88.4%) |
+
+## Opt-in PII rows (both toggles on)
+
+| Placement | Group | PII on |
+| --- | --- | --- |
+| env line | plain | 2/2 (100.0%) |
+| shell export | plain | 2/2 (100.0%) |
+| JSON value | plain | 2/2 (100.0%) |
+| JSON nested as escaped string | harder | 2/2 (100.0%) |
+| URL query parameter | plain | 2/2 (100.0%) |
+| URL path segment | harder | 1/2 (50.0%) |
+| git diff added line | plain | 2/2 (100.0%) |
+| log line | plain | 2/2 (100.0%) |
+| YAML value | plain | 2/2 (100.0%) |
+| markdown inline code | plain | 2/2 (100.0%) |
+| quoted in error message | plain | 2/2 (100.0%) |
+| CSV field | plain | 2/2 (100.0%) |
+| mid-token | harder | 2/2 (100.0%) |
+| trailing period | harder | 2/2 (100.0%) |
+| trailing comma | harder | 2/2 (100.0%) |
+| base64 of the line | expected miss | 0/2 (0.0%) |
+| line-wrapped at 40 | expected miss | 2/2 (100.0%) |
+| all plain placements | plain | 20/20 (100.0%) |
+| all placements | all | 31/34 (91.2%) |
+
+Excludes the expected-miss placements (base64, line-wrapped).
+
+| Pattern | PII on |
+| --- | --- |
+| `email` | 14/15 (93.3%) |
+| `phone` | 15/15 (100.0%) |
 
 ## Recall by pattern
 
@@ -60,7 +92,7 @@ Excludes the expected-miss placements (base64, line-wrapped).
 | `openai_classic_key` | 14/15 (93.3%) | 14/15 (93.3%) |
 | `gcp_sa_key_id` | 14/15 (93.3%) | 14/15 (93.3%) |
 | `auth_header` | 14/15 (93.3%) | 14/15 (93.3%) |
-| `gcp_sa_private_key` | 13/15 (86.7%) | 13/15 (86.7%) |
+| `gcp_sa_private_key` | 14/15 (93.3%) | 14/15 (93.3%) |
 
 All other patterns: 100% in both configurations.
 
@@ -76,6 +108,7 @@ Redactions in files that hold no secret. Zero is correct.
 | `env_example.txt` | 0 | 0 |
 | `gh_output.txt` | 0 | 0 |
 | `ids_and_hashes.txt` | 0 | 0 |
+| `numbers_and_contacts.txt` | 0 | 0 |
 | `prose.txt` | 0 | 0 |
 | `ruby_source.txt` | 0 | 0 |
 | `safe_env.txt` | 0 | 0 |
@@ -85,7 +118,7 @@ Redactions in files that hold no secret. Zero is correct.
 ## How to reproduce
 
 ```bash
-REDACTED_BENCHMARK_SEED=1791860933376006001 REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark
+REDACTED_BENCHMARK_SEED=1792136423684321001 REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark
 ```
 
 ## What this does not show
