@@ -172,7 +172,7 @@ Built-in `allow_values` leave these alone: Anthropic transcript ids (`toolu_`, `
 
 - `init` stores, per value: `name` (the env key, lowercased), `sha256` of the value, `len` in bytes and an optional `shape`. Never the value.
 - A URL value with a password, such as `DATABASE_URL=postgres://admin:pw@host/db`, adds a second row, `database_url_password`. It holds the password alone, percent-decoded, so a log that prints only the password is caught too.
-- Two values under one name are both kept. The newcomer gets the first free numeric suffix (`db_password_2`, `db_password_3`), and the redaction label shows which one matched. `init` never removes an entry.
+- Two values under one name are both kept. The newcomer gets the first free numeric suffix (`db_password_2`, `db_password_3`), and the redaction label shows which one matched. A value already learned is never added twice, whatever its key. `init` never removes an entry.
 - A `shape` is derived when the value has a literal prefix of 3+ characters ending in `_` or `-` within its first 12 characters, and the rest holds only letters, digits, `_` and `-`.
 - The shape is the prefix, the rest's character set and a length band of plus or minus 4, for example `\bsk_live_[a-zA-Z0-9]{20,28}\b`. It also catches a rotated key with the same prefix.
 - Matching runs shapes first, then exact hashes.
