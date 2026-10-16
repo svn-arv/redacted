@@ -658,3 +658,89 @@ fn config_without_a_file_points_the_user_at_init() {
         )
     );
 }
+
+/// A sandbox whose global config does not parse; returns the dir and the file.
+fn sandbox_with_malformed_global_config(tag: &str) -> (PathBuf, PathBuf) {
+    let dir = sandbox(tag);
+    let config = dir.join("home/.config/redacted/config.yaml");
+    fs::write(&config, "learned: [\n").unwrap();
+    (dir, config)
+}
+
+#[test]
+fn hook_mode_withholds_even_clean_output_when_the_config_does_not_parse_and_says_why() {
+    // Defaults would drop the learned secrets without a word; withholding makes the user fix the file.
+    let (dir, config) = sandbox_with_malformed_global_config("hook-bad-config");
+    let payload = r#"{"tool_name":"Read","tool_response":"clean"}"#;
+    // A serde message quotes the offending value, which may be a secret pasted in by mistake.
+    fs::write(&config, "whitelist: quoted-config-value\n").unwrap();
+    let output = run_redacted(&dir, &["scrub"], payload);
+    assert!(output.status.success(), "hook mode never fails the hook");
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let notice = reason(&response);
+    let fixed_line = format!(
+        "[redacted] config file does not parse: {}; run redacted verify\n",
+        config.display()
+    );
+    assert!(notice.starts_with(&fixed_line), "{notice}");
+    assert!(
+        !stdout(&output).contains("quoted-config-value"),
+        "the model must not read the file's text: {notice}"
+    );
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        err.starts_with(&format!("{}: ", config.display())) && err.contains("quoted-config-value"),
+        "the full error goes to stderr for the user: {err}"
+    );
+    assert!(notice.contains("tool output withheld"), "{notice}");
+    let updated = response["hookSpecificOutput"]["updatedToolOutput"].to_string();
+    assert!(!updated.contains("clean"), "{updated}");
+}
+
+#[test]
+fn raw_mode_exits_1_with_the_parse_error_so_nothing_is_scrubbed_on_defaults_that_drop_learned_secrets()
+ {
+    let (dir, config) = sandbox_with_malformed_global_config("raw-bad-config");
+    let output = run_redacted(&dir, &["scrub"], "plain text\n");
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "nothing unscrubbed reaches stdout"
+    );
+    assert!(
+        err.starts_with(&format!("scrub: {}: ", config.display())),
+        "{err}"
+    );
+    assert!(err.contains("line"), "the serde message: {err}");
+}
+
+#[test]
+fn stream_mode_exits_1_with_the_parse_error_so_nothing_is_scrubbed_on_defaults_that_drop_learned_secrets()
+ {
+    let (dir, config) = sandbox_with_malformed_global_config("stream-bad-config");
+    let output = run_redacted(&dir, &["scrub", "--stream"], "plain text\n");
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "nothing unscrubbed reaches stdout"
+    );
+    assert!(
+        err.starts_with(&format!("scrub: {}: ", config.display())),
+        "{err}"
+    );
+    assert!(err.contains("line"), "the serde message: {err}");
+}
+
+#[test]
+fn verify_fails_config_files_with_the_parse_error_so_the_user_finds_the_broken_file() {
+    let (dir, config) = sandbox_with_malformed_global_config("verify-bad-config");
+    let output = run_redacted(&dir, &["verify"], "");
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(1));
+    let fail_line = format!("[FAIL] config files - {}: ", config.display());
+    assert!(out.contains(&fail_line), "missing {fail_line:?} in:\n{out}");
+    assert!(out.contains("other checks use built-in defaults"), "{out}");
+    assert!(out.contains("[PASS] patterns load"), "{out}");
+}

@@ -15,13 +15,18 @@ fn temp_home_and_project(tag: &str) -> (PathBuf, PathBuf) {
 #[test]
 fn missing_files_give_defaults() {
     let (home, cwd) = temp_home_and_project("none");
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert!(
         config.disabled_patterns.is_empty()
             && config.allowed_keys.is_empty()
             && !config.ignore_internal_tools
     );
-    assert!(load_engine(Some(&home), Some(&cwd)).patterns.is_empty());
+    assert!(
+        load_engine(Some(&home), Some(&cwd))
+            .unwrap()
+            .patterns
+            .is_empty()
+    );
 }
 
 #[test]
@@ -37,7 +42,7 @@ fn project_merges_over_global() {
         "allow: [B]\nignore_internal_tools: true\n",
     )
     .unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(config.disabled_patterns, ["jwt"]);
     assert_eq!(config.allowed_keys, ["A", "B"]);
     assert!(config.ignore_internal_tools);
@@ -52,21 +57,67 @@ fn project_override_drops_global() {
     )
     .unwrap();
     fs::write(cwd.join(".redacted.yaml"), "override: true\nallow: [B]\n").unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert!(config.disabled_patterns.is_empty());
     assert_eq!(config.allowed_keys, ["B"]);
 }
 
 #[test]
-fn malformed_file_is_ignored() {
-    let (home, cwd) = temp_home_and_project("bad");
+fn a_malformed_global_file_is_an_error_naming_it_because_defaults_would_drop_learned_secrets() {
+    let (home, cwd) = temp_home_and_project("bad-global");
+    let path = home.join(".config/redacted/config.yaml");
+    fs::write(&path, "learned: [\n").unwrap();
+    let error = load(Some(&home), Some(&cwd)).unwrap_err().to_string();
+    assert!(
+        error.starts_with(&format!("{}: ", path.display())),
+        "{error}"
+    );
+    assert!(
+        error.contains("line"),
+        "the serde message points at a line: {error}"
+    );
+}
+
+#[test]
+fn a_malformed_project_file_is_an_error_naming_it_instead_of_running_with_the_global_alone() {
+    let (home, cwd) = temp_home_and_project("bad-project");
     fs::write(
         home.join(".config/redacted/config.yaml"),
         "whitelist: [jwt]\n",
     )
     .unwrap();
-    fs::write(cwd.join(".redacted.yaml"), "whitelist: {not: a list}\n").unwrap();
-    assert_eq!(load(Some(&home), Some(&cwd)).disabled_patterns, ["jwt"]);
+    let path = cwd.join(".redacted.yaml");
+    fs::write(&path, "whitelist: {not: a list}\n").unwrap();
+    let error = load(Some(&home), Some(&cwd)).unwrap_err().to_string();
+    assert!(
+        error.starts_with(&format!("{}: ", path.display())),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_malformed_engine_file_is_an_error_naming_it_because_its_patterns_would_vanish() {
+    let (home, cwd) = temp_home_and_project("bad-engine");
+    let path = home.join(".config/redacted/engine.yml");
+    fs::write(&path, "patterns: {not: a list}\n").unwrap();
+    let error = load_engine(Some(&home), Some(&cwd))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with(&format!("{}: ", path.display())),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_empty_or_comment_only_file_loads_as_defaults_because_config_edit_creates_an_empty_one() {
+    let (home, cwd) = temp_home_and_project("empty");
+    let path = home.join(".config/redacted/config.yaml");
+    for text in ["", "# nothing learned yet\n"] {
+        fs::write(&path, text).unwrap();
+        let config = load(Some(&home), Some(&cwd)).unwrap();
+        assert!(config.learned.is_empty() && !config.heuristic.enabled);
+    }
 }
 
 #[test]
@@ -77,7 +128,7 @@ fn v1_file_loads_with_no_learned_and_heuristic_off() {
         "whitelist: [jwt]\n",
     )
     .unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(config.version, 0);
     assert!(config.learned.is_empty() && !config.heuristic.enabled);
     assert_eq!(config.disabled_patterns, ["jwt"]);
@@ -89,7 +140,7 @@ const V2: &str = "version: 2\nlearned:\n- {name: stripe_key, sha256: ab12, len: 
 fn v2_global_file_loads_learned_and_heuristic() {
     let (home, cwd) = temp_home_and_project("v2");
     fs::write(home.join(".config/redacted/config.yaml"), V2).unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(config.version, 2);
     assert_eq!(
         config.learned[0],
@@ -138,7 +189,7 @@ fn learned_and_heuristic_come_from_the_global_file_only() {
     fs::write(home.join(".config/redacted/config.yaml"), V2).unwrap();
     let project = "learned: [{name: leak, sha256: ff, len: 2}]\nheuristic: {enabled: false}\n";
     fs::write(cwd.join(".redacted.yaml"), project).unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     let names: Vec<_> = config.learned.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["stripe_key", "db_pass"]);
     assert!(config.heuristic.enabled);
@@ -149,19 +200,19 @@ fn learned_and_heuristic_come_from_the_global_file_only() {
         format!("override: true\n{project}"),
     )
     .unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(config.learned.len(), 2);
     assert!(config.heuristic.enabled);
 
     fs::remove_file(home.join(".config/redacted/config.yaml")).unwrap();
-    assert!(load(Some(&home), Some(&cwd)).learned.is_empty());
+    assert!(load(Some(&home), Some(&cwd)).unwrap().learned.is_empty());
 }
 
 #[test]
 fn pii_toggles_are_off_unless_the_global_file_turns_each_one_on() {
     // A committed project file must not switch PII scrubbing on or off for everyone.
     let (home, cwd) = temp_home_and_project("pii-global");
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert!(!config.pii.email && !config.pii.phone);
 
     fs::write(
@@ -174,7 +225,7 @@ fn pii_toggles_are_off_unless_the_global_file_turns_each_one_on() {
         "pii: {email: false, phone: true}\n",
     )
     .unwrap();
-    let config = load(Some(&home), Some(&cwd));
+    let config = load(Some(&home), Some(&cwd)).unwrap();
     assert!(config.pii.email && !config.pii.phone);
 }
 
@@ -203,7 +254,7 @@ fn engine_yml_from_0_7_with_keywords_and_heuristic_still_loads() {
     let (home, cwd) = temp_home_and_project("engine-v1");
     let old = "heuristic:\n  min_length: 16\n  min_entropy: 3.5\nkeywords:\n  - MONGO\nvalue_safe_char: '[^\\s]'\nallow_values: ['^svc_']\npatterns:\n  - {name: g, regex: 'g_x'}\n";
     fs::write(home.join(".config/redacted/engine.yml"), old).unwrap();
-    let engine_config = load_engine(Some(&home), Some(&cwd));
+    let engine_config = load_engine(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(engine_config.patterns.len(), 1);
     assert_eq!(engine_config.allow_values, ["^svc_"]);
     let scrubber = crate::scrub::Scrubber::new(&Config::default(), &engine_config).unwrap();
@@ -223,7 +274,7 @@ fn engine_lists_concatenate_and_project_override_drops_global() {
         "allow_values: ['^ok']\npatterns: [{name: p, regex: 'p_x'}]\n",
     )
     .unwrap();
-    let engine_config = load_engine(Some(&home), Some(&cwd));
+    let engine_config = load_engine(Some(&home), Some(&cwd)).unwrap();
     let names: Vec<_> = engine_config
         .patterns
         .iter()
@@ -237,5 +288,8 @@ fn engine_lists_concatenate_and_project_override_drops_global() {
         "override: true\npatterns: [{name: p, regex: 'p_x'}]\n",
     )
     .unwrap();
-    assert_eq!(load_engine(Some(&home), Some(&cwd)).patterns.len(), 1);
+    assert_eq!(
+        load_engine(Some(&home), Some(&cwd)).unwrap().patterns.len(),
+        1
+    );
 }

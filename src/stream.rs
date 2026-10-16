@@ -21,8 +21,9 @@ pub fn run(cwd: Option<&Path>) -> Result<(), String> {
     panic::set_hook(Box::new(|_| {}));
     let home_dir = config::home_dir();
     let home_dir = home_dir.as_deref();
-    let config = config::load(home_dir, cwd);
-    let scrubber = Scrubber::new(&config, &config::load_engine(home_dir, cwd))
+    let scrubber = config::load(home_dir, cwd)
+        .map_err(String::from)
+        .and_then(|config| Scrubber::new(&config, &config::load_engine(home_dir, cwd)?))
         .map_err(|e| format!("scrub: {e}"))?;
     let result = scrub_lines(io::stdin().lock(), &mut io::stdout().lock(), &|text| {
         scrubber.scrub(text)

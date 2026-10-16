@@ -1,7 +1,9 @@
 //! App policy (config.yaml / .redacted.yaml) and engine overrides
 //! (engine.yml / .redacted.engine.yml).
 
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -114,10 +116,44 @@ pub struct EngineConfig {
     pub patterns: Vec<CustomPattern>,
 }
 
+/// A config file that exists but does not read or parse. Path and message stay
+/// apart because the message can quote the file, which hook mode keeps from the model.
+#[derive(Debug)]
+pub struct ConfigError {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{}: {}", self.path.display(), self.message)
+    }
+}
+
+/// Lets `?` hand a ConfigError to the commands, which all fail with a String.
+impl From<ConfigError> for String {
+    fn from(error: ConfigError) -> String {
+        error.to_string()
+    }
+}
+
 /// Generic over the file's type: `DeserializeOwned` means "can be built from
 /// text without borrowing it", so one reader serves Config and EngineConfig.
-fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    serde_yaml::from_str(&fs::read_to_string(path).ok()?).ok()
+/// A missing file is `Ok(None)`; one that exists but does not read or parse is an
+/// error naming it, because running on defaults would drop what it holds unseen.
+fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, ConfigError> {
+    let config_error = |message: String| ConfigError {
+        path: path.to_path_buf(),
+        message,
+    };
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(config_error(e.to_string())),
+    };
+    serde_yaml::from_str(&text)
+        .map(Some)
+        .map_err(|e| config_error(e.to_string()))
 }
 
 /// $HOME, or None when it is unset or empty, so no path is built under the cwd.
@@ -144,13 +180,14 @@ fn global_and_project_paths(
 }
 
 /// Global ~/.config/redacted/config.yaml merged with <cwd>/.redacted.yaml;
-/// a project `override: true` drops the global file. Unreadable files are skipped.
-pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Config {
+/// a project `override: true` drops the global file. A missing file is skipped;
+/// a malformed one is an error.
+pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Result<Config, ConfigError> {
     let (global_path, project_path) =
         global_and_project_paths(home, cwd, "config.yaml", ".redacted.yaml");
     // as_deref() lends the PathBuf inside the Option as a `&Path` for `read_yaml` to borrow.
-    let global: Option<Config> = global_path.as_deref().and_then(read_yaml);
-    let project: Option<Config> = project_path.as_deref().and_then(read_yaml);
+    let global: Option<Config> = global_path.as_deref().map_or(Ok(None), read_yaml)?;
+    let project: Option<Config> = project_path.as_deref().map_or(Ok(None), read_yaml)?;
     // Learned hashes, the heuristic and PII are global only, even under a project override.
     let (version, learned, heuristic, pii) = match &global {
         Some(global) => (
@@ -180,13 +217,13 @@ pub fn load(home: Option<&Path>, cwd: Option<&Path>) -> Config {
         },
     };
     // Struct update: the four named fields, everything else taken from `merged`.
-    Config {
+    Ok(Config {
         version,
         learned,
         heuristic,
         pii,
         ..merged
-    }
+    })
 }
 
 pub const VENDOR_ONLY_NOTICE: &str = "vendor signatures only, no learned secrets, heuristic off; run `redacted init --env PATH` to learn yours";
@@ -198,17 +235,18 @@ pub fn is_vendor_only(config: &Config) -> bool {
 
 /// Learned entries in <cwd>/.redacted.yaml, which `load` ignores; verify warns on them.
 pub fn project_learned_count(cwd: &Path) -> usize {
-    let project: Option<Config> = read_yaml(&cwd.join(".redacted.yaml"));
+    // A malformed file counts 0 here: verify's `config files` check already fails on it.
+    let project: Option<Config> = read_yaml(&cwd.join(".redacted.yaml")).ok().flatten();
     project.map_or(0, |project| project.learned.len())
 }
 
 /// Global engine.yml merged with <cwd>/.redacted.engine.yml, same override rule.
-pub fn load_engine(home: Option<&Path>, cwd: Option<&Path>) -> EngineConfig {
+pub fn load_engine(home: Option<&Path>, cwd: Option<&Path>) -> Result<EngineConfig, ConfigError> {
     let (global_path, project_path) =
         global_and_project_paths(home, cwd, "engine.yml", ".redacted.engine.yml");
-    let global: Option<EngineConfig> = global_path.as_deref().and_then(read_yaml);
-    let project: Option<EngineConfig> = project_path.as_deref().and_then(read_yaml);
-    match (global, project) {
+    let global: Option<EngineConfig> = global_path.as_deref().map_or(Ok(None), read_yaml)?;
+    let project: Option<EngineConfig> = project_path.as_deref().map_or(Ok(None), read_yaml)?;
+    let merged = match (global, project) {
         (None, None) => EngineConfig::default(),
         (Some(global), None) => global,
         (None, Some(project)) => project,
@@ -218,7 +256,8 @@ pub fn load_engine(home: Option<&Path>, cwd: Option<&Path>) -> EngineConfig {
             patterns: [global.patterns, project.patterns].concat(),
             ..global
         },
-    }
+    };
+    Ok(merged)
 }
 
 #[cfg(test)]

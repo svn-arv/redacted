@@ -64,7 +64,7 @@ Other paths:
 - `config::load_engine` merges `~/.config/redacted/engine.yml` with `<cwd>/.redacted.engine.yml`.
 - Merge rules: lists concatenate, `ignore_internal_tools` is ORed, a project `override: true` drops the global file.
 - `version`, `learned`, `heuristic` and `pii` always come from the global config, even under `override`.
-- A missing, unreadable or malformed file is treated as absent.
+- A missing file is treated as absent. One that exists but does not read or parse is an error naming the file: hook mode withholds and names only the file in the notice (the message, which can quote the file, goes to stderr), raw-text and stream modes exit 1, `verify` fails `config files`.
 - `config::home_dir` returns `None` for an unset or empty `HOME`, so no path is built under the working directory.
 - `EngineConfig` ignores the 0.7 keys `keywords`, `heuristic` and `value_safe_char` like any unknown key.
 
