@@ -235,7 +235,7 @@ fn picker_row_shows_key_hint_and_shape_never_the_value() {
 }
 
 #[test]
-fn merge_learned_into_config_keeps_other_fields_and_merges_by_name() {
+fn merge_learned_into_config_keeps_other_fields_and_every_learned_value() {
     let existing = "whitelist: [jwt]\nfuture_field: {a: 1}\nlearned:\n- {name: keep, sha256: aa, len: 1}\n- {name: stripe_key, sha256: old, len: 1}\n";
     let new = LearnedSecret {
         name: "stripe_key".into(),
@@ -256,8 +256,15 @@ fn merge_learned_into_config_keeps_other_fields_and_merges_by_name() {
     assert_eq!(doc["future_field"]["a"], serde_yaml::Value::from(1));
     let learned: Vec<LearnedSecret> = serde_yaml::from_value(doc["learned"].clone()).unwrap();
     let names: Vec<_> = learned.iter().map(|entry| entry.name.as_str()).collect();
-    assert_eq!(names, ["keep", "stripe_key", "db_pass"]);
-    assert_eq!(learned[1], new);
+    assert_eq!(names, ["keep", "stripe_key", "stripe_key_2", "db_pass"]);
+    assert_eq!(learned[1].sha256, "old");
+    assert_eq!(
+        learned[2],
+        LearnedSecret {
+            name: "stripe_key_2".into(),
+            ..new
+        }
+    );
     assert!(
         !out.contains("shape: null"),
         "absent shape is omitted:\n{out}"
@@ -268,6 +275,56 @@ fn merge_learned_into_config_keeps_other_fields_and_merges_by_name() {
             .unwrap()
             .starts_with("version: 2\n")
     );
+}
+
+fn learned_names_after_merge(existing: &str, entries: &[LearnedSecret]) -> Vec<String> {
+    let out = merge_learned_into_config(existing, entries).unwrap();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+    let learned: Vec<LearnedSecret> = serde_yaml::from_value(doc["learned"].clone()).unwrap();
+    learned.into_iter().map(|entry| entry.name).collect()
+}
+
+fn db_password(sha256: &str) -> LearnedSecret {
+    LearnedSecret {
+        name: "db_password".into(),
+        sha256: sha256.into(),
+        byte_len: 12,
+        shape: None,
+    }
+}
+
+#[test]
+fn two_values_under_one_name_both_stay_redacted() {
+    // DB_PASSWORD in .env and in .env.production: dropping either leaks it.
+    let names = learned_names_after_merge("", &[db_password("aa"), db_password("bb")]);
+    assert_eq!(names, ["db_password", "db_password_2"]);
+}
+
+#[test]
+fn a_suffix_never_takes_a_name_the_user_already_chose() {
+    let existing = "learned:\n- {name: db_password, sha256: aa, len: 12}\n- {name: db_password_2, sha256: hand, len: 12}\n";
+    let names = learned_names_after_merge(existing, &[db_password("cc")]);
+    assert_eq!(names, ["db_password", "db_password_2", "db_password_3"]);
+}
+
+#[test]
+fn rerunning_init_on_an_already_suffixed_value_adds_nothing() {
+    // A value already in the file is never added again, so re-runs pile up no copies.
+    let existing = "learned:\n- {name: db_password, sha256: aa, len: 12}\n- {name: db_password_2, sha256: bb, len: 12}\n";
+    let names = learned_names_after_merge(existing, &[db_password("aa"), db_password("bb")]);
+    assert_eq!(names, ["db_password", "db_password_2"]);
+}
+
+#[test]
+fn a_value_already_learned_under_another_key_adds_nothing() {
+    // The scrubber carries one label per value, so a second name would be dead data.
+    let redis_password = LearnedSecret {
+        name: "redis_password".into(),
+        ..db_password("aa")
+    };
+    let existing = "learned:\n- {name: db_password, sha256: aa, len: 12}\n";
+    let names = learned_names_after_merge(existing, &[redis_password]);
+    assert_eq!(names, ["db_password"]);
 }
 
 #[test]
