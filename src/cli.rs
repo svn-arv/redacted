@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::config::{self, Config, ConfigError, EngineConfig};
 use crate::scrub::Scrubber;
-use crate::{hook, init, stats, stream, verify};
+use crate::{hook, init, pre_hook, stats, stream, verify};
 
 #[derive(Parser)]
 #[command(
@@ -108,6 +108,12 @@ fn run_scrub() -> Result<(), String> {
         .map_err(|e| format!("scrub: read stdin: {e}"))?;
     let is_hook_payload = looks_like_hook_payload(&stdin_bytes);
     let payload: Value = serde_json::from_slice(&stdin_bytes).unwrap_or(Value::Null);
+    // Before config loads: a broken config or ignore_internal_tools must not stop the Monitor rewrite.
+    if payload_string(&payload, "hook_event_name") == "PreToolUse" {
+        let out = pre_hook::respond(&payload, std::env::current_exe());
+        let _ = io::stdout().write_all(&out);
+        return Ok(());
+    }
     // An absent or empty cwd reads no project config, not one under the process cwd.
     let cwd = payload
         .get("cwd")

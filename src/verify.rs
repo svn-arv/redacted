@@ -69,6 +69,7 @@ pub fn run() -> Result<(), String> {
     };
     let mut checks = vec![check_binary()];
     checks.extend(check_hooks(home_dir, cwd));
+    checks.push(check_monitor_hook(home_dir, cwd));
     checks.push(config_files);
     checks.push(check_patterns(&config, &engine_config));
     checks.push(check_test_scrub());
@@ -136,6 +137,32 @@ fn check_hooks(home_dir: Option<&Path>, cwd: Option<&Path>) -> Vec<Check> {
     out
 }
 
+/// Monitor events skip PostToolUse, so an install from before the PreToolUse
+/// hook leaks them until `redacted init` runs again.
+fn check_monitor_hook(home_dir: Option<&Path>, cwd: Option<&Path>) -> Check {
+    let files = [
+        home_dir.map(|home| home.join(".claude/settings.json")),
+        cwd.map(|dir| dir.join(".claude/settings.local.json")),
+    ];
+    let is_registered = files.iter().flatten().any(|path| {
+        matches!(settings::read(path), Ok(Some(found))
+            if settings::find_redacted_entry(&found, "PreToolUse").is_some())
+    });
+    if is_registered {
+        Check::new(
+            "monitor hook",
+            CheckStatus::Pass,
+            "PreToolUse Monitor entry found",
+        )
+    } else {
+        Check::new(
+            "monitor hook",
+            CheckStatus::Fail,
+            "no PreToolUse Monitor entry in either settings file, run: redacted init",
+        )
+    }
+}
+
 fn check_settings_file(path: &Path, label: &'static str) -> Check {
     let shown = path.display();
     let fail = |detail: String| Check::new(label, CheckStatus::Fail, detail);
@@ -150,12 +177,12 @@ fn check_settings_file(path: &Path, label: &'static str) -> Check {
         Ok(settings) => settings,
         Err(e) => return fail(format!("{shown} contains invalid JSON: {e}")),
     };
-    if settings::post_tool_use_entries(&settings).is_empty() {
+    if settings::hook_entries(&settings, "PostToolUse").is_empty() {
         return fail(format!(
             "no PostToolUse hooks in {shown}, run: redacted init"
         ));
     }
-    let Some(entry) = settings::find_redacted_entry(&settings) else {
+    let Some(entry) = settings::find_redacted_entry(&settings, "PostToolUse") else {
         return fail("PostToolUse exists but has no redacted entry, run: redacted init".into());
     };
     // The entry exists; make sure the binary it points to still does.

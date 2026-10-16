@@ -45,6 +45,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/engine.yml` | Built-in patterns and `allow_values`, compiled in with `include_str!`. |
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
 | `src/stream.rs` | `redacted scrub --stream`: line-by-line scrub with PEM block buffering, fail closed per line. |
+| `src/pre_hook.rs` | PreToolUse protocol: rewrites a Monitor command to pipe through `scrub --stream`, denies `ws` monitors, fails closed with a deny. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
 | `src/fake_secrets.rs` | Test only (`#[cfg(test)]`): synthetic secret generators. |
 | `src/<module>/tests.rs` | Unit tests for `src/<module>.rs`, declared there as `#[cfg(test)] mod tests;` (for example `src/scrub/tests.rs`, `src/scrub/guards/tests.rs`). |
@@ -179,6 +180,11 @@ A hit prints one line:
 - Fail closed: a parse error, a wrong field type, a scrubber that failed to build, or a panic (`catch_unwind` in `scrub_payload_or_withhold`) prints `withheld_output(stdin)`, an envelope whose `reason` and `updatedToolOutput` carry no tool output. `updatedToolOutput` mirrors `tool_response` with every string leaf withheld (object keys are kept); unparsable input or no `tool_response` gets the bare `WITHHELD` sentence.
 - `ignore_internal_tools` skips only a `tool_name` that is a string other than `"Bash"`. A missing or bad name is still scrubbed or fails closed.
 - Exit code: always 0 once stdin is read. Only a failed stdin read exits 1.
+- PreToolUse: `cli::run_scrub` sends a payload whose `hook_event_name` is `"PreToolUse"` to `pre_hook::respond` before any config loads. Only `tool_name` `"Monitor"` gets an answer; any other prints nothing. The rewrite (no `permissionDecision`, so Claude Code still asks as usual):
+  ```json
+  {"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{<tool_input with command = "( <command> ) 2>&1 | '<exe>' scrub --stream --cwd '<cwd>'">}}}
+  ```
+  A `ws` call, or one that cannot be rewritten (bad `tool_input`, no `command`, no `cwd`, no binary path), gets `"permissionDecision":"deny"` with a `permissionDecisionReason` that names fields only, never payload content. A command already holding `scrub --stream` prints nothing.
 - Pre-v2 notice: when the global config exists with no `version`, the first hit in each `session_id` gets `[redacted] config is v1: run `redacted init` to learn your secrets.` above its `reason` (`hook::prepend_reason`). Seen sessions are stored in `notified.txt` next to the stats file.
 
 ## Stats file

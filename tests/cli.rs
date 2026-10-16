@@ -233,7 +233,8 @@ fn verify_reports_checks_and_fails_without_a_hook() {
         "[PASS] test scrub - caught 1 secret(s) in test input",
         "[PASS] learned secrets - config version 1, 0 learned, heuristic disabled",
         "[WARN] protection - vendor signatures only, no learned secrets, heuristic off; run `redacted init --env PATH` to learn yours",
-        "5 passed, 3 failed",
+        "[FAIL] monitor hook - no PreToolUse Monitor entry in either settings file, run: redacted init",
+        "5 passed, 4 failed",
     ] {
         assert!(out.contains(line), "missing {line:?} in:\n{out}");
     }
@@ -245,7 +246,7 @@ fn verify_summary_says_check_s_failed_in_plain_words() {
     let output = run_redacted(&dir, &["verify"], "");
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
-    assert!(err.contains("3 check(s) failed"), "{err}");
+    assert!(err.contains("4 check(s) failed"), "{err}");
 }
 
 #[test]
@@ -292,7 +293,9 @@ fn verify_passes_with_a_registered_hook() {
     fs::create_dir_all(dir.join("home/.claude")).unwrap();
     fs::write(
         dir.join("home/.claude/settings.json"),
-        format!(r#"{{"hooks":{{"PostToolUse":[{{"matcher":"","hooks":[{{"type":"command","command":"{bin} scrub"}}]}}]}}}}"#),
+        format!(
+            r#"{{"hooks":{{"PostToolUse":[{{"matcher":"","hooks":[{{"type":"command","command":"{bin} scrub"}}]}}],"PreToolUse":[{{"matcher":"Monitor","hooks":[{{"type":"command","command":"{bin} scrub"}}]}}]}}}}"#
+        ),
     )
     .unwrap();
     let output = run_redacted(&dir, &["verify"], "");
@@ -302,6 +305,68 @@ fn verify_passes_with_a_registered_hook() {
         out.contains("[PASS] global hook") && out.contains("[SKIP] local hook"),
         "{out}"
     );
+    assert!(out.contains("[PASS] monitor hook"), "{out}");
+}
+
+#[test]
+fn verify_fails_a_post_tool_use_only_install_so_a_1_1_user_reruns_init_for_monitor() {
+    let dir = sandbox("verify-no-monitor");
+    let bin = env!("CARGO_BIN_EXE_redacted");
+    fs::create_dir_all(dir.join("home/.claude")).unwrap();
+    fs::write(
+        dir.join("home/.claude/settings.json"),
+        format!(r#"{{"hooks":{{"PostToolUse":[{{"hooks":[{{"type":"command","command":"{bin} scrub"}}]}}]}}}}"#),
+    )
+    .unwrap();
+    let output = run_redacted(&dir, &["verify"], "");
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{out}");
+    assert!(out.contains("[PASS] global hook"), "{out}");
+    assert!(
+        out.contains("[FAIL] monitor hook - no PreToolUse Monitor entry in either settings file, run: redacted init"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_monitor_pre_tool_use_payload_gets_a_command_whose_output_comes_back_scrubbed() {
+    let dir = sandbox("monitor");
+    // A space and a quote in the project path must survive the shell quoting.
+    let project = dir.join("bob's proj");
+    fs::create_dir_all(&project).unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Monitor",
+        "cwd": project.to_str().unwrap(),
+        "tool_input": {
+            "command": format!("echo k {} >&2", fake_aws_access_key()),
+            "description": "keys",
+            "timeout_ms": 40000,
+        },
+    });
+    let output = run_redacted(&dir, &["scrub"], &payload.to_string());
+    assert!(output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let updated = &response["hookSpecificOutput"]["updatedInput"];
+    assert!(
+        response["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none()
+    );
+    assert_eq!(updated["description"], "keys");
+
+    // Run the rewritten command as Monitor would: stderr included, secret scrubbed.
+    let monitored = Command::new("sh")
+        .arg("-c")
+        .arg(updated["command"].as_str().unwrap())
+        .env("HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&monitored.stdout),
+        "k [REDACTED:aws_access_key ...Q7Q7]\n"
+    );
+    assert!(monitored.stderr.is_empty());
 }
 
 #[test]

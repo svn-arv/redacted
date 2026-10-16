@@ -7,6 +7,7 @@ mod config;
 mod fake_secrets;
 mod hook;
 mod init;
+mod pre_hook;
 mod scrub;
 mod settings;
 mod stats;

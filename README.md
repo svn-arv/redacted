@@ -95,7 +95,7 @@ What `init` does, in order:
 5. Prints the merged `~/.config/redacted/config.yaml` and asks `Write it?` (default No).
    - No: exits 1 with `init: nothing written`. The hook is not installed.
    - Yes: writes the file with mode 0600, sets `version: 2`, merges `learned` entries by name and keeps every other key.
-6. Registers `<absolute path of this binary> scrub` as a PostToolUse hook. An existing `redacted scrub` entry is replaced. Other hooks and settings are kept.
+6. Registers `<absolute path of this binary> scrub` as a PostToolUse hook and as a PreToolUse hook with matcher `Monitor` ([Background commands](#background-commands-monitor)). An existing `redacted scrub` entry is replaced. Other hooks and settings are kept.
 7. Prints a notice when only vendor signatures are active (no learned entries, heuristic off).
 
 Safe to run again.
@@ -296,6 +296,7 @@ Prints one line per check and exits 1 when any check fails.
 | `binary` | Path of the running binary. |
 | `global hook`, `local hook` | FAIL when the settings file is missing or invalid JSON, has no `redacted scrub` entry, or the entry's binary is gone. When one passes, the other shows SKIP. |
 | `hook registered` | FAIL when neither file has the hook. |
+| `monitor hook` | FAIL when neither file has the PreToolUse `Monitor` entry. Run `redacted init` again. |
 | `config files` | Which of the four files exist. FAIL with the parse error when one does not parse. |
 | `patterns load` | FAIL when a pattern or learned shape does not compile. |
 | `test scrub` | FAIL when the built-in patterns miss a sample database URL. |
@@ -328,8 +329,8 @@ redacted uninstall           # both settings files
 redacted uninstall --local   # .claude/settings.local.json only
 ```
 
-- Removes the `redacted scrub` entry from `~/.claude/settings.json` and `./.claude/settings.local.json`.
-- Other hooks and settings are kept. A `PostToolUse` or `hooks` key left empty is removed.
+- Removes the `redacted scrub` entries (PostToolUse and PreToolUse) from `~/.claude/settings.json` and `./.claude/settings.local.json`.
+- Other hooks and settings are kept. A `PostToolUse`, `PreToolUse` or `hooks` key left empty is removed.
 - The binary and `~/.config/redacted/config.yaml` stay.
 
 ## Upgrading from 0.7
@@ -385,6 +386,23 @@ The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 re
 - If the scrubber fails on a line, `[redacted] line withheld` replaces it and the stream goes on.
 - No stats are recorded and nothing is printed on stderr.
 - Claude Code's Monitor tool is the reason: its events skip PostToolUse, so the filter must run inside the monitored command ([#58](https://github.com/svn-arv/redacted/issues/58)).
+
+### Background commands (Monitor)
+
+`redacted init` also registers `redacted scrub` as a PreToolUse hook with matcher `Monitor`. Before a Monitor command runs, the hook rewrites it to:
+
+```
+( <command> ) 2>&1 | '<redacted binary>' scrub --stream --cwd '<project dir>'
+```
+
+- Each output line reaches the model only after the stream filter, line by line.
+- `2>&1` is deliberate: Monitor turns only stdout into events, but stderr lands in an output file the model can read.
+- Other `tool_input` fields (`description`, `timeout_ms`) are kept. A command that already contains `scrub --stream` is left alone.
+- A WebSocket monitor (`ws`) is denied: its frames never pass through a shell.
+- A Monitor call the hook cannot rewrite is denied, never run unfiltered.
+- The hook never approves the call. Claude Code applies the rewrite and then runs its usual permission check on the new command, so a permission rule written for the bare command may now prompt.
+- Bash `run_in_background` is not covered.
+- Installed before this hook existed? Run `redacted init` again; `redacted verify` fails `monitor hook` until you do.
 
 ## Known limitations
 

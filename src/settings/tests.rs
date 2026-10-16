@@ -27,7 +27,7 @@ fn install_hook_creates_new_file() {
     let path = fresh_temp_dir("hook-new").join(".claude/settings.json");
     install_hook(&path, "/usr/local/bin/redacted").unwrap();
     assert_eq!(
-        post_tool_use_entries(&read_back(&path)),
+        hook_entries(&read_back(&path), "PostToolUse"),
         [json!({"hooks": [{"type": "command", "command": "/usr/local/bin/redacted scrub"}]})]
     );
 }
@@ -45,10 +45,10 @@ fn install_hook_preserves_existing_settings() {
     let written = read_back(&path);
     assert_eq!(written["theme"], "dark");
     assert_eq!(
-        written["hooks"]["PreToolUse"],
-        existing["hooks"]["PreToolUse"]
+        hook_entries(&written, "PreToolUse")[0],
+        existing["hooks"]["PreToolUse"][0]
     );
-    assert_eq!(post_tool_use_entries(&written).len(), 1);
+    assert_eq!(hook_entries(&written, "PostToolUse").len(), 1);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn install_hook_preserves_other_post_tool_use_hooks_verbatim() {
     .unwrap();
     install_hook(&path, "/usr/local/bin/redacted").unwrap();
     let written = read_back(&path);
-    let entries = post_tool_use_entries(&written);
+    let entries = hook_entries(&written, "PostToolUse");
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0], other);
 }
@@ -79,7 +79,7 @@ fn install_hook_replaces_existing_redacted() {
     ]}});
     fs::write(&path, existing.to_string()).unwrap();
     install_hook(&path, "/new/path/redacted").unwrap();
-    let cmds = commands(post_tool_use_entries(&read_back(&path)));
+    let cmds = commands(hook_entries(&read_back(&path), "PostToolUse"));
     assert_eq!(
         cmds,
         ["/usr/local/bin/other-hook", "/new/path/redacted scrub"]
@@ -91,7 +91,7 @@ fn install_hook_is_idempotent() {
     let path = fresh_temp_dir("hook-twice").join(".claude/settings.json");
     install_hook(&path, "/usr/local/bin/redacted").unwrap();
     install_hook(&path, "/usr/local/bin/redacted").unwrap();
-    assert_eq!(post_tool_use_entries(&read_back(&path)).len(), 1);
+    assert_eq!(hook_entries(&read_back(&path), "PostToolUse").len(), 1);
 }
 
 #[test]
@@ -202,4 +202,61 @@ fn is_redacted_entry_matches_the_command_suffix() {
         let entry = json!({"hooks": [{"type": "command", "command": cmd}]});
         assert_eq!(is_redacted_entry(&entry), want, "{cmd}");
     }
+}
+
+fn monitor_entry(bin: &str) -> Value {
+    json!({"matcher": "Monitor", "hooks": [{"type": "command", "command": format!("{bin} scrub")}]})
+}
+
+#[test]
+fn install_hook_also_wraps_monitor_commands_because_their_events_skip_post_tool_use() {
+    let path = fresh_temp_dir("hook-both").join(".claude/settings.json");
+    install_hook(&path, "/usr/local/bin/redacted").unwrap();
+    let written = read_back(&path);
+    assert_eq!(hook_entries(&written, "PostToolUse").len(), 1);
+    assert_eq!(
+        hook_entries(&written, "PreToolUse"),
+        [monitor_entry("/usr/local/bin/redacted")]
+    );
+}
+
+#[test]
+fn rerunning_install_on_a_post_tool_use_only_install_adds_the_monitor_hook_once() {
+    let path = settings_file(
+        "hook-upgrade",
+        json!({"hooks": {"PostToolUse": [redacted_entry()]}}),
+    );
+    install_hook(&path, "/usr/local/bin/redacted").unwrap();
+    install_hook(&path, "/usr/local/bin/redacted").unwrap();
+    let written = read_back(&path);
+    assert_eq!(hook_entries(&written, "PostToolUse").len(), 1);
+    assert_eq!(
+        hook_entries(&written, "PreToolUse"),
+        [monitor_entry("/usr/local/bin/redacted")]
+    );
+}
+
+#[test]
+fn remove_hook_drops_the_monitor_hook_too_so_uninstall_leaves_no_wrapper_behind() {
+    let rtk =
+        json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/rtk"}]});
+    let path = settings_file(
+        "rm-both",
+        json!({"hooks": {
+            "PostToolUse": [redacted_entry()],
+            "PreToolUse": [rtk, monitor_entry("/usr/local/bin/redacted")],
+        }}),
+    );
+    assert_eq!(remove_hook(&path), Ok(true));
+    assert_eq!(read_back(&path), json!({"hooks": {"PreToolUse": [rtk]}}));
+}
+
+#[test]
+fn remove_hook_finds_a_lone_monitor_hook() {
+    let path = settings_file(
+        "rm-monitor",
+        json!({"hooks": {"PreToolUse": [monitor_entry("/usr/local/bin/redacted")]}}),
+    );
+    assert_eq!(remove_hook(&path), Ok(true));
+    assert_eq!(read_back(&path), json!({}));
 }
