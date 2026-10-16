@@ -392,15 +392,14 @@ The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 re
 `redacted init` also registers `redacted scrub` as a PreToolUse hook with matcher `Monitor`. Before a Monitor command runs, the hook rewrites it to:
 
 ```
-( <command>
-) 2>&1 | '<redacted binary>' scrub --stream --cwd '<project dir>'
+bash -c '<command>' 2>&1 | '<redacted binary>' scrub --stream --cwd '<project dir>'
 ```
 
-The newline before `)` keeps a command that ends in a `# comment` or a heredoc terminator from swallowing it.
+The command is passed to `bash -c` as one quoted word, so nothing in it can close the wrapper and run outside the filter.
 
 - Each output line reaches the model only after the stream filter, line by line.
 - `2>&1` is deliberate: Monitor turns only stdout into events, but stderr lands in an output file the model can read.
-- Other `tool_input` fields (`description`, `timeout_ms`) are kept. A command that already contains `scrub --stream` is left alone.
+- Other `tool_input` fields (`description`, `timeout_ms`) are kept. Every Monitor command is wrapped; with both a global and a local hook it is filtered twice, which is harmless.
 - A WebSocket monitor (`ws`) is denied: its frames never pass through a shell.
 - A Monitor call the hook cannot rewrite is denied, never run unfiltered.
 - The hook never approves the call. Claude Code applies the rewrite and then runs its usual permission check on the new command, so a permission rule written for the bare command may now prompt.
