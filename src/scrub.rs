@@ -344,6 +344,8 @@ mod tests {
         pub(super) input: String,
         expected: String,
         pub(super) secret: String,
+        /// A PII row, compiled only when its `pii` toggle is on.
+        pub(super) opt_in: bool,
     }
 
     pub(super) fn builtin_pattern_cases() -> Vec<PatternCase> {
@@ -355,6 +357,7 @@ mod tests {
                 input: secret.clone(),
                 expected: value_only_marker(name, &secret),
                 secret,
+                opt_in: matches!(name, "email" | "phone"),
             });
         }
         // includes_key patterns keep the key and separator and drop the label.
@@ -369,6 +372,7 @@ mod tests {
                 input: format!("{key}{sep}{value}"),
                 expected,
                 secret: value,
+                opt_in: false,
             });
         }
         cases

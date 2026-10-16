@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::Scrubber;
 use super::tests::{
     PatternCase, builtin_pattern_cases, clean_corpus, default_scrubber, enabled_heuristic,
-    scrubber_with_heuristic,
+    pii_scrubber, scrubber_with_heuristic,
 };
 
 /// Plain placements carry the recall floor. Expected misses are reported, never asserted.
@@ -379,6 +379,14 @@ fn benchmark_seed() -> u64 {
     }
 }
 
+fn plain_misses(outcomes: &[Outcome]) -> Vec<String> {
+    outcomes
+        .iter()
+        .filter(|o| o.placement.group == Group::Plain && !o.caught)
+        .map(|o| format!("{} in {}", o.pattern, o.placement.name))
+        .collect()
+}
+
 #[test]
 fn detection_benchmark() {
     let seed = benchmark_seed();
@@ -390,6 +398,7 @@ fn detection_benchmark() {
     );
     let default_outcomes = run_matrix(&default, &corpus);
     let heuristic_outcomes = run_matrix(&heuristic, &corpus);
+    let pii_outcomes = run_matrix(&pii_scrubber(), &corpus);
     let precision = precision(&default, &heuristic);
     if let Ok(path) = std::env::var("REDACTED_BENCHMARK_REPORT") {
         let report = header(seed)
@@ -400,14 +409,15 @@ fn detection_benchmark() {
             + &footer(seed);
         std::fs::write(path, report).unwrap();
     }
-    let plain_misses: Vec<String> = default_outcomes
-        .iter()
-        .filter(|o| o.placement.group == Group::Plain && !o.caught)
-        .map(|o| format!("{} in {}", o.pattern, o.placement.name))
-        .collect();
+    let default_misses = plain_misses(&default_outcomes);
     assert!(
-        plain_misses.is_empty(),
-        "default config missed (seed {seed}): {plain_misses:?}"
+        default_misses.is_empty(),
+        "default config missed (seed {seed}): {default_misses:?}"
+    );
+    let pii_misses = plain_misses(&pii_outcomes);
+    assert!(
+        pii_misses.is_empty(),
+        "PII toggles on missed (seed {seed}): {pii_misses:?}"
     );
     let false_positives: Vec<&String> =
         precision.iter().filter(|p| p.1 > 0).map(|p| &p.0).collect();
