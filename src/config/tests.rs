@@ -67,7 +67,7 @@ fn a_malformed_global_file_is_an_error_naming_it_because_defaults_would_drop_lea
     let (home, cwd) = temp_home_and_project("bad-global");
     let path = home.join(".config/redacted/config.yaml");
     fs::write(&path, "learned: [\n").unwrap();
-    let error = load(Some(&home), Some(&cwd)).unwrap_err();
+    let error = load(Some(&home), Some(&cwd)).unwrap_err().to_string();
     assert!(
         error.starts_with(&format!("{}: ", path.display())),
         "{error}"
@@ -88,7 +88,7 @@ fn a_malformed_project_file_is_an_error_naming_it_instead_of_running_with_the_gl
     .unwrap();
     let path = cwd.join(".redacted.yaml");
     fs::write(&path, "whitelist: {not: a list}\n").unwrap();
-    let error = load(Some(&home), Some(&cwd)).unwrap_err();
+    let error = load(Some(&home), Some(&cwd)).unwrap_err().to_string();
     assert!(
         error.starts_with(&format!("{}: ", path.display())),
         "{error}"
@@ -100,7 +100,9 @@ fn a_malformed_engine_file_is_an_error_naming_it_because_its_patterns_would_vani
     let (home, cwd) = temp_home_and_project("bad-engine");
     let path = home.join(".config/redacted/engine.yml");
     fs::write(&path, "patterns: {not: a list}\n").unwrap();
-    let error = load_engine(Some(&home), Some(&cwd)).unwrap_err();
+    let error = load_engine(Some(&home), Some(&cwd))
+        .unwrap_err()
+        .to_string();
     assert!(
         error.starts_with(&format!("{}: ", path.display())),
         "{error}"

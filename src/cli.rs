@@ -12,7 +12,7 @@ use std::process::{Command, ExitCode};
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
 
-use crate::config::{self, Config, EngineConfig};
+use crate::config::{self, Config, ConfigError, EngineConfig};
 use crate::scrub::Scrubber;
 use crate::{hook, init, stats, stream, verify};
 
@@ -123,6 +123,7 @@ fn run_scrub() -> Result<(), String> {
     // Test mode: anything but a JSON object is scrubbed as raw text.
     if !is_hook_payload {
         let scrubber = loaded
+            .map_err(String::from)
             .and_then(|(config, engine_config)| Scrubber::new(&config, &engine_config))
             .map_err(|e| format!("scrub: {e}"))?;
         scrub_raw_text(&stdin_bytes, &scrubber);
@@ -138,14 +139,20 @@ fn respond_to_hook(
     stdin_bytes: &[u8],
     payload: &Value,
     home_dir: Option<&Path>,
-    loaded: Result<(Config, EngineConfig), String>,
+    loaded: Result<(Config, EngineConfig), ConfigError>,
 ) {
     // A config that does not parse withholds before it can skip a tool or add the v1 notice.
+    // The model reads the reason, so it names the file only; the serde message, which
+    // can quote the file, goes to stderr.
     let (config, engine_config) = match loaded {
         Ok(loaded) => loaded,
-        Err(e) => {
-            let withheld = hook::withheld_output(stdin_bytes);
-            let out = hook::prepend_reason(&withheld, &format!("[redacted] {e}"));
+        Err(error) => {
+            eprintln!("{error}");
+            let notice = format!(
+                "[redacted] config file does not parse: {}; run redacted verify",
+                error.path.display()
+            );
+            let out = hook::prepend_reason(&hook::withheld_output(stdin_bytes), &notice);
             let _ = io::stdout().write_all(&out);
             return;
         }
