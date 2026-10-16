@@ -301,8 +301,9 @@ fn picker_row(key: &str, value: &str, learned: &Result<LearnedSecret, &str>) -> 
     )
 }
 
-/// Merges `entries` into the config text, keeping every other field and every
-/// learned value: a new value under a taken name gets a numeric suffix.
+/// Merges `entries` into the config text, keeping every other field. A value
+/// already learned is never added twice, whatever its key; a new value under a
+/// taken name gets a numeric suffix.
 fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Result<String, String> {
     let mut doc = if existing.trim().is_empty() {
         serde_yaml::Value::Mapping(Default::default())
@@ -319,7 +320,8 @@ fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Resul
         None => Vec::new(),
     };
     for entry in entries {
-        if learned.iter().any(|known| is_same_secret(known, entry)) {
+        // The scrubber keeps one label per hash, so a second name would be dead data.
+        if learned.iter().any(|known| known.sha256 == entry.sha256) {
             continue;
         }
         let name = unused_name(&learned, &entry.name);
@@ -334,13 +336,6 @@ fn merge_learned_into_config(existing: &str, entries: &[LearnedSecret]) -> Resul
         serde_yaml::to_value(&learned).map_err(|e| e.to_string())?,
     );
     serde_yaml::to_string(&doc).map_err(|e| e.to_string())
-}
-
-/// Same value under `name` or one of its suffixes, so a re-run adds no copy.
-fn is_same_secret(known: &LearnedSecret, entry: &LearnedSecret) -> bool {
-    let suffix = known.name.strip_prefix(&format!("{}_", entry.name));
-    let is_suffixed = suffix.is_some_and(|digits| digits.parse::<u32>().is_ok());
-    known.sha256 == entry.sha256 && (known.name == entry.name || is_suffixed)
 }
 
 /// `name`, or the first `name_2`, `name_3`, ... not already in `learned`.
