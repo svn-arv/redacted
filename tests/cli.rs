@@ -202,8 +202,9 @@ fn deeply_nested_payload_is_withheld_not_treated_as_text() {
 fn version_flag_prints_the_cargo_version() {
     let dir = sandbox("version");
     let output = run_redacted(&dir, &["--version"], "");
-    // The release tag must match Cargo.toml; v1.0.0 is the Rust cutover.
-    assert_eq!(stdout(&output), "redacted version 1.0.0\n");
+    // release.yml checks the tag against Cargo.toml; this checks the binary against it.
+    let expected = format!("redacted version {}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(stdout(&output), expected);
 }
 
 #[test]
