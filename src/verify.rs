@@ -207,14 +207,17 @@ fn check_config_files(
 
 // Includes user patterns: a bad one now withholds every hook output, so say so here.
 fn check_patterns(config: &Config, engine_config: &EngineConfig) -> Check {
-    match Scrubber::new(config, engine_config) {
-        Ok(_) => Check::new("patterns load", CheckStatus::Pass, "all patterns compiled"),
-        Err(e) => Check::new(
-            "patterns load",
-            CheckStatus::Fail,
-            format!("failed to compile patterns: {e}"),
-        ),
+    match compile_patterns(config, engine_config) {
+        Ok(()) => Check::new("patterns load", CheckStatus::Pass, "all patterns compiled"),
+        Err(e) => Check::new("patterns load", CheckStatus::Fail, e),
     }
+}
+
+/// The `patterns load` check without the report line; `redacted config` runs it after an edit.
+pub fn compile_patterns(config: &Config, engine_config: &EngineConfig) -> Result<(), String> {
+    Scrubber::new(config, engine_config)
+        .map(|_| ())
+        .map_err(|e| format!("failed to compile patterns: {e}"))
 }
 
 fn check_learned(cwd: Option<&Path>, config: &Config) -> Vec<Check> {

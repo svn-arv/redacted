@@ -4,8 +4,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::Value;
@@ -45,6 +47,12 @@ enum CliCommand {
         #[arg(long)]
         local: bool,
     },
+    /// Print the global config, or open it in the editor with --edit
+    Config {
+        /// Open ~/.config/redacted/config.yaml in $VISUAL, $EDITOR or vi, then check it
+        #[arg(long)]
+        edit: bool,
+    },
     /// Remove the redacted hook from Claude Code settings (keeps the config)
     Uninstall {
         /// Remove from .claude/settings.local.json only
@@ -67,6 +75,8 @@ pub fn run() -> ExitCode {
         Some(CliCommand::Stats) => show_stats(),
         Some(CliCommand::Init { env_file, local }) => init::run(env_file, local),
         Some(CliCommand::Uninstall { local }) => init::uninstall(local),
+        Some(CliCommand::Config { edit: true }) => edit_global_config(),
+        Some(CliCommand::Config { edit: false }) => show_global_config(),
         None => {
             let _ = Cli::command().print_help();
             Ok(())
@@ -194,6 +204,71 @@ fn looks_like_hook_payload(data: &[u8]) -> bool {
         Ok(_) => true,
         Err(e) => e.to_string().starts_with("recursion limit exceeded"),
     }
+}
+
+/// Prints the global config as written, comments included.
+fn show_global_config() -> Result<(), String> {
+    let home_dir = config::home_dir().ok_or("config: cannot determine home directory")?;
+    let path = config::global_config_path(&home_dir);
+    let shown = path.display();
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("config: no file at {shown}; run redacted init"));
+        }
+        Err(e) => return Err(format!("config: {shown}: {e}")),
+    };
+    print!("{text}");
+    Ok(())
+}
+
+/// Opens the global config in the user's editor, then compiles its patterns, so a
+/// broken edit shows now instead of withholding the next hook output.
+fn edit_global_config() -> Result<(), String> {
+    let home_dir = config::home_dir().ok_or("config: cannot determine home directory")?;
+    let path = config::global_config_path(&home_dir);
+    let shown = path.display();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("config: create {}: {e}", dir.display()))?;
+    }
+    // Append mode creates a missing file and leaves an existing one untouched.
+    let mut options = fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
+        .open(&path)
+        .map_err(|e| format!("config: create {shown}: {e}"))?;
+
+    // VISUAL is the full-screen editor, EDITOR the older fallback, vi is on every Unix.
+    let editor = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "vi".to_string());
+    // "code --wait" is a program plus its flags.
+    let mut words = editor.split_whitespace();
+    let program = words.next().unwrap_or("vi");
+    Command::new(program)
+        .args(words)
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("config: cannot start editor {editor}: {e}"))?;
+    // An editor that saves through a new file drops the mode; the file holds secret hashes.
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("config: restore mode 0600 on {shown}: {e}"))?;
+
+    // The hook skips a file that does not parse, dropping learned secrets without a word.
+    let text = fs::read_to_string(&path).map_err(|e| format!("config: {shown}: {e}"))?;
+    serde_yaml::from_str::<config::Config>(&text).map_err(|e| format!("config: {shown}: {e}"))?;
+
+    let cwd = std::env::current_dir().ok();
+    let config = config::load(Some(&home_dir), cwd.as_deref());
+    let engine_config = config::load_engine(Some(&home_dir), cwd.as_deref());
+    verify::compile_patterns(&config, &engine_config).map_err(|e| format!("patterns load: {e}"))?;
+    println!("patterns load: PASS");
+    Ok(())
 }
 
 fn show_stats() -> Result<(), String> {
