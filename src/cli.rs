@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::config;
 use crate::scrub::Scrubber;
-use crate::{hook, init, stats, verify};
+use crate::{hook, init, stats, stream, verify};
 
 #[derive(Parser)]
 #[command(
@@ -31,7 +31,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum CliCommand {
     /// Scrub secrets from a hook payload (stdin -> stdout)
-    Scrub,
+    Scrub {
+        /// Scrub and print each line as it arrives, never reading stdin as a hook payload
+        #[arg(long)]
+        stream: bool,
+        /// Also read the project config in DIR (stream mode only)
+        #[arg(long, value_name = "DIR", requires = "stream")]
+        cwd: Option<PathBuf>,
+    },
     /// Check that redacted is installed and working
     Verify,
     /// Show how often each pattern has redacted secrets
@@ -62,7 +69,8 @@ pub fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let result = match cli.command {
-        Some(CliCommand::Scrub) => run_scrub(),
+        Some(CliCommand::Scrub { stream: true, cwd }) => stream::run(cwd.as_deref()),
+        Some(CliCommand::Scrub { .. }) => run_scrub(),
         Some(CliCommand::Verify) => verify::run(),
         Some(CliCommand::Stats) => show_stats(),
         Some(CliCommand::Init { env_file, local }) => init::run(env_file, local),

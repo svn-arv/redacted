@@ -1,9 +1,12 @@
 //! End-to-end checks of the binary: raw-text mode, payload mode, config, stats.
 
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 /// Built at runtime so no secret-shaped literal sits in the source.
 fn fake_aws_access_key() -> String {
@@ -483,4 +486,71 @@ fn the_global_pii_toggle_reaches_the_hook_so_addresses_leave_the_transcript() {
         response["hookSpecificOutput"]["updatedToolOutput"]["stdout"],
         "mail sent to [REDACTED:email ...y.id]"
     );
+}
+
+#[test]
+fn stream_mode_prints_each_line_before_stdin_closes_so_a_tail_f_monitor_sees_it_live() {
+    let dir = sandbox("stream");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_redacted"))
+        .args(["scrub", "--stream"])
+        .current_dir(dir.join("proj"))
+        .env("HOME", dir.join("home"))
+        .env("REDACTED_STATS_FILE", dir.join("stats.jsonl"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // stdin stays open until the line comes back: closing it would let a read-to-EOF pass.
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "key {}", fake_aws_access_key()).unwrap();
+    let mut child_stdout = BufReader::new(child.stdout.take().unwrap());
+    let (sender, receiver) = mpsc::channel();
+    // A thread does the blocking read, so a regression fails in seconds instead of hanging.
+    thread::spawn(move || {
+        let mut line = String::new();
+        let _ = child_stdout.read_line(&mut line);
+        let _ = sender.send(line);
+    });
+    let Ok(first_line) = receiver.recv_timeout(Duration::from_secs(5)) else {
+        let _ = child.kill();
+        panic!("no line came back while stdin was still open");
+    };
+    assert_eq!(first_line, "key [REDACTED:aws_access_key ...Q7Q7]\n");
+
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stream mode prints no count");
+    assert!(
+        !dir.join("stats.jsonl").exists(),
+        "stream mode records no stats"
+    );
+}
+
+#[test]
+fn stream_mode_reads_the_project_engine_config_from_cwd_like_the_hook_does() {
+    let dir = sandbox("stream-cwd");
+    // Outside the process cwd, so only --cwd can find it.
+    let project = dir.join("elsewhere");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join(".redacted.engine.yml"),
+        "patterns: [{name: canary, regex: 'canary-[0-9]{6}'}]\n",
+    )
+    .unwrap();
+    let line = "seen canary-424242\n";
+
+    let without_cwd = run_redacted(&dir, &["scrub", "--stream"], line);
+    assert_eq!(stdout(&without_cwd), line, "global config only by default");
+
+    let with_cwd = run_redacted(
+        &dir,
+        &["scrub", "--stream", "--cwd", project.to_str().unwrap()],
+        line,
+    );
+    assert!(with_cwd.status.success());
+    let out = stdout(&with_cwd);
+    assert!(out.contains("[REDACTED:canary"), "{out}");
+    assert!(!out.contains("424242"));
 }
