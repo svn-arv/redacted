@@ -16,6 +16,11 @@ thread_local! {
     );
 }
 
+/// Fixes this thread's sequence, so a benchmark run can be replayed from its seed.
+pub fn reseed(seed: u64) {
+    PRNG_STATE.with(|s| s.set(seed | 1));
+}
+
 // xorshift64*: enough randomness for fixtures, no crate needed.
 fn next_random() -> u64 {
     PRNG_STATE.with(|s| {
