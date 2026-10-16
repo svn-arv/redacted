@@ -309,10 +309,22 @@ fn a_suffix_never_takes_a_name_the_user_already_chose() {
 
 #[test]
 fn rerunning_init_on_an_already_suffixed_value_adds_nothing() {
-    // The picker still names the value db_password; it must not pile up copies.
+    // A value already in the file is never added again, so re-runs pile up no copies.
     let existing = "learned:\n- {name: db_password, sha256: aa, len: 12}\n- {name: db_password_2, sha256: bb, len: 12}\n";
     let names = learned_names_after_merge(existing, &[db_password("aa"), db_password("bb")]);
     assert_eq!(names, ["db_password", "db_password_2"]);
+}
+
+#[test]
+fn a_value_already_learned_under_another_key_adds_nothing() {
+    // The scrubber carries one label per value, so a second name would be dead data.
+    let redis_password = LearnedSecret {
+        name: "redis_password".into(),
+        ..db_password("aa")
+    };
+    let existing = "learned:\n- {name: db_password, sha256: aa, len: 12}\n";
+    let names = learned_names_after_merge(existing, &[redis_password]);
+    assert_eq!(names, ["db_password"]);
 }
 
 #[test]
