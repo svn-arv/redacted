@@ -29,7 +29,7 @@ fn a_monitor_command_is_piped_through_the_stream_filter_so_each_event_is_scrubbe
         respond_with_exe(payload),
         concat!(
             r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"#,
-            r#""command":"( tail -f app.log\n) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"}}}"#,
+            r#""command":"bash -c 'tail -f app.log' 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"}}}"#,
             "\n"
         )
     );
@@ -57,16 +57,19 @@ fn a_cwd_with_a_space_and_a_quote_stays_one_shell_word_so_the_filter_reads_the_r
     let out: Value = serde_json::from_str(&respond_with_exe(payload)).unwrap();
     assert_eq!(
         out["hookSpecificOutput"]["updatedInput"]["command"],
-        "( tail -f app.log\n) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/bob'\\''s app'"
+        "bash -c 'tail -f app.log' 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/bob'\\''s app'"
     );
 }
 
 #[test]
-fn an_already_wrapped_command_prints_nothing_so_it_is_never_filtered_twice() {
-    let payload = monitor_payload(json!({
-        "command": "( tail -f app.log ) 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"
-    }));
-    assert_eq!(respond_with_exe(payload), "");
+fn a_command_that_mentions_scrub_stream_is_still_wrapped_so_the_text_cannot_opt_out_of_the_filter()
+{
+    let payload = monitor_payload(json!({"command": "cat .env # scrub --stream"}));
+    let out: Value = serde_json::from_str(&respond_with_exe(payload)).unwrap();
+    assert_eq!(
+        out["hookSpecificOutput"]["updatedInput"]["command"],
+        "bash -c 'cat .env # scrub --stream' 2>&1 | '/opt/bin/redacted' scrub --stream --cwd '/work/app'"
+    );
 }
 
 #[test]
