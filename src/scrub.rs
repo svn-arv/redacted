@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::config::{Config, CustomPattern, EngineConfig, HeuristicConfig};
+use crate::config::{Config, CustomPattern, EngineConfig, HeuristicConfig, PiiConfig};
 use go_regex::go_to_rust_regex;
 // Re-exported so callers write `scrub::sha256_hex`, not `scrub::learned::sha256_hex`.
 pub use guards::percent_decode;
@@ -32,6 +32,8 @@ struct BuiltinPatternYaml {
     prefilters: Vec<String>,
     #[serde(default)]
     prefilters_ignore_case: Vec<String>,
+    #[serde(default)]
+    opt_in: bool,
 }
 
 #[derive(Deserialize)]
@@ -118,9 +120,19 @@ fn compile_go_regex(expr: &str) -> Result<Regex, String> {
 fn compile_vendor_patterns(
     builtin: Vec<BuiltinPatternYaml>,
     user: &[CustomPattern],
+    pii: &PiiConfig,
 ) -> Result<Vec<Pattern>, String> {
     let mut patterns = Vec::new();
     for pattern in builtin {
+        // An opt_in row is PII: it runs only when its toggle in `pii` is on.
+        let is_toggled_on = match pattern.name.as_str() {
+            "email" => pii.email,
+            "phone" => pii.phone,
+            _ => false,
+        };
+        if pattern.opt_in && !is_toggled_on {
+            continue;
+        }
         patterns.push(Pattern {
             regex: compile_go_regex(&pattern.regex)?,
             name: pattern.name,
@@ -143,7 +155,8 @@ impl Scrubber {
     pub fn new(config: &Config, user_engine: &EngineConfig) -> Result<Self, String> {
         let builtin: BuiltinEngine =
             serde_yaml::from_str(BUILTIN_ENGINE_YML).map_err(|e| format!("engine.yml: {e}"))?;
-        let patterns = compile_vendor_patterns(builtin.patterns, &user_engine.patterns)?;
+        let patterns =
+            compile_vendor_patterns(builtin.patterns, &user_engine.patterns, &config.pii)?;
         let allow_values = builtin
             .allow_values
             .iter()
@@ -302,6 +315,21 @@ mod tests {
         Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap()
     }
 
+    /// Both PII toggles on, so the opt-in rows run next to the vendor patterns.
+    pub(super) fn pii_scrubber() -> Scrubber {
+        Scrubber::new(&pii_config(), &EngineConfig::default()).unwrap()
+    }
+
+    fn pii_config() -> Config {
+        Config {
+            pii: crate::config::PiiConfig {
+                email: true,
+                phone: true,
+            },
+            ..Default::default()
+        }
+    }
+
     pub(super) fn value_only_marker(name: &str, secret: &str) -> String {
         format!(
             "[REDACTED:{name} ...{}]",
@@ -316,6 +344,8 @@ mod tests {
         pub(super) input: String,
         expected: String,
         pub(super) secret: String,
+        /// A PII row, compiled only when its `pii` toggle is on.
+        pub(super) opt_in: bool,
     }
 
     pub(super) fn builtin_pattern_cases() -> Vec<PatternCase> {
@@ -327,6 +357,7 @@ mod tests {
                 input: secret.clone(),
                 expected: value_only_marker(name, &secret),
                 secret,
+                opt_in: matches!(name, "email" | "phone"),
             });
         }
         // includes_key patterns keep the key and separator and drop the label.
@@ -341,6 +372,7 @@ mod tests {
                 input: format!("{key}{sep}{value}"),
                 expected,
                 secret: value,
+                opt_in: false,
             });
         }
         cases
@@ -379,6 +411,8 @@ mod tests {
                 "credentialed_url",
                 fake_secrets::database_url("postgis", "db.example.com"),
             ),
+            ("email", fake_secrets::email()),
+            ("phone", fake_secrets::phone()),
         ]
     }
 
@@ -457,7 +491,7 @@ mod tests {
 
     #[test]
     fn builtin_patterns_redact_with_label_and_hint() {
-        let scrubber = default_scrubber();
+        let scrubber = pii_scrubber();
         // Destructuring in the loop header names the fields; `..` skips the rest.
         for PatternCase {
             name,
@@ -560,6 +594,95 @@ mod tests {
         ] {
             assert_eq!(scrubber.scrub(input).text, input, "{input}");
         }
+    }
+
+    /// The fiction-range numbers from the issue, one per supported shape.
+    const PHONE_SHAPES: [&str; 7] = [
+        "+6281234567890",
+        "+62 812-3456-7890",
+        "+1 415 555 0123",
+        "+44 20 7946 0958",
+        "(415) 555-0123",
+        "415-555-0123",
+        "0812-3456-7890",
+    ];
+
+    #[test]
+    fn pii_on_redacts_a_phone_number_in_every_supported_shape_and_placement() {
+        let scrubber = pii_scrubber();
+        for phone in PHONE_SHAPES.into_iter().chain(["0812 3456 7890"]) {
+            let marker = value_only_marker("phone", phone);
+            let line = format!("Call {phone} today");
+            assert_eq!(scrubber.scrub(phone).text, marker, "{phone}");
+            assert_eq!(scrubber.scrub(&line).text, format!("Call {marker} today"));
+        }
+        let json = scrubber.scrub(r#"{"to": "+14155550123"}"#);
+        assert_eq!(json.text, r#"{"to": "[REDACTED:phone ...0123]"}"#);
+        // Only the number goes; the scheme tells the reader what was there.
+        let link = scrubber.scrub("tel:+14155550123");
+        assert_eq!(link.text, "tel:[REDACTED:phone ...0123]");
+        // Column 0 only reads as a diff line when the text holds a hunk header.
+        let contact = scrubber.scrub("Name: Budi\n+62 812-3456-7890\n");
+        assert_eq!(contact.text, "Name: Budi\n[REDACTED:phone ...7890]\n");
+    }
+
+    #[test]
+    fn pii_on_redacts_an_email_wherever_tool_output_puts_it() {
+        let scrubber = pii_scrubber();
+        let address = fake_secrets::email();
+        for placement in [
+            format!("SUPPORT_CONTACT={address}"),
+            format!(r#"{{"customer": {{"email": "{address}"}}}}"#),
+            format!("12:00:01 INFO mail queued for {address}, retry in 5s"),
+            format!("Write to [{address}](mailto:{address})."),
+        ] {
+            let result = scrubber.scrub(&placement);
+            assert!(!result.text.contains(&address), "{}", result.text);
+            assert!(
+                result.counts_by_pattern.contains_key("email"),
+                "{placement}"
+            );
+        }
+    }
+
+    #[test]
+    fn pii_is_off_by_default_so_contacts_pass_through_untouched() {
+        let scrubber = default_scrubber();
+        let address = fake_secrets::email();
+        let others = [
+            "0812 3456 7890",
+            r#""to": "+14155550123""#,
+            "tel:+14155550123",
+        ];
+        for input in PHONE_SHAPES
+            .into_iter()
+            .chain(others)
+            .chain([address.as_str()])
+        {
+            assert_eq!(scrubber.scrub(input).text, input);
+        }
+    }
+
+    #[test]
+    fn whitelist_turns_off_a_pii_row_by_name() {
+        let cfg = Config {
+            disabled_patterns: vec!["email".into()],
+            ..pii_config()
+        };
+        let address = fake_secrets::email();
+        let scrubber = Scrubber::new(&cfg, &EngineConfig::default()).unwrap();
+        assert_eq!(scrubber.scrub(&address).text, address);
+    }
+
+    #[test]
+    fn an_own_address_in_allow_values_stays_visible() {
+        let address = fake_secrets::email();
+        let eng = EngineConfig {
+            allow_values: vec![format!("^{}$", regex::escape(&address))],
+            ..Default::default()
+        };
+        let scrubber = Scrubber::new(&pii_config(), &eng).unwrap();
+        assert_eq!(scrubber.scrub(&address).text, address);
     }
 
     #[test]
@@ -780,10 +903,11 @@ mod tests {
 
     #[test]
     fn every_builtin_secret_planted_in_the_corpus_is_redacted() {
-        let scrubber = default_scrubber();
+        let scrubber = pii_scrubber();
         for (name, data) in clean_corpus() {
             for case in builtin_pattern_cases() {
-                let planted = format!("{data}\n{}\n", case.input);
+                // Mid-line, as in a log: a `+` at column 0 of a diff is an added line.
+                let planted = format!("{data}\nfound {}\n", case.input);
                 let result = scrubber.scrub(&planted);
                 let pattern = case.name;
                 assert!(result.has_redactions(), "{pattern} missed in {name}");
@@ -821,6 +945,19 @@ mod tests {
     #[test]
     fn corpus_precision_holds_with_learned_secrets_loaded() {
         let (scrubber, _, _) = learned_corpus_scrubber();
+        for (name, data) in clean_corpus() {
+            let result = scrubber.scrub(&data);
+            assert!(
+                !result.has_redactions(),
+                "false positive in {name}: {:?}",
+                result.counts_by_pattern
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_precision_holds_with_pii_on() {
+        let scrubber = pii_scrubber();
         for (name, data) in clean_corpus() {
             let result = scrubber.scrub(&data);
             assert!(

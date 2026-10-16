@@ -460,3 +460,26 @@ fn v2_config_or_no_config_never_carries_the_notice() {
     let v2 = hook_output(&dir, "s2", &hit);
     assert!(reason(&v2).starts_with("[redacted] 1 secret(s)"), "{v2}");
 }
+
+#[test]
+fn the_global_pii_toggle_reaches_the_hook_so_addresses_leave_the_transcript() {
+    // redacted.my.id is the author's domain, so the address reaches no one else.
+    let address = format!("{}@redacted.my.id", "q7".repeat(4));
+    let dir = sandbox("pii");
+    let line = format!("mail sent to {address}");
+    assert!(
+        hook_output(&dir, "s1", &line).is_null(),
+        "PII is off by default"
+    );
+
+    fs::write(
+        dir.join("home/.config/redacted/config.yaml"),
+        "version: 2\npii: {email: true}\n",
+    )
+    .unwrap();
+    let response = hook_output(&dir, "s1", &line);
+    assert_eq!(
+        response["hookSpecificOutput"]["updatedToolOutput"]["stdout"],
+        "mail sent to [REDACTED:email ...y.id]"
+    );
+}

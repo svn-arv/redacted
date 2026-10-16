@@ -176,6 +176,17 @@ pub fn gcp_private_key_field() -> String {
     )
 }
 
+/// redacted.my.id belongs to the author, so a generated address reaches no one else.
+pub fn email() -> String {
+    format!("{}@redacted.my.id", alnum(10))
+}
+
+/// A North American number in the 555-01xx range kept for fiction.
+pub fn phone() -> String {
+    let area_code = format!("{}{}", random_from_charset("23456789", 1), digits(2));
+    format!("+1 {area_code} 555 01{}", digits(2))
+}
+
 pub fn npm_token() -> String {
     format!("npm_{}", alnum(36))
 }

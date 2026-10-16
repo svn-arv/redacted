@@ -16,6 +16,7 @@ impl Scrubber {
     ) -> bool {
         if self.contains_allowed_key(matched)
             || self.matches_allow_values(pattern, matched, text, end)
+            || is_pii_lookalike(&pattern.name, matched, text, end - matched.len())
         {
             return true;
         }
@@ -108,6 +109,80 @@ impl Scrubber {
             .iter()
             .any(|allow_regex| allow_regex.is_match(&value_to_check))
     }
+}
+
+/// Domains reserved for documentation (RFC 2606) and bot senders: no person behind them.
+const UNOWNED_EMAIL_DOMAINS: [&str; 8] = [
+    "example.com",
+    "example.net",
+    "example.org",
+    "example",
+    "test",
+    "invalid",
+    "localhost",
+    "noreply.github.com",
+];
+
+/// The PII rows match loose shapes; these are the look-alikes they leave alone.
+fn is_pii_lookalike(pattern_name: &str, matched: &str, text: &str, start: usize) -> bool {
+    match pattern_name {
+        "email" => {
+            is_unowned_email(matched)
+                || is_url_userinfo(text, start)
+                || is_ssh_target(text, start, start + matched.len())
+        }
+        "phone" => {
+            is_embedded_number(text, start, start + matched.len())
+                || is_diff_added_line(matched, text, start)
+        }
+        _ => false,
+    }
+}
+
+fn is_unowned_email(address: &str) -> bool {
+    let Some((local_part, domain)) = address.rsplit_once('@') else {
+        return false;
+    };
+    let domain_lower = domain.to_ascii_lowercase();
+    local_part.eq_ignore_ascii_case("noreply")
+        || local_part.eq_ignore_ascii_case("no-reply")
+        // Whole labels only, so mail.example.com is reserved and notexample.com is not.
+        || UNOWNED_EMAIL_DOMAINS.into_iter().any(|parent| {
+            domain_lower == parent || domain_lower.ends_with(&format!(".{parent}"))
+        })
+}
+
+/// `user:password@host` inside a URL is a login the URL rows own, not an address.
+fn is_url_userinfo(text: &str, start: usize) -> bool {
+    matches!(text.as_bytes()[..start].last(), Some(b':' | b'/')) && is_inside_url(text, start)
+}
+
+/// Commands that take user@host as a login on a machine.
+const SSH_COMMANDS: [&str; 5] = ["ssh", "scp", "sftp", "rsync", "ssh-copy-id"];
+
+/// `user@host:path` (scp, git remotes, shell prompts) or `ssh user@host` is a login, not a mailbox.
+fn is_ssh_target(text: &str, start: usize, end: usize) -> bool {
+    let word_before = text[..start].split_whitespace().next_back();
+    text.as_bytes().get(end) == Some(&b':')
+        || word_before.is_some_and(|word| SSH_COMMANDS.contains(&word))
+}
+
+/// In a unified diff, a `+` at column 0 marks an added line, not a country code.
+fn is_diff_added_line(matched: &str, text: &str, start: usize) -> bool {
+    let is_line_start = start == 0 || text.as_bytes()[start - 1] == b'\n';
+    // The text scan runs only for a `+` at column 0, so other matches stay cheap.
+    matched.starts_with('+') && is_line_start && (text.starts_with("@@ ") || text.contains("\n@@ "))
+}
+
+/// Digits glued to a word, version, IP or timestamp belong to it, not to a phone.
+fn is_embedded_number(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    let is_glued_before = bytes[..start]
+        .last()
+        .is_some_and(|before| before.is_ascii_alphanumeric() || b".-+".contains(before));
+    let is_continued_after = matches!(bytes.get(end), Some(b'.' | b':'))
+        && bytes.get(end + 1).is_some_and(u8::is_ascii_digit);
+    is_glued_before || is_continued_after
 }
 
 fn is_long_hex_under_key_name(key: &str, value: &str) -> bool {
@@ -306,7 +381,12 @@ fn looks_like_code_expression(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::scrub::tests::{default_scrubber, enabled_heuristic, scrubber_with_heuristic};
+    use crate::config::{Config, EngineConfig};
+    use crate::fake_secrets;
+    use crate::scrub::Scrubber;
+    use crate::scrub::tests::{
+        default_scrubber, enabled_heuristic, pii_scrubber, scrubber_with_heuristic,
+    };
 
     #[test]
     fn code_identifiers_after_a_secret_key_are_not_redacted() {
@@ -341,5 +421,79 @@ mod tests {
                 .scrub("SIGNING_KEY=3f2a9c1d4e5b6a7c8d9e0f1a2b3c4d5e")
                 .has_redactions()
         );
+    }
+
+    #[test]
+    fn pii_leaves_numbers_that_only_look_like_phones_and_unowned_emails_alone() {
+        // Timestamps, IPs, versions and ids fill tool output; redacting them would bury the signal.
+        let scrubber = pii_scrubber();
+        for input in [
+            "2026-10-16T12:34:56+07:00",
+            "2026-10-16 12:34:56",
+            "192.168.100.200",
+            "10.0.0.1:3000",
+            "v2.1.292",
+            "1.2.3",
+            "6f1c2b7e-3d4a-4e8b-9c1d-2a3b4c5d6e7f",
+            "3f9a1c2b7e4d5a6b8c9d0e1f2a3b4c5d6e7f8a9b",
+            "1791860933376006001",
+            "1,234,567.89",
+            "@@ -120,7 +120,8 @@",
+            "978-3-16-148410-0",
+            "4111 1111 1111 1111",
+            "someone@example.com",
+            "admin@mail.example.org",
+            "qa@app.test",
+            "noreply@github.com",
+            "no-reply@accounts.redacted.my.id",
+            "12345678+user@users.noreply.github.com",
+            "abc@thread.tacv2",
+            "https://teams.microsoft.com/l/channel/19%3Aabc@thread.tacv2/General",
+            "postgres://user:pass@db.internal.corp/app",
+        ] {
+            assert_eq!(scrubber.scrub(input).text, input, "{input}");
+        }
+    }
+
+    #[test]
+    fn pii_leaves_ssh_targets_and_shell_prompts_alone() {
+        // user@host here names a login on a machine, not a person's mailbox.
+        let scrubber = pii_scrubber();
+        for input in [
+            "git@github.com:svn-arv/redacted.git",
+            "ssh deploy@prod.internal.corp uptime",
+            "scp a.txt ops@build.internal.corp:/tmp/",
+            "ubuntu@ip-10-0-0-1.ec2.internal:~$ ls",
+        ] {
+            assert_eq!(scrubber.scrub(input).text, input, "{input}");
+        }
+    }
+
+    #[test]
+    fn pii_leaves_added_lines_of_a_unified_diff_alone() {
+        // The diff's own `+` makes any number on an added line read as international.
+        let diff = "@@ -1,3 +1,3 @@\n+123 456 789\n+10-16-2026\n+1234567890\n";
+        assert_eq!(pii_scrubber().scrub(diff).text, diff);
+    }
+
+    #[test]
+    fn a_credentialed_url_keeps_its_own_label_and_never_gains_an_email_marker() {
+        // userinfo is user:password@host, so the email row must not split the URL in two.
+        let url = fake_secrets::database_url("postgis", "db.internal.corp");
+        let result = pii_scrubber().scrub(&url);
+        assert_eq!(result.count, 1);
+        assert_eq!(result.counts_by_pattern.get("credentialed_url"), Some(&1));
+
+        // With the URL rows off, the email row sees the raw URL first and must still skip it.
+        let cfg = Config {
+            disabled_patterns: vec!["database_url".into(), "credentialed_url".into()],
+            pii: crate::config::PiiConfig {
+                email: true,
+                phone: true,
+            },
+            ..Default::default()
+        };
+        let scrubber = Scrubber::new(&cfg, &EngineConfig::default()).unwrap();
+        assert_eq!(scrubber.scrub(&url).text, url);
     }
 }
