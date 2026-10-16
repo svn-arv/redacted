@@ -539,3 +539,28 @@ fn config_names_the_editor_it_could_not_start_so_the_user_can_fix_visual_or_edit
     );
     assert_eq!(err.lines().count(), 1, "{err}");
 }
+
+#[cfg(unix)]
+#[test]
+fn config_reports_a_file_that_no_longer_parses_because_the_hook_would_silently_drop_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = sandbox("config-bad-yaml");
+    let editor = dir.join("editor.sh");
+    fs::write(&editor, "#!/bin/sh\necho 'learned: [' > \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = run_config(&dir, &editor);
+    let err = String::from_utf8_lossy(&output.stderr);
+    let config = dir.join("home/.config/redacted/config.yaml");
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        err.starts_with(&format!("config: {}: ", config.display())),
+        "{err}"
+    );
+    assert!(
+        err.contains("line"),
+        "a YAML parse message points at a line: {err}"
+    );
+    let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
