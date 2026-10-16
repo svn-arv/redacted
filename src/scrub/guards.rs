@@ -432,6 +432,27 @@ mod tests {
     }
 
     #[test]
+    fn pii_leaves_ssh_targets_and_shell_prompts_alone() {
+        // user@host here names a login on a machine, not a person's mailbox.
+        let scrubber = pii_scrubber();
+        for input in [
+            "git@github.com:svn-arv/redacted.git",
+            "ssh deploy@prod.internal.corp uptime",
+            "scp a.txt ops@build.internal.corp:/tmp/",
+            "ubuntu@ip-10-0-0-1.ec2.internal:~$ ls",
+        ] {
+            assert_eq!(scrubber.scrub(input).text, input, "{input}");
+        }
+    }
+
+    #[test]
+    fn pii_leaves_added_lines_of_a_unified_diff_alone() {
+        // The diff's own `+` makes any number on an added line read as international.
+        let diff = "@@ -1,3 +1,3 @@\n+123 456 789\n+10-16-2026\n+1234567890\n";
+        assert_eq!(pii_scrubber().scrub(diff).text, diff);
+    }
+
+    #[test]
     fn a_credentialed_url_keeps_its_own_label_and_never_gains_an_email_marker() {
         // userinfo is user:password@host, so the email row must not split the URL in two.
         let url = fake_secrets::database_url("postgis", "db.internal.corp");

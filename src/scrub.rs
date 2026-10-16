@@ -615,6 +615,9 @@ mod tests {
         // Only the number goes; the scheme tells the reader what was there.
         let link = scrubber.scrub("tel:+14155550123");
         assert_eq!(link.text, "tel:[REDACTED:phone ...0123]");
+        // Column 0 only reads as a diff line when the text holds a hunk header.
+        let contact = scrubber.scrub("Name: Budi\n+62 812-3456-7890\n");
+        assert_eq!(contact.text, "Name: Budi\n[REDACTED:phone ...7890]\n");
     }
 
     #[test]
