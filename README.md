@@ -375,6 +375,17 @@ printf 'key AKIAEXAMPLEKEYID0001\n' | redacted scrub
 
 The 0.7 OpenCode plugin was a separate TypeScript port of the patterns. 1.0.0 removes it: the `redacted` binary is the only scrubber. An OpenCode adapter that calls the binary is planned.
 
+### Streaming
+
+`redacted scrub --stream [--cwd DIR]` scrubs stdin line by line and prints each line as soon as it is complete, so `tail -f app.log | redacted scrub --stream` stays live.
+
+- It never switches to hook mode: a line that is a JSON object is scrubbed as text.
+- `--cwd DIR` also reads the project config in `DIR`, as hook mode does with the payload's `cwd`. Without it, global config only.
+- A line containing `-----BEGIN` is held until a line containing `-----END`, so a PEM key is redacted as one block. With no END line, the block is released once 64 lines are held.
+- If the scrubber fails on a line, `[redacted] line withheld` replaces it and the stream goes on.
+- No stats are recorded and nothing is printed on stderr.
+- Claude Code's Monitor tool is the reason: its events skip PostToolUse, so the filter must run inside the monitored command ([#58](https://github.com/svn-arv/redacted/issues/58)).
+
 ## Known limitations
 
 - Learned secrets match as whole tokens. One embedded mid-token, such as in a URL path, passes unless a vendor pattern catches it.

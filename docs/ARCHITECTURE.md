@@ -44,6 +44,7 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | `src/scrub/benchmark.rs` | Test only (`#[cfg(test)]`): detection benchmark that plants each built-in pattern in 17 placements and writes `docs/BENCHMARK.md`. |
 | `src/engine.yml` | Built-in patterns and `allow_values`, compiled in with `include_str!`. |
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
+| `src/stream.rs` | `redacted scrub --stream`: line-by-line scrub with PEM block buffering, fail closed per line. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
 | `src/fake_secrets.rs` | Test only (`#[cfg(test)]`): synthetic secret generators. |
 | `src/<module>/tests.rs` | Unit tests for `src/<module>.rs`, declared there as `#[cfg(test)] mod tests;` (for example `src/scrub/tests.rs`, `src/scrub/guards/tests.rs`). |

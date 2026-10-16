@@ -10,6 +10,7 @@ mod init;
 mod scrub;
 mod settings;
 mod stats;
+mod stream;
 mod verify;
 
 use std::process::ExitCode;
