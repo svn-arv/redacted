@@ -121,6 +121,9 @@ fn pick_secrets_to_learn(
 /// Registers the hook globally or for this project, then warns when only the
 /// vendor tier would be active.
 fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
+    // Loaded before anything is written: a hook over a malformed config would withhold every output.
+    // The global config alone (no cwd), so a re-run with no .env does not warn a user who has entries.
+    let global_config = config::load(Some(home), None)?;
     let bin = this_executable_path()?;
     let settings_path = if local {
         cwd.join(".claude/settings.local.json")
@@ -134,9 +137,7 @@ fn install(local: bool, cwd: &Path, home: &Path) -> Result<(), String> {
         settings_path.display()
     );
     println!("Binary: {bin} scrub");
-    // Judged on the written global config alone (no cwd), so a re-run with no .env
-    // does not warn a user who has entries.
-    if config::is_vendor_only(&config::load(Some(home), None)?) {
+    if config::is_vendor_only(&global_config) {
         println!("\nNotice: {}", config::VENDOR_ONLY_NOTICE);
     }
     Ok(())
