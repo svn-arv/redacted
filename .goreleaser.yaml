@@ -1,5 +1,8 @@
 version: 2
 
+# The crate is redacted-cli; the binary, the archives and the brew formula are redacted.
+project_name: redacted
+
 before:
   hooks:
     - cargo test --locked
