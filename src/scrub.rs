@@ -852,7 +852,8 @@ mod tests {
         let scrubber = pii_scrubber();
         for (name, data) in clean_corpus() {
             for case in builtin_pattern_cases() {
-                let planted = format!("{data}\n{}\n", case.input);
+                // Mid-line, as in a log: a `+` at column 0 of a diff is an added line.
+                let planted = format!("{data}\nfound {}\n", case.input);
                 let result = scrubber.scrub(&planted);
                 let pattern = case.name;
                 assert!(result.has_redactions(), "{pattern} missed in {name}");

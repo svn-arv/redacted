@@ -126,8 +126,15 @@ const UNOWNED_EMAIL_DOMAINS: [&str; 8] = [
 /// The PII rows match loose shapes; these are the look-alikes they leave alone.
 fn is_pii_lookalike(pattern_name: &str, matched: &str, text: &str, start: usize) -> bool {
     match pattern_name {
-        "email" => is_unowned_email(matched) || is_url_userinfo(text, start),
-        "phone" => is_embedded_number(text, start, start + matched.len()),
+        "email" => {
+            is_unowned_email(matched)
+                || is_url_userinfo(text, start)
+                || is_ssh_target(text, start, start + matched.len())
+        }
+        "phone" => {
+            is_embedded_number(text, start, start + matched.len())
+                || is_diff_added_line(matched, text, start)
+        }
         _ => false,
     }
 }
@@ -148,6 +155,23 @@ fn is_unowned_email(address: &str) -> bool {
 /// `user:password@host` inside a URL is a login the URL rows own, not an address.
 fn is_url_userinfo(text: &str, start: usize) -> bool {
     matches!(text.as_bytes()[..start].last(), Some(b':' | b'/')) && is_inside_url(text, start)
+}
+
+/// Commands that take user@host as a login on a machine.
+const SSH_COMMANDS: [&str; 5] = ["ssh", "scp", "sftp", "rsync", "ssh-copy-id"];
+
+/// `user@host:path` (scp, git remotes, shell prompts) or `ssh user@host` is a login, not a mailbox.
+fn is_ssh_target(text: &str, start: usize, end: usize) -> bool {
+    let word_before = text[..start].split_whitespace().next_back();
+    text.as_bytes().get(end) == Some(&b':')
+        || word_before.is_some_and(|word| SSH_COMMANDS.contains(&word))
+}
+
+/// In a unified diff, a `+` at column 0 marks an added line, not a country code.
+fn is_diff_added_line(matched: &str, text: &str, start: usize) -> bool {
+    let is_line_start = start == 0 || text.as_bytes()[start - 1] == b'\n';
+    let has_hunk_header = text.starts_with("@@ ") || text.contains("\n@@ ");
+    matched.starts_with('+') && is_line_start && has_hunk_header
 }
 
 /// Digits glued to a word, version, IP or timestamp belong to it, not to a phone.
