@@ -485,10 +485,10 @@ fn the_global_pii_toggle_reaches_the_hook_so_addresses_leave_the_transcript() {
     );
 }
 
-/// Runs `redacted config` with `editor` as $EDITOR and no $VISUAL, so no test reaches a real vi.
-fn run_config(dir: &Path, editor: &Path) -> Output {
+/// Runs `redacted <args>` with `editor` as $EDITOR and no $VISUAL, so no test reaches a real vi.
+fn run_config(dir: &Path, args: &[&str], editor: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_redacted"))
-        .arg("config")
+        .args(args)
         .current_dir(dir.join("proj"))
         .env("HOME", dir.join("home"))
         .env_remove("VISUAL")
@@ -512,7 +512,7 @@ fn config_opens_the_file_in_the_editor_keeps_it_owner_only_and_checks_it_before_
     .unwrap();
     fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_config(&dir, &editor);
+    let output = run_config(&dir, &["config"], &editor);
     let out = stdout(&output);
     assert!(output.status.success(), "{out}");
     let config = dir.join("home/.config/redacted/config.yaml");
@@ -527,7 +527,7 @@ fn config_opens_the_file_in_the_editor_keeps_it_owner_only_and_checks_it_before_
 fn config_names_the_editor_it_could_not_start_so_the_user_can_fix_visual_or_editor() {
     let dir = sandbox("config-no-editor");
     let missing = dir.join("no-such-editor");
-    let output = run_config(&dir, &missing);
+    let output = run_config(&dir, &["config"], &missing);
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
     assert!(
@@ -549,7 +549,7 @@ fn config_reports_a_file_that_no_longer_parses_because_the_hook_would_silently_d
     fs::write(&editor, "#!/bin/sh\necho 'learned: [' > \"$1\"\n").unwrap();
     fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_config(&dir, &editor);
+    let output = run_config(&dir, &["config"], &editor);
     let err = String::from_utf8_lossy(&output.stderr);
     let config = dir.join("home/.config/redacted/config.yaml");
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
@@ -563,4 +563,28 @@ fn config_reports_a_file_that_no_longer_parses_because_the_hook_would_silently_d
     );
     let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn config_prints_the_global_file_as_written_so_the_user_can_read_it_without_an_editor() {
+    let dir = sandbox("config-show");
+    let text = "version: 2\n# my note\nheuristic: {enabled: true}\n";
+    fs::write(dir.join("home/.config/redacted/config.yaml"), text).unwrap();
+    let output = run_config(&dir, &["config"], Path::new("true"));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), text);
+}
+
+#[test]
+fn config_without_a_file_points_the_user_at_init() {
+    let dir = sandbox("config-show-missing");
+    let output = run_config(&dir, &["config"], Path::new("true"));
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "config: no file at {}; run redacted init\n",
+            dir.join("home/.config/redacted/config.yaml").display()
+        )
+    );
 }
