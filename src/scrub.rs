@@ -640,7 +640,16 @@ mod tests {
     fn pii_is_off_by_default_so_contacts_pass_through_untouched() {
         let scrubber = default_scrubber();
         let address = fake_secrets::email();
-        for input in PHONE_SHAPES.into_iter().chain([address.as_str()]) {
+        let others = [
+            "0812 3456 7890",
+            r#""to": "+14155550123""#,
+            "tel:+14155550123",
+        ];
+        for input in PHONE_SHAPES
+            .into_iter()
+            .chain(others)
+            .chain([address.as_str()])
+        {
             assert_eq!(scrubber.scrub(input).text, input);
         }
     }

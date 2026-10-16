@@ -423,6 +423,7 @@ mod tests {
             "noreply@github.com",
             "no-reply@accounts.redacted.my.id",
             "12345678+user@users.noreply.github.com",
+            "abc@thread.tacv2",
             "https://teams.microsoft.com/l/channel/19%3Aabc@thread.tacv2/General",
             "postgres://user:pass@db.internal.corp/app",
         ] {
