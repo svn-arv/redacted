@@ -606,6 +606,21 @@ mod tests {
     }
 
     #[test]
+    fn a_raw_newline_dump_under_the_key_loses_every_body_line_not_only_the_first() {
+        let body_lines = ["Q7xK".repeat(16), "Zp3/".repeat(16), "mW8+".repeat(16)];
+        let url_line = "DATABASE_URL=postgres://user:pass@db.internal.corp/app";
+        let input = format!(
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\n{}\n{url_line}\n",
+            body_lines.join("\n")
+        );
+        let result = default_scrubber().scrub(&input);
+        for line in &body_lines {
+            assert!(!result.text.contains(line.as_str()), "{}", result.text);
+        }
+        assert!(result.text.ends_with(&format!("\n{url_line}\n")));
+    }
+
+    #[test]
     fn placeholder_database_urls_are_not_redacted() {
         let input = "postgres://user:password@db.example.com:5432/app";
         assert_eq!(default_scrubber().scrub(input).text, input);
