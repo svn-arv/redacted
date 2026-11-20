@@ -19,297 +19,20 @@
   }catch(e){}
 })();
 </script>
-<style>
-/* ---------------------------------------------------------------
-   No webfonts, no CDN, no analytics. A tool that makes no network
-   calls ships a page that makes none either.
-   --------------------------------------------------------------- */
-:root{
-  color-scheme:light dark;
-  --paper:#f5f4f1;
-  --panel:#eceae5;
-  --ink:#131211;
-  --dim:#6b6862;
-  --line:rgba(19,18,17,.13);
-  --line-hard:rgba(19,18,17,.30);
-  --bar:#131211;          /* the redaction block */
-  --accent:#15645a;
-  --sel:rgba(21,100,90,.16);
-
-  --mono:ui-monospace,"SF Mono",SFMono-Regular,"Cascadia Mono","Segoe UI Mono","Roboto Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-
-  --gut:clamp(20px,4vw,40px);
-  --sec:clamp(64px,9vw,116px);
-}
-/* The dark palette is declared twice on purpose. The media-query copy is the
-   default, skipped when the visitor has explicitly chosen light; the attribute
-   copy is the explicit dark choice. A plain custom-property block cannot be
-   shared across a media boundary, so the values are duplicated rather than
-   aliased. Keep the two lists in sync. */
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --paper:#131313;
-    --panel:#1c1c1b;
-    --ink:#e8e6e1;
-    --dim:#8f8c85;
-    --line:rgba(232,230,225,.14);
-    --line-hard:rgba(232,230,225,.30);
-    --bar:#3a3835;
-    --accent:#4cbfae;
-    --sel:rgba(76,191,174,.20);
-  }
-}
-:root[data-theme="dark"]{
-  --paper:#131313;
-  --panel:#1c1c1b;
-  --ink:#e8e6e1;
-  --dim:#8f8c85;
-  --line:rgba(232,230,225,.14);
-  --line-hard:rgba(232,230,225,.30);
-  --bar:#3a3835;
-  --accent:#4cbfae;
-  --sel:rgba(76,191,174,.20);
-}
-/* Without this the browser paints scrollbars and form controls in the OS
-   scheme even when the page has been switched the other way. */
-:root[data-theme="light"]{color-scheme:light}
-:root[data-theme="dark"]{color-scheme:dark}
-
-*{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{
-  background:var(--paper);color:var(--ink);
-  font-family:var(--sans);font-size:16px;line-height:1.6;
-  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
-}
-::selection{background:var(--sel)}
-a{color:inherit;text-decoration:none}
-.wrap{max-width:1180px;margin:0 auto;padding-left:var(--gut);padding-right:var(--gut)}
-
-/* type registers: mono for structure, sans for prose */
-h1,h2,h3,.mono{font-family:var(--mono)}
-/* sized so the 35-char headline lands on exactly 2 lines in the split column:
-   mono advance is ~.6em, so 18ch needs 18*.6*fontsize <= column width */
-h1{font-size:clamp(1.95rem,3.6vw,2.9rem);font-weight:700;letter-spacing:-.035em;line-height:1.1}
-h2{font-size:clamp(1.5rem,3.2vw,2.2rem);font-weight:700;letter-spacing:-.03em;line-height:1.12}
-h3{font-size:15px;font-weight:700;letter-spacing:-.01em}
-p{max-width:62ch}
-code,pre{font-family:var(--mono)}
-
-:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-
-/* ---------- the redaction block ---------- */
-.rb{
-  display:inline-block;background:var(--bar);color:transparent;
-  padding:0 .16em;cursor:pointer;white-space:nowrap;user-select:none;
-  border:0;font:inherit;letter-spacing:inherit;
-  box-shadow:0 2px 0 0 var(--accent);
-  transition:background .18s ease,color .18s ease,box-shadow .18s ease;
-}
-.rb:hover{box-shadow:0 3px 0 0 var(--accent)}
-.rb.on{background:transparent;color:var(--accent);box-shadow:0 2px 0 0 var(--accent)}
-@media (prefers-reduced-motion:reduce){.rb{transition:none}}
-
-/* ---------- nav ---------- */
-header{
-  position:sticky;top:0;z-index:20;background:var(--paper);
-  border-bottom:1px solid var(--line);
-}
-header .wrap{height:60px;display:flex;align-items:center;justify-content:space-between;gap:24px}
-.mark{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:-.02em}
-.mark i{width:11px;height:11px;background:var(--bar);display:block}
-nav{display:flex;align-items:center;gap:clamp(14px,2.4vw,28px);font-family:var(--mono);font-size:12.5px;letter-spacing:.01em}
-nav a{color:var(--dim);padding:4px 0;border-bottom:1px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
-nav a:hover{color:var(--ink);border-bottom-color:var(--accent)}
-/* Deliberately not .opt: the theme control has to survive the mobile cull. */
-.themetog{
-  font:inherit;letter-spacing:inherit;background:none;border:0;border-bottom:1px solid transparent;
-  color:var(--dim);padding:4px 0;cursor:pointer;white-space:nowrap;
-  transition:color .15s,border-color .15s;
-}
-.themetog:hover{color:var(--ink);border-bottom-color:var(--accent)}
-@media (max-width:620px){nav a.opt{display:none}}
-
-/* ---------- hero ---------- */
-.hero{padding:clamp(40px,6vw,84px) 0 var(--sec)}
-/* minmax(0,…) not 1fr: a grid item defaults to min-width:auto, so the terminal's
-   white-space:pre lines would widen the track instead of scrolling inside it. */
-.hero .grid{display:grid;grid-template-columns:minmax(0,1fr);gap:clamp(34px,5vw,56px);align-items:center}
-@media (min-width:1000px){.hero .grid{grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:clamp(40px,4vw,64px)}}
-.hero h1{max-width:20ch}
-.hero .sub{margin-top:22px;font-size:clamp(16px,1.5vw,18px);color:var(--dim);max-width:52ch}
-.cta{margin-top:32px;display:flex;flex-wrap:wrap;align-items:center;gap:16px}
-.cmdline{display:flex;align-items:stretch;border:1px solid var(--line-hard);background:var(--panel);min-width:0;flex:1 1 420px}
-.cmdline code{
-  flex:1 1 auto;min-width:0;font-size:11.5px;line-height:1.4;
-  padding:13px 14px;overflow-x:auto;white-space:nowrap;
-}
-.cmdline .pr{color:var(--accent);user-select:none}
-.copy{
-  flex:0 0 auto;font-family:var(--mono);font-size:11.5px;font-weight:700;
-  letter-spacing:.09em;text-transform:uppercase;
-  background:var(--ink);color:var(--paper);border:0;padding:0 18px;cursor:pointer;
-  transition:background .15s ease,transform .06s ease;
-}
-.copy:hover{background:var(--accent)}
-.copy:active{transform:translateY(1px)}
-.gh{font-family:var(--mono);font-size:12.5px;color:var(--dim);border-bottom:1px solid var(--line-hard);padding-bottom:2px;transition:color .15s,border-color .15s}
-.gh:hover{color:var(--ink);border-bottom-color:var(--accent)}
-
-/* ---------- terminal surfaces ---------- */
-.term{border:1px solid var(--line-hard);background:var(--panel)}
-.term-head{
-  display:flex;justify-content:space-between;align-items:center;gap:6px 14px;flex-wrap:wrap;
-  padding:10px 14px;border-bottom:1px solid var(--line-hard);
-  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
-}
-.term-head .fired{color:var(--accent);font-weight:700;white-space:nowrap}
-.term-body{padding:16px 14px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.85}
-.term-body .cmd{white-space:pre;margin-bottom:6px}
-.term-body .pr{color:var(--accent);user-select:none}
-.tag{color:var(--accent);font-weight:700}
-.ln{position:relative;height:1.85em;white-space:pre}
-.ln>span{position:absolute;left:0;top:0;white-space:pre}
-.ln .raw{opacity:0}
-.ln .red{opacity:1}
-.plain{white-space:pre;color:var(--dim)}
-.term-foot{
-  border-top:1px solid var(--line);padding:9px 14px;
-  font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--dim);
-}
-
-/* the one motivated animation: the product doing its job, once, on load */
-@keyframes rOut{from{opacity:1}to{opacity:0}}
-@keyframes rIn{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion:no-preference){
-  .ln .raw{animation:rOut .45s ease var(--d,1s) both}
-  .ln .red{animation:rIn .45s ease var(--d,1s) both}
-  .term-head .fired{animation:rIn .45s ease 1.45s both}
-}
-
-/* ---------- section scaffolding ---------- */
-section{padding:var(--sec) 0;border-top:1px solid var(--line)}
-.lede{max-width:34ch}
-.note{color:var(--dim);font-size:15px;margin-top:16px}
-[data-reveal]{opacity:1}
-@media (prefers-reduced-motion:no-preference){
-  [data-reveal]{opacity:0;transform:translateY(14px);transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1)}
-  [data-reveal].in{opacity:1;transform:none}
-}
-
-/* ---------- threat model ---------- */
-.why{display:grid;grid-template-columns:1fr;gap:clamp(28px,4vw,48px)}
-@media (min-width:900px){.why{grid-template-columns:minmax(220px,.62fr) 1fr;gap:clamp(40px,6vw,90px)}
-  .why .head{position:sticky;top:96px;align-self:start}}
-.claims{border-top:1px solid var(--line-hard)}
-.claim{padding:26px 0;border-bottom:1px solid var(--line)}
-.claim h3{margin-bottom:8px}
-.claim p{color:var(--dim);font-size:15.5px;max-width:56ch}
-/* no nowrap: these fit on one line at desktop widths anyway, and forcing it
-   pushed `aws secretsmanager get-secret-value` past a 320px viewport. */
-.claim code{font-size:.88em;background:var(--panel);padding:1px 5px;border:1px solid var(--line)}
-.after{margin-top:26px;font-size:16px;max-width:56ch}
-.after strong{font-weight:600}
-
-/* ---------- pipeline + exhibit ---------- */
-.pipe{display:flex;flex-wrap:wrap;align-items:center;gap:12px;font-family:var(--mono);font-size:12px;margin-bottom:clamp(26px,3.5vw,40px)}
-.node{border:1px solid var(--line-hard);padding:8px 13px;color:var(--dim);white-space:nowrap}
-.node.self{border-color:var(--accent);color:var(--accent);font-weight:700}
-.arw{color:var(--dim);user-select:none}
-.panes{display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--line-hard)}
-@media (min-width:820px){.panes{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
-.pane{padding:18px 16px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.9;white-space:pre}
-.pane .cap{
-  display:block;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--dim);margin-bottom:14px;white-space:normal;
-}
-.pane.a{border-bottom:1px solid var(--line-hard)}
-@media (min-width:820px){.pane.a{border-bottom:0;border-right:1px solid var(--line-hard)}}
-.pane .add{color:var(--dim)}
-.exhibit-head{
-  display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;
-  border:1px solid var(--line-hard);border-bottom:0;padding:10px 14px;background:var(--panel);
-  font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
-}
-
-/* ---------- detection tiers ---------- */
-.tiers{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line-hard);border:1px solid var(--line-hard)}
-@media (min-width:900px){.tiers{grid-template-columns:1.35fr 1fr 1fr}}
-.tier{background:var(--paper);padding:clamp(22px,2.6vw,32px)}
-.tier.lead{
-  background:var(--panel);
-  background-image:repeating-linear-gradient(135deg,var(--line) 0 1px,transparent 1px 9px);
-}
-.tier .n{font-family:var(--mono);font-size:clamp(2.6rem,5vw,3.6rem);font-weight:700;letter-spacing:-.05em;line-height:1;display:block}
-.tier.lead .n{color:var(--accent)}
-.tier h3{margin:14px 0 8px}
-.tier p{color:var(--dim);font-size:14.5px;max-width:38ch}
-.tier .unit{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:block;margin-top:10px}
-
-/* ---------- coverage ---------- */
-.chips{display:flex;flex-wrap:wrap;gap:9px 10px;font-family:var(--mono);font-size:13px;font-weight:700;margin-top:28px}
-.chips .rb{padding:5px 9px}
-
-/* ---------- guarantees ---------- */
-.guards{display:grid;grid-template-columns:1fr;margin-top:8px;border-top:1px solid var(--line-hard)}
-@media (min-width:760px){.guards{grid-template-columns:1fr 1fr}}
-.guard{padding:26px 0;border-bottom:1px solid var(--line)}
-@media (min-width:760px){
-  .guard{padding:26px clamp(20px,3vw,38px) 26px 0}
-  .guard:nth-child(2n){padding-right:0;padding-left:clamp(20px,3vw,38px);border-left:1px solid var(--line)}
-}
-.guard h3{margin-bottom:7px}
-.guard p{color:var(--dim);font-size:14.5px;max-width:42ch}
-.guard code{font-size:.9em;color:var(--accent)}
-
-/* ---------- install ---------- */
-.methods{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;background:var(--line-hard);border:1px solid var(--line-hard);margin-top:32px}
-@media (min-width:820px){.methods{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr)}}
-.method{background:var(--paper);padding:22px 20px;min-width:0}
-.method .lab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex;gap:10px;align-items:baseline}
-.method .lab b{color:var(--accent);font-weight:700}
-.method pre{margin-top:14px;font-size:12.5px;line-height:1.9;overflow-x:auto;white-space:pre}
-.method .pr{color:var(--accent);user-select:none}
-.initrow{
-  display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;
-  border:1px solid var(--line-hard);border-top:0;background:var(--panel);padding:18px 20px;
-}
-.initrow code{font-size:14px;font-weight:700}
-.initrow span{font-size:14px;color:var(--dim);max-width:52ch}
-.gopath{margin-top:16px;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
-.gopath b{color:var(--ink);font-weight:400}
-
-/* ---------- footer ---------- */
-footer{border-top:1px solid var(--line);padding:30px 0 40px}
-footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
-footer a{border-bottom:1px solid var(--line-hard);padding-bottom:1px}
-footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
-
-/* ---------- toast ---------- */
-.toast{
-  position:fixed;left:50%;bottom:26px;z-index:40;
-  transform:translateX(-50%) translateY(64px);opacity:0;pointer-events:none;
-  background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:12px;
-  letter-spacing:.05em;padding:11px 17px;transition:opacity .2s ease,transform .2s ease;
-}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-.toast.err{background:var(--accent)}
-@media (prefers-reduced-motion:reduce){.toast{transition:opacity .2s ease}.toast.show{transform:translateX(-50%) translateY(0)}}
-</style>
+<link rel="preload" href="assets/cormorant-garamond.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
 
 <header>
   <div class="wrap">
-    <a class="mark" href="#top"><i></i>redacted</a>
-    <nav>
+    <a class="mark" href="#top"><i aria-hidden="true"></i>redacted</a>
+    <nav aria-label="Main navigation">
       <a class="opt" href="#why">Threat model</a>
       <a class="opt" href="#detection">Detection</a>
       <a href="#install">Install</a>
       <a href="https://github.com/svn-arv/redacted">GitHub</a>
-      <button class="themetog" type="button" data-theme-toggle></button>
+      <button class="themetog" type="button" data-theme-toggle hidden></button>
     </nav>
   </div>
 </header>
@@ -319,36 +42,39 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 <!-- ============ hero ============ -->
 <div class="hero"><div class="wrap"><div class="grid">
   <div>
-    <h1>Your <button type="button" class="rb" aria-label="Reveal the redacted word">secrets</button> never reach the model.</h1>
+    <h1>Your <button type="button" class="rb" aria-pressed="false">secrets</button> never reach the model.</h1>
     <p class="sub">A local hook scrubs every tool result before your coding assistant reads it. It catches vendor keys, the secrets you teach it from your .env, and, if you turn it on, random-looking values.</p>
     <div class="cta">
       <div class="cmdline">
-        <code><span class="pr">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
+        <code tabindex="0"><span class="pr">$</span> curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh</code>
         <button class="copy" type="button" data-copy="curl -sSL https://raw.githubusercontent.com/svn-arv/redacted/main/install.sh | sh">Copy</button>
       </div>
       <a class="gh" href="https://github.com/svn-arv/redacted">GitHub</a>
     </div>
   </div>
 
-  <!-- real output. generated by running `redacted scrub` against this payload. -->
-  <div class="term">
-    <div class="term-head"><span>PostToolUse hook</span><span class="fired">2 secrets scrubbed</span></div>
-    <div class="term-body">
-      <div class="cmd"><span class="pr">$</span> heroku config -a billing-prod</div>
-      <div class="ln" style="--d:1.05s">
-        <!-- trailing space is load-bearing: the database_url pattern's character class
-             does not exclude "<", so without it the match eats the closing tag when this
-             page is fetched through a tool that has the hook installed. -->
-        <span class="raw">DATABASE_URL:          postgres://billing:EXAMPLEPASSWORD@db-1.internal/billing </span>
-        <span class="red">DATABASE_URL:          <span class="tag">[REDACTED:database_url ...ling]</span></span>
+  <div class="composition">
+    <img class="ink-landscape" src="assets/pine-and-mist.webp" alt="" width="1440" height="960">
+    <!-- real output. generated by running `redacted scrub` against this payload. -->
+    <div class="term">
+      <div class="term-head"><span>PostToolUse hook</span><span class="fired">2 secrets scrubbed</span></div>
+      <div class="term-body" tabindex="0" role="region" aria-label="Example terminal output">
+        <div class="cmd"><span class="pr">$</span> heroku config -a billing-prod</div>
+        <div class="ln" style="--d:1.05s">
+          <!-- trailing space is load-bearing: the database_url pattern's character class
+               does not exclude "<", so without it the match eats the closing tag when this
+               page is fetched through a tool that has the hook installed. -->
+          <span class="raw" aria-hidden="true">DATABASE_URL:          postgres://billing:EXAMPLEPASSWORD@db-1.internal/billing </span>
+          <span class="red">DATABASE_URL:          <span class="tag">[REDACTED:database_url ...ling]</span></span>
+        </div>
+        <div class="ln" style="--d:1.3s">
+          <span class="raw" aria-hidden="true">NEW_RELIC_LICENSE_KEY: NRAK-EXAMPLEKEYEXAMPLEKEYNRAK</span>
+          <span class="red">NEW_RELIC_LICENSE_KEY: <span class="tag">[REDACTED:newrelic_key ...NRAK]</span></span>
+        </div>
+        <div class="plain">RACK_ENV:              production</div>
       </div>
-      <div class="ln" style="--d:1.3s">
-        <span class="raw">NEW_RELIC_LICENSE_KEY: NRAK-EXAMPLEKEYEXAMPLEKEYNRAK</span>
-        <span class="red">NEW_RELIC_LICENSE_KEY: <span class="tag">[REDACTED:newrelic_key ...NRAK]</span></span>
-      </div>
-      <div class="plain">RACK_ENV:              production</div>
+      <div class="term-foot">Scanned on your machine. Clean lines pass through byte for byte.</div>
     </div>
-    <div class="term-foot">Scanned on your machine. Clean lines pass through byte for byte.</div>
   </div>
 </div></div></div>
 
@@ -376,25 +102,25 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 </div></div></section>
 
 <!-- ============ where it sits + before/after ============ -->
-<section><div class="wrap">
+<section class="exhibit-section"><div class="wrap">
   <div class="pipe" data-reveal>
     <span class="node">Bash, Read, Grep, WebFetch</span>
-    <span class="arw">&rarr;</span>
+    <span class="arw" aria-hidden="true">&rarr;</span>
     <span class="node self">redacted scrub</span>
-    <span class="arw">&rarr;</span>
+    <span class="arw" aria-hidden="true">&rarr;</span>
     <span class="node">context window</span>
   </div>
   <div data-reveal>
     <div class="exhibit-head"><span>Bash: git diff config/staging.env</span><span>3 secrets scrubbed</span></div>
     <div class="panes">
-      <div class="pane a"><span class="cap">Without the hook</span>diff --git a/config/staging.env
+      <div class="pane a" tabindex="0" role="region" aria-label="Terminal output without the hook"><span class="cap">Without the hook</span>diff --git a/config/staging.env
 @@ -3,6 +3,7 @@ REGION=eu-west-1
  POOL_SIZE=12
 -AWS_ACCESS_KEY_ID=AKIAEXAMPLEKEYID0001
 +AWS_ACCESS_KEY_ID=AKIAEXAMPLEKEYID0002
 +GITHUB_TOKEN=ghp_EXAMPLETOKENEXAMPLETOKENEXAMPLETOKEN
  LOG_LEVEL=info</div>
-      <div class="pane b"><span class="cap">What the model receives</span>diff --git a/config/staging.env
+      <div class="pane b" tabindex="0" role="region" aria-label="Terminal output with the hook"><span class="cap">What the model receives</span>diff --git a/config/staging.env
 @@ -3,6 +3,7 @@ REGION=eu-west-1
  POOL_SIZE=12
 -AWS_ACCESS_KEY_ID=<span class="tag">[REDACTED:aws_access_key ...0001]</span>
@@ -411,7 +137,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
     <h2 class="lede">Three tiers, run in this order.</h2>
     <p class="note">Signature and learned hits name what matched, as in [REDACTED:aws_access_key ...0001]. Keyed and entropy hits keep the key instead, as in KEY= [REDACTED ...abcd].</p>
   </div>
-  <div class="tiers" style="margin-top:36px" data-reveal>
+  <div class="tiers" data-reveal>
     <div class="tier lead">
       <span class="n">46</span>
       <span class="unit">built-in patterns</span>
@@ -438,29 +164,29 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
   <h2 class="lede">Some of the signatures.</h2>
   <p class="note">The reference docs list all 46 patterns. Hover or tap a block to reveal it.</p>
   <div class="chips">
-    <button type="button" class="rb">AWS</button>
-    <button type="button" class="rb">GitHub</button>
-    <button type="button" class="rb">Stripe</button>
-    <button type="button" class="rb">OpenAI</button>
-    <button type="button" class="rb">Anthropic</button>
-    <button type="button" class="rb">Google</button>
-    <button type="button" class="rb">Google Cloud</button>
-    <button type="button" class="rb">Slack</button>
-    <button type="button" class="rb">Twilio</button>
-    <button type="button" class="rb">SendGrid</button>
-    <button type="button" class="rb">HubSpot</button>
-    <button type="button" class="rb">DigitalOcean</button>
-    <button type="button" class="rb">GitLab</button>
-    <button type="button" class="rb">npm</button>
-    <button type="button" class="rb">PyPI</button>
-    <button type="button" class="rb">RubyGems</button>
-    <button type="button" class="rb">Sentry</button>
-    <button type="button" class="rb">New Relic</button>
-    <button type="button" class="rb">CircleCI</button>
-    <button type="button" class="rb">Private keys</button>
-    <button type="button" class="rb">JWTs</button>
-    <button type="button" class="rb">Database URLs</button>
-    <button type="button" class="rb">Credentialed URLs</button>
+    <button type="button" class="rb" aria-pressed="false">AWS</button>
+    <button type="button" class="rb" aria-pressed="false">GitHub</button>
+    <button type="button" class="rb" aria-pressed="false">Stripe</button>
+    <button type="button" class="rb" aria-pressed="false">OpenAI</button>
+    <button type="button" class="rb" aria-pressed="false">Anthropic</button>
+    <button type="button" class="rb" aria-pressed="false">Google</button>
+    <button type="button" class="rb" aria-pressed="false">Google Cloud</button>
+    <button type="button" class="rb" aria-pressed="false">Slack</button>
+    <button type="button" class="rb" aria-pressed="false">Twilio</button>
+    <button type="button" class="rb" aria-pressed="false">SendGrid</button>
+    <button type="button" class="rb" aria-pressed="false">HubSpot</button>
+    <button type="button" class="rb" aria-pressed="false">DigitalOcean</button>
+    <button type="button" class="rb" aria-pressed="false">GitLab</button>
+    <button type="button" class="rb" aria-pressed="false">npm</button>
+    <button type="button" class="rb" aria-pressed="false">PyPI</button>
+    <button type="button" class="rb" aria-pressed="false">RubyGems</button>
+    <button type="button" class="rb" aria-pressed="false">Sentry</button>
+    <button type="button" class="rb" aria-pressed="false">New Relic</button>
+    <button type="button" class="rb" aria-pressed="false">CircleCI</button>
+    <button type="button" class="rb" aria-pressed="false">Private keys</button>
+    <button type="button" class="rb" aria-pressed="false">JWTs</button>
+    <button type="button" class="rb" aria-pressed="false">Database URLs</button>
+    <button type="button" class="rb" aria-pressed="false">Credentialed URLs</button>
   </div>
 </div></section>
 
@@ -488,7 +214,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
 </div></section>
 
 <!-- ============ install ============ -->
-<section id="install"><div class="wrap" data-reveal>
+<section id="install" class="install-section"><div class="wrap" data-reveal>
   <h2 class="lede">Install, then init.</h2>
   <p class="note">redacted init learns secrets from your .env, shows the config and asks before writing it, then registers the PostToolUse hook. Safe to run again.</p>
 
@@ -508,9 +234,9 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
     </div>
   </div>
   <div class="initrow">
-    <code><span class="pr" style="color:var(--accent)">$</span> redacted init</code>
+    <code><span class="pr">$</span> redacted init</code>
     <span>Add <code>--local</code> to register the hook for this project only, or --env PATH to pick the env file.</span>
-    <button class="copy" type="button" data-copy="redacted init" style="padding:10px 18px">Copy</button>
+    <button class="copy" type="button" data-copy="redacted init">Copy</button>
   </div>
 </div></section>
 
@@ -532,19 +258,21 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
   /* redaction blocks: click always, hover only where hovering is real */
   document.addEventListener('click', function(e){
     var b = e.target.closest ? e.target.closest('.rb') : null;
-    if (b) b.classList.toggle('on');
+    if (b) b.setAttribute('aria-pressed', b.classList.toggle('on'));
   });
   if (canHover){
     document.querySelectorAll('.rb').forEach(function(b){
-      b.addEventListener('mouseenter', function(){ b.classList.add('on'); });
+      b.addEventListener('mouseenter', function(){
+        b.classList.add('on');
+        b.setAttribute('aria-pressed', 'true');
+      });
     });
   }
 
   /* scroll reveal. IntersectionObserver, never a scroll listener. */
   var targets = document.querySelectorAll('[data-reveal]');
-  if (reduce || !('IntersectionObserver' in window)){
-    targets.forEach(function(el){ el.classList.add('in'); });
-  } else {
+  if (!reduce && 'IntersectionObserver' in window){
+    document.documentElement.classList.add('has-reveal');
     var io = new IntersectionObserver(function(entries){
       entries.forEach(function(en){
         if (en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); }
@@ -567,6 +295,7 @@ footer a:hover{color:var(--ink);border-bottom-color:var(--accent)}
     tog.setAttribute('aria-label', 'Switch to ' + next + ' theme');
   }
   relabel();
+  tog.hidden = false;
   tog.addEventListener('click', function(){
     var next = effective() === 'dark' ? 'light' : 'dark';
     root.setAttribute('data-theme', next);
