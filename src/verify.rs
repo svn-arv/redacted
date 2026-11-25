@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::cli::Format;
 use crate::config::{self, Config, EngineConfig};
-use crate::scrub::Scrubber;
 use crate::{opencode, settings};
+use redacted_core::scrub::Scrubber;
 
 #[derive(Clone, Copy, PartialEq)]
 enum CheckStatus {
@@ -333,6 +333,7 @@ fn check_learned(cwd: Option<&Path>, config: &Config) -> Vec<Check> {
             config::VENDOR_ONLY_NOTICE,
         ));
     }
+    out.extend(check_learned_shapes(config));
     let project_learned = cwd.map_or(0, config::project_learned_count);
     if project_learned > 0 {
         let entries = if project_learned == 1 {
@@ -345,6 +346,28 @@ fn check_learned(cwd: Option<&Path>, config: &Config) -> Vec<Check> {
         )));
     }
     out
+}
+
+/// A shape is either ticked in `init` or left by an older init, which stored one
+/// for every prefixed value; the config cannot tell them apart, so it is flagged, never removed.
+fn check_learned_shapes(config: &Config) -> Option<Check> {
+    let shaped: Vec<&str> = config
+        .learned
+        .iter()
+        .filter(|learned| learned.shape.is_some())
+        .map(|learned| learned.name.as_str())
+        .collect();
+    if shaped.is_empty() {
+        return None;
+    }
+    Some(Check::new(
+        "learned shapes",
+        CheckStatus::Warn,
+        format!(
+            "{}: shape keeps the start of the value in plain text; fine if ticked under Also catch rotated keys, otherwise delete the shape: line in ~/.config/redacted/config.yaml",
+            shaped.join(", ")
+        ),
+    ))
 }
 
 fn check_test_scrub() -> Check {

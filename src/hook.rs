@@ -7,7 +7,7 @@ use std::panic::{self, AssertUnwindSafe};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::scrub::ScrubResult;
+use redacted_core::scrub::ScrubResult;
 
 /// Printed in place of the tool output when scrubbing failed.
 pub(crate) const WITHHELD: &str = "[redacted] tool output withheld: the scrubber errored, so raw output was suppressed to avoid leaking secrets.";

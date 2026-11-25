@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::config::{Config, ConfigError, EngineConfig};
 use crate::hook::{self, WITHHELD};
-use crate::scrub::{ScrubResult, Scrubber};
+use redacted_core::scrub::{ScrubResult, Scrubber};
 
 /// The plugin `redacted init --format opencode` writes, compiled into the binary.
 pub const PLUGIN_SOURCE: &str = include_str!("../plugins/opencode/redacted.ts");

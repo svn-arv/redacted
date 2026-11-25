@@ -4,7 +4,7 @@ use std::io::{self, Write};
 
 use super::*;
 use crate::config::{Config, EngineConfig};
-use crate::fake_secrets;
+use redacted_core::fake_secrets;
 
 /// Records what was written between flushes, so a test can see what reached the reader and when.
 #[derive(Default)]

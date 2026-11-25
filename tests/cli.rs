@@ -273,6 +273,29 @@ fn verify_reports_learned_config_and_warns_on_project_hashes() {
 }
 
 #[test]
+fn verify_warns_on_a_stored_shape_and_keeps_it() {
+    let dir = sandbox("verify-shape");
+    let config = r#"version: 2
+learned: [{name: a, sha256: ab, len: 9}, {name: db_pass, sha256: cd, len: 17, shape: '\bKopi\-Susu\-[a-z0-9-]{3,11}\b'}]
+"#;
+    let path = dir.join("home/.config/redacted/config.yaml");
+    fs::write(&path, config).unwrap();
+    let output = run_redacted(&dir, &["verify"], "");
+    let out = stdout(&output);
+    let line = "[WARN] learned shapes - db_pass: shape keeps the start of the value in plain text; fine if ticked under Also catch rotated keys, otherwise delete the shape: line in ~/.config/redacted/config.yaml";
+    assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    assert!(
+        out.contains("2 learned"),
+        "an old config still loads:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        config,
+        "never removed for the user"
+    );
+}
+
+#[test]
 fn init_refuses_without_a_terminal_and_writes_nothing() {
     let dir = sandbox("init-notty");
     fs::write(dir.join("proj/.env"), "A=1\n").unwrap();

@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::config::{Config, EngineConfig};
-use crate::fake_secrets;
-use crate::scrub::Scrubber;
+use redacted_core::fake_secrets;
+use redacted_core::scrub::Scrubber;
 
 fn run_hook(payload: &str) -> (String, BTreeMap<String, usize>) {
     let scrubber = Scrubber::new(&Config::default(), &EngineConfig::default()).unwrap();
