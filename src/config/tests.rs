@@ -257,7 +257,7 @@ fn engine_yml_from_0_7_with_keywords_and_heuristic_still_loads() {
     let engine_config = load_engine(Some(&home), Some(&cwd)).unwrap();
     assert_eq!(engine_config.patterns.len(), 1);
     assert_eq!(engine_config.allow_values, ["^svc_"]);
-    let scrubber = crate::scrub::Scrubber::new(&Config::default(), &engine_config).unwrap();
+    let scrubber = redacted_core::scrub::Scrubber::new(&Config::default(), &engine_config).unwrap();
     assert_eq!(scrubber.scrub("MONGO_URI_PART=plainvalue").count, 0);
 }
 

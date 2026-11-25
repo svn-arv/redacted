@@ -11,13 +11,15 @@ name = "redacted"
 path = "src/main.rs"
 
 [dependencies]
+redacted-core = { version = "=1.1.0", git = "https://github.com/rmaw22/redacted-core.git", rev = "42c08185d9542d244c5f7816b913b46963498cf4" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml = "0.9"
-regex = "1"
-sha2 = "0.11"
 inquire = "0.9"
+
+[dev-dependencies]
+redacted-core = { version = "=1.1.0", git = "https://github.com/rmaw22/redacted-core.git", rev = "42c08185d9542d244c5f7816b913b46963498cf4", features = ["test-support"] }
 
 [lints.clippy]
 cognitive_complexity = "warn"

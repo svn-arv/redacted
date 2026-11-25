@@ -23,6 +23,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Verify the registry package before creating GitHub or Homebrew releases.
+      - run: cargo package --locked
+
       # goreleaser's rust builder cross-compiles every target through cargo-zigbuild.
       - uses: mlugg/setup-zig@v2
 

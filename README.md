@@ -2,7 +2,7 @@
 
 Removes secrets from tool output before your AI coding assistant reads it.
 
-> **Project direction:** Core development now continues in [`rmaw22/redacted-core`](https://github.com/rmaw22/redacted-core), the shared redaction engine for CLI and WebAssembly implementations. This repository (`svn-arv/redacted`) is the original CLI implementation and will focus on CLI behavior, integrations, and packaging. New detection rules, engine fixes, and shared redaction logic should be developed in `redacted-core`.
+> **Project direction:** Core development now continues in [`rmaw22/redacted-core`](https://github.com/rmaw22/redacted-core), the shared redaction engine for CLI and WebAssembly implementations. This repository (`svn-arv/redacted`) is the original CLI implementation and owns CLI behavior, integrations, and packaging. New detection rules, engine fixes, and shared redaction logic should be developed in `redacted-core`.
 
 ## What you see
 
@@ -56,7 +56,7 @@ Homebrew, Cargo and pre-built binaries for Linux, macOS and Windows are in the [
 ## `redacted init`
 
 - Learns the secrets in your `.env` files, so the hook catches them even when no vendor pattern knows their format.
-- Stores a SHA-256 hash, the length and an optional shape for each value. Never the value.
+- Stores a SHA-256 hash and the length of each value. Catching rotated keys requires opting in to store the prefix shown by `init`.
 - You pick the values to learn and confirm the config before anything is written.
 - Registers the hook in your Claude Code settings. Safe to run again.
 
@@ -67,10 +67,10 @@ Full walkthrough and flags: [Setup: `redacted init`](docs/REFERENCE.md#setup-red
 | Tier | What it catches | Default |
 | --- | --- | --- |
 | Vendor signatures | Keys with a known format: 46 built-in patterns covering AWS, GitHub, Stripe, OpenAI, Anthropic, database URLs, private keys and more. | on |
-| Learned secrets | The values `redacted init` learned from your `.env`, matched by hash, plus rotated keys with the same prefix. | on once `init` writes entries |
+| Learned secrets | The values `redacted init` learned from your `.env`, matched by hash, plus rotated keys for prefixes you opt in to store. | on once `init` writes entries |
 | Entropy heuristic | Random-looking values in `KEY=value` lines that no other tier knows. | off |
 
-Email addresses and phone numbers can be scrubbed too. Each is off until you turn it on in the config.
+Personal data such as email addresses, phone numbers, and payment card numbers can be scrubbed too. Each type is off until you turn it on in the config.
 
 Every pattern and what it matches: [What it detects](docs/REFERENCE.md#what-it-detects).
 
@@ -84,7 +84,7 @@ Other assistants, and whether their hooks can replace tool output, are listed un
 ## Known limitations
 
 - Learned secrets match as whole tokens. One embedded mid-token, such as in a URL path, passes unless a vendor pattern catches it.
-- A learned shape also matches a non-secret with the same prefix and similar length. Check the shape `init` shows before confirming.
+- A learned shape also matches a non-secret with the same prefix and similar length. Check the prefix `init` shows before opting in.
 - With the heuristic on, a high-entropy identifier that mixes case and digits (some tool or request ids) may be redacted. The 4-character hint makes these easy to spot.
 - Every pattern scans the full output in turn, after a substring prefilter. Multi-megabyte output adds noticeable latency per call.
 - Commands typed at the Claude Code prompt with `!` are not tool calls. Their output reaches the model unscrubbed.

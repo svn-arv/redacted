@@ -13,48 +13,6 @@ fn fresh_temp_dir(tag: &str) -> PathBuf {
 }
 
 #[test]
-fn derive_shape_needs_a_short_separated_prefix() {
-    let stripe = format!("sk_live_{}", "Ab1".repeat(8));
-    let gh = format!("ghp_{}", "aB3".repeat(12));
-    let slack = format!("xoxb-{}-{}", "1".repeat(12), "2".repeat(12));
-    // Built at runtime so no secret-shaped literal sits in the source.
-    let hubspot = format!(
-        "pat-na1-{}-{}",
-        "0a1b-".repeat(4).trim_end_matches('-'),
-        "0a1b2c3d4e5f"
-    );
-    let aws = format!("AKIA{}", "Q7".repeat(8));
-    let lang = format!("lsv2_pt_{}", "Zz9".repeat(10));
-    for (sample, want) in [
-        (stripe.as_str(), Some(r"\bsk_live_[a-zA-Z0-9]{20,28}\b")),
-        (&gh, Some(r"\bghp_[a-zA-Z0-9]{32,40}\b")),
-        (&slack, Some(r"\bxoxb\-[0-9-]{21,29}\b")),
-        (&hubspot, Some(r"\bpat\-na1\-[a-z0-9-]{28,36}\b")),
-        (&lang, Some(r"\blsv2_pt_[a-zA-Z0-9]{26,34}\b")),
-        ("abc_xy", Some(r"\babc_[a-z]{1,6}\b")),
-        // No separator: exact hash only (AKIA keys land here).
-        (&aws, None),
-        // Separator past the 12th character.
-        ("abcdefghijklm_nopqrstu", None),
-        // Prefix shorter than 3 characters.
-        ("a_bcdefghijk", None),
-        // Characters outside the shape charset: a band would match a truncated prefix.
-        ("key_abc/def+ghi=", None),
-        ("abc_", None),
-    ] {
-        assert_eq!(derive_shape(sample).as_deref(), want, "{sample}");
-    }
-}
-
-#[test]
-fn derived_shapes_compile_and_match_their_sample() {
-    let sample = format!("pat-na1-{}", "0a1b2c3d-".repeat(4));
-    let shape = derive_shape(sample.trim_end_matches('-')).unwrap();
-    let re = regex::Regex::new(&shape).unwrap();
-    assert!(re.is_match(sample.trim_end_matches('-')));
-}
-
-#[test]
 fn parse_dotenv_handles_export_quotes_and_comments() {
     let text = "# comment\n\nexport A=1\nB = \"two words\" # trailing\nC='single'\nD=bare # note\nEMPTY=\nQUOTED_EMPTY=\"\"\nnot a pair\n  E=x=y\n";
     let got = parse_dotenv(text);
@@ -162,26 +120,6 @@ fn find_env_files_skips_examples_and_sorts() {
 }
 
 #[test]
-fn learn_hashes_the_value_and_lowercases_the_name() {
-    let value = format!("sk_live_{}", "Ab1".repeat(8));
-    let learned = learn("STRIPE_KEY", &value).unwrap();
-    assert_eq!(learned.name, "stripe_key");
-    assert_eq!(learned.sha256, crate::scrub::sha256_hex(&value));
-    assert_eq!(learned.byte_len, value.len());
-    assert_eq!(learned.shape, derive_shape(&value));
-}
-
-#[test]
-fn learn_rejects_values_under_eight_characters() {
-    // Learned values redact everywhere, so `PORT=3000` would hide every 3000 in output.
-    for v in ["3000", "true", "Pw9xQz7"] {
-        assert_eq!(learn("K", v).unwrap_err(), "too short", "{v}");
-    }
-    assert!(learn("K", "Pw9xQz7k").is_ok());
-    assert!(picker_row("PORT", "3000", &learn("PORT", "3000"), &[]).contains("too short"));
-}
-
-#[test]
 fn only_values_with_two_character_classes_are_preselected() {
     // Listed in the picker, just not ticked by default.
     assert!(learn("NODE_ENV", "development").is_ok());
@@ -199,25 +137,6 @@ fn only_values_with_two_character_classes_are_preselected() {
             "{v}"
         );
     }
-}
-
-#[test]
-fn learn_rejects_a_value_with_spaces() {
-    // Candidates never span whitespace, so such a value could never be redacted.
-    assert_eq!(
-        learn("GREETING", "hello there world").unwrap_err(),
-        "cannot match (contains spaces)"
-    );
-    let row = picker_row(
-        "GREETING",
-        "hello there world",
-        &learn("GREETING", "hello there world"),
-        &[],
-    );
-    assert!(
-        row.contains("cannot match (contains spaces)") && !row.contains("hello"),
-        "{row}"
-    );
 }
 
 // A value with one character class: ticked only because the config knows it.
@@ -261,30 +180,27 @@ fn a_changed_value_shows_the_suffixed_name_it_will_be_written_under() {
 fn without_a_config_rows_and_ticks_are_as_before() {
     let entry = learn("DB_PASSWORD", WEAK_VALUE).unwrap();
     let row = picker_row("DB_PASSWORD", WEAK_VALUE, &Ok(entry.clone()), &[]);
-    assert!(
-        !row.contains("learned") && row.contains("exact only"),
-        "{row}"
-    );
+    assert!(!row.contains("learned"), "{row}");
     assert!(!should_preselect(&entry, WEAK_VALUE, &[]));
 }
 
 #[test]
-fn picker_row_shows_key_hint_and_shape_never_the_value() {
-    let value = format!("sk_live_{}", "Ab1".repeat(8));
-    let row = picker_row("STRIPE_KEY", &value, &learn("STRIPE_KEY", &value), &[]);
-    assert!(
-        row.contains("STRIPE_KEY") && row.contains("...",) && row.contains("Ab1"),
-        "{row}"
-    );
-    assert!(
-        row.contains(r"\bsk_live_") && !row.contains(&value),
-        "{row}"
-    );
+fn picker_row_shows_key_and_hint_never_the_prefix_or_value() {
+    let value = "Kopi-Susu-2026-x9";
+    let row = picker_row("DB_PASS", value, &learn("DB_PASS", value), &[]);
+    assert_eq!(row, "DB_PASS  ...6-x9");
     let short = picker_row("PIN", "Pw9xQz7k", &learn("PIN", "Pw9xQz7k"), &[]);
-    assert!(
-        short.contains("exact only") && !short.contains("Qz7k"),
-        "{short}"
+    assert_eq!(short, "PIN  (short)");
+}
+
+#[test]
+fn rotated_key_row_shows_the_exact_prefix_a_shape_would_store() {
+    let value = "Kopi-Susu-2026-x9";
+    assert_eq!(
+        rotated_key_row("DB_PASS", value).as_deref(),
+        Some(r#"DB_PASS  stores "Kopi-Susu-" in plain text"#)
     );
+    assert_eq!(rotated_key_row("DB_PASS", "Pw9xQz7k"), None);
 }
 
 #[test]

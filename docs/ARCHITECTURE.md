@@ -1,6 +1,6 @@
 # Architecture
 
-`redacted` reads tool output on stdin, removes secrets and writes the result on stdout. Code is referenced by file and function name, not line number.
+`redacted` reads tool output on stdin, removes secrets and writes the result on stdout. The CLI handles commands, configuration I/O, hooks, streaming, statistics, integrations, and distribution. Detection rules, shared configuration types, and secret learning live in [`redacted-core`](https://github.com/rmaw22/redacted-core/blob/main/docs/ARCHITECTURE.md).
 
 ## Data flow
 
@@ -33,23 +33,16 @@ stdin -> cli::run_scrub -> looks_like_hook_payload?
 | --- | --- |
 | `src/main.rs` | Module list and `fn main() -> ExitCode`. |
 | `src/cli.rs` | clap commands, `scrub` (mode choice, stats, pre-v2 notice), `show_stats`, the one place an `Err` becomes exit 1. |
-| `src/config.rs` | `Config`, `LearnedSecret`, `HeuristicConfig`, `EngineConfig`; global and project loading and merging; `is_vendor_only`. |
+| `src/config.rs` | Loads and merges global and project files using the shared configuration types. |
 | `src/settings.rs` | Claude Code `settings.json`: read, `install_hook`, `remove_hook`, find our entry. |
-| `src/init.rs` | `redacted init` (env file pick, `parse_dotenv`, `with_url_passwords`, `learn`, `derive_shape`, `merge_learned_into_config`, hook install) and `uninstall`. |
+| `src/init.rs` | `redacted init` (env file pick, `parse_dotenv`, `with_url_passwords`, rotated-key opt-in, `merge_learned_into_config`, hook install) and `uninstall`. |
 | `src/verify.rs` | `redacted verify`: one `Check` per line, exit 1 on any FAIL. |
-| `src/scrub.rs` | `Scrubber`: builds every tier, runs vendor patterns and the heuristic, writes markers. |
-| `src/scrub/learned.rs` | Learned tier: shape and exact-hash matching, `sha256_hex`, `learned_value_hint`. |
-| `src/scrub/guards.rs` | `should_skip_match`: allow lists and the guards that keep identifiers, code and URLs. |
-| `src/scrub/go_regex.rs` | `go_to_rust_regex`: rewrites Go RE2 syntax so patterns keep their 0.7 meaning under Rust `regex`. |
-| `src/scrub/benchmark.rs` | Test only (`#[cfg(test)]`): detection benchmark that plants each built-in pattern in 17 placements and writes `docs/BENCHMARK.md`. |
-| `src/engine.yml` | Built-in patterns and `allow_values`, compiled in with `include_str!`. |
 | `src/hook.rs` | PostToolUse protocol: payload parsing, block envelope, fail closed. |
 | `src/opencode.rs` | `redacted scrub --format opencode`: OpenCode's `tool.execute.after` contract, fail closed with the withheld shape; the plugin file `init --format opencode` writes. |
 | `src/stream.rs` | `redacted scrub --stream`: line-by-line scrub with PEM block buffering, fail closed per line. |
 | `src/pre_hook.rs` | PreToolUse protocol: rewrites a Monitor command to pipe through `scrub --stream`, denies `ws` monitors, fails closed with a deny. |
 | `src/stats.rs` | `stats.jsonl`: `record`, `aggregate`, `render`. |
-| `src/fake_secrets.rs` | Test only (`#[cfg(test)]`): synthetic secret generators. |
-| `src/<module>/tests.rs` | Unit tests for `src/<module>.rs`, declared there as `#[cfg(test)] mod tests;` (for example `src/scrub/tests.rs`, `src/scrub/guards/tests.rs`). |
+| `src/<module>/tests.rs` | Unit tests for `src/<module>.rs`, declared there as `#[cfg(test)] mod tests;` (for example `src/config/tests.rs`). |
 
 Other paths:
 
@@ -58,7 +51,6 @@ Other paths:
 | `tests/cli.rs` | End-to-end tests of the binary. |
 | `plugins/opencode/redacted.ts` | The OpenCode plugin, compiled into the binary with `include_str!`; `smoke.mjs` runs it under Bun. |
 | `tests/golden.rs`, `tests/fixtures/` | Raw-mode output pinned to goldens. |
-| `corpus/clean/` | Clean text for the precision and recall tests. |
 | `scripts/migration-check.sh` | Fresh install, v1 upgrade and v2 config in a throwaway `HOME`. |
 
 ## Config loading
@@ -71,88 +63,22 @@ Other paths:
 - `config::home_dir` returns `None` for an unset or empty `HOME`, so no path is built under the working directory.
 - `EngineConfig` ignores the 0.7 keys `keywords`, `heuristic` and `value_safe_char` like any unknown key.
 
-## Detection tiers
+## Engine dependency
 
-`Scrubber::scrub` runs the tiers in this order on one string. Each tier sees the markers of the one before.
+The CLI calls `redacted_core::scrub::Scrubber` in raw, hook, and streaming
+modes. The engine owns matching and replacement. The CLI decides how to read
+input, apply local policy, report counts, and handle errors.
 
-1. Vendor signatures: every pattern from `src/engine.yml`, then user `patterns` from `engine.yml`.
-   - A name in `whitelist` is skipped.
-   - `prefilters` (case-sensitive) and `prefilters_ignore_case` (against a lowercased copy) skip a regex when none of its literals appear.
-   - `redact_matches` replaces each match unless `should_skip_match` keeps it.
-   - PII rows (`email`, `phone`) carry `opt_in: true` and sit last. `compile_vendor_patterns` drops each one unless its `pii` toggle is on, and `is_pii_lookalike` skips reserved domains, URL logins and numbers glued to versions, IPs or timestamps.
-2. Learned secrets: `scrub_learned` in `src/scrub/learned.rs`.
-3. Entropy heuristic: the `secret_value` pattern, built by `compile_heuristic` only when `heuristic.enabled` is true.
+`init` parses `.env` files and offers URL passwords as separate entries.
+`redacted_core::scrub::learn` creates an exact-hash entry. For eligible new
+entries, `init` offers a separate rotated-key picker with every row unchecked.
+Each row shows the prefix that would be stored. `init` calls the core's shape
+derivation only for rows the user selects. Previously saved shapes still
+take effect, and `verify` identifies their entries.
 
-`marker_for` writes the marker:
-
-| Match | Marker |
-| --- | --- |
-| value-only pattern | `[REDACTED:<name> ...<last 4>]` |
-| keyed pattern (`includes_key: true`) or heuristic | `<key><sep> [REDACTED ...<last 4>]` |
-| learned, value of 12+ characters | `[REDACTED:<name> ...<last 4>]` |
-| learned, shorter value | `[REDACTED:<name>]` |
-
-The hint counts characters, not bytes.
-
-## Learned matching
-
-Before the picker, `init::with_url_passwords` expands the parsed pairs:
-
-- A value that is a URL with `user:password@` adds a `<KEY>_PASSWORD` pair right after it.
-- `url_password` reads the password from the userinfo, up to the last `@` before the first `/`, `?` or `#`.
-- The password is percent-decoded with `scrub::percent_decode`. Invalid UTF-8 keeps it as written.
-
-`init::learn` turns a picked `.env` value into `LearnedSecret {name, sha256, byte_len, shape}`:
-
-- `name` is the key lowercased, `byte_len` (YAML key `len`) is the byte length. The value is never written.
-- Values under 8 characters or with whitespace are refused.
-- `derive_shape` returns a shape only when the value has a literal prefix of 3+ characters ending in the last `_` or `-` of its first 12 characters, and the rest holds only `[A-Za-z0-9_-]`.
-- The shape is `\b<prefix>[<charset of the rest>]{n-4,n+4}\b`, lower bound at least 1.
-
-`Scrubber::scrub_learned` then:
-
-1. Runs every shape regex and replaces its matches.
-2. Returns early when there are no exact hashes.
-3. Collects candidate runs from the rewritten text, twice:
-   - `value_char_run`: runs of `value_safe_char` from `src/engine.yml`;
-   - `non_whitespace_run`: whitespace-delimited runs, for values holding `@`, `(` or quotes.
-4. For each run, `spans_matching_learned_hashes` tries the run start and every position after `=` or `:`.
-5. `peeled_candidate_spans` gives four stages per start: as is; trailing `.:!?,;)}]` removed; one matching pair of `"` or `'` removed; trailing punctuation removed again.
-6. A candidate is hashed only when its byte length is in `learned_byte_lengths`. The first hit ends that run (`continue 'runs`).
-
-## Heuristic and skip guards
-
-`heuristic_regex` matches `KEY=value`, `KEY: value` or `KEY => value`, with an optional quote around the key or value. The key must contain a letter. The value has at least `min_length` characters from `value_safe_char` and cannot start with `/`.
-
-`should_skip_match` keeps a match unredacted when any of these holds:
-
-| Guard | Applies to |
-| --- | --- |
-| text contains an `allow` name (`contains_allowed_key`) | all regex tiers |
-| value fits an `allow_values` regex (`matches_allow_values`) | all regex tiers |
-| followed by `(` or `[` | keyed and heuristic |
-| key equals value, ignoring case | keyed and heuristic |
-| `looks_like_identifier`, or `looks_like_code_reference` without a random segment | keyed and heuristic |
-| code-style separator (`:`, `=>`, ` = `) with `looks_like_code_expression` | keyed and heuristic |
-| 1 to 12 lowercase ASCII letters | keyed and heuristic |
-| `should_skip_heuristic_match` | heuristic only |
-
-`should_skip_heuristic_match` keeps the value when:
-
-- the key names an id (`is_id_key`), or the match sits inside a URL (`is_inside_url`); or
-- `looks_random` fails and `is_long_hex_under_key_name` does not apply.
-
-`looks_random` checks the percent-decoded value against the `heuristic` thresholds:
-
-| Threshold | Default |
-| --- | --- |
-| `min_length` | 16 |
-| `max_length` | 128 |
-| `min_char_classes` (of lowercase, uppercase, digit) | 3 |
-| `min_entropy` (bits per character) | 3.5 |
-
-- An absent threshold takes its default (`#[serde(default = "...")]`). An explicit 0 is used as written.
-- `has_random_segment` uses the fixed constants `MIN_CHAR_CLASSES` and `MIN_ENTROPY`, whatever the config says.
+The development dependency pins an exact core version and a full Git
+revision. Cargo uses the version from crates.io when packaging the CLI.
+See [Releasing](../CONTRIBUTING.md#releasing) for the registry dependency.
 
 ## Hook protocol
 
@@ -212,16 +138,13 @@ A hit prints one line:
 
 | Layer | Where | What it pins |
 | --- | --- | --- |
-| Unit | `src/<module>/tests.rs`, a sibling of each implementation file | one case per built-in pattern (`builtin_pattern_cases`), learned matching, shape derivation, config merge, settings round trip, hook envelope bytes, fail closed |
+| Unit | `src/<module>/tests.rs`, a sibling of each implementation file | config merge, learning prompts, settings round trip, hook envelope bytes, fail-closed behavior |
 | CLI | `tests/cli.rs` | the binary end to end: raw mode, hook mode, stats, verify, init without a terminal, uninstall, pre-v2 notice, empty `HOME` |
 | Golden | `tests/golden.rs`, `tests/fixtures/` | raw-mode stdout and stderr byte for byte against goldens recorded from the Go 0.7 binary |
-| Corpus | `corpus/clean/*.txt`, tests in `src/scrub/tests.rs` | precision: no redaction in clean files; recall: every `builtin_pattern_cases` secret and learned secret is caught when planted in each file |
-| Benchmark | `src/scrub/benchmark.rs`, `docs/BENCHMARK.md` | default config: 100% recall on plain placements and no redaction in clean files; the page is regenerated with `REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark` |
 | Migration | `scripts/migration-check.sh` | fresh install, v1 upgrade (notice once per session), v2 config |
 
-- `src/fake_secrets.rs` builds synthetic secrets at test time, so no real-looking secret is committed.
+- Tests use the core crate's `test-support` feature for synthetic secrets. Core CI owns precision, recall, and benchmark coverage.
 - Golden fixtures are templates (`{{alnum:40}}`) expanded with a PRNG seeded from the file name.
-- `every_builtin_pattern_has_a_test_case` fails when a pattern in `src/engine.yml` has no `builtin_pattern_cases` entry.
 
 ## Reading order
 
@@ -229,16 +152,11 @@ For someone learning Rust from this repo, read in this order. Each line names an
 
 1. `src/main.rs`: `mod` declarations, `#[cfg(test)]` on a module, `fn main() -> ExitCode`.
 2. `src/cli.rs`: clap derive (`Parser`, `Subcommand`); commands return `Result<(), String>` and `run` maps it to `ExitCode`; `?` with `map_err`; `matches!` with an `if` guard.
-3. `src/config.rs`: `#[serde(default)]` and per-field `#[serde(default = "fn")]`; a hand-written `impl Default`; a generic `fn read_yaml<T: DeserializeOwned>`; `match` on a tuple with a guard; struct update syntax (`..merged`).
+3. `src/config.rs`: a generic `fn read_yaml<T: DeserializeOwned>`; `match` on a tuple with a guard; struct update syntax (`..merged`).
 4. `src/settings.rs`: `serde_json::Value` instead of a typed struct, so unknown keys survive a rewrite; `let ... else`; `Value::take`; a match guard on `io::ErrorKind`.
 5. `src/stats.rs`: importing a trait (`OpenOptionsExt`) to get its methods, behind `#[cfg(unix)]`; `BTreeMap` for sorted keys; ignoring errors with `let _ =`.
 6. `src/verify.rs`: a `Copy` enum with a method; a parameter of type `impl Into<String>`.
 7. `src/init.rs`: `Result<LearnedSecret, &'static str>`; `char_indices` to slice UTF-8 safely; `split_once` and `strip_prefix`; `serde_yaml::Value` to edit a file and keep unknown keys.
-8. `src/scrub.rs`: child modules (`mod learned;`) and a `pub use` re-export; `include_str!`; `collect::<Result<_, _>>()`; `Option::get_or_insert_with`; `entry().or_default()`.
-9. `src/scrub/go_regex.rs`: a `Peekable` char iterator driven by `while let`; returning `Option<&'static str>`.
-10. `src/scrub/learned.rs`: an `impl Scrubber` block in a child module, with `pub(super)` methods; a labeled `continue 'runs`; slice patterns with bindings (`[quote @ (b'"' | b'\''), .., last]`).
-11. `src/scrub/guards.rs`: a child module using its parent's private items (`use super::{Pattern, Scrubber}`); `matches!` on bytes; destructuring assignment (`(lower, letter) = (true, true)`).
-12. `src/hook.rs`: `panic::catch_unwind` with `AssertUnwindSafe`; `#[derive(Serialize)]` structs with a lifetime `'a` and `#[serde(rename)]`; `&dyn Fn`; a `type` alias.
-13. `src/fake_secrets.rs`: `thread_local!` with a `Cell<u64>` for a tiny PRNG.
-14. `tests/cli.rs`: integration tests with `env!("CARGO_BIN_EXE_redacted")` and `Command` with piped stdin.
-15. `tests/golden.rs`: a `move` closure that owns mutable PRNG state.
+8. `src/hook.rs`: `panic::catch_unwind` with `AssertUnwindSafe`; `#[derive(Serialize)]` structs with a lifetime `'a` and `#[serde(rename)]`; `&dyn Fn`; a `type` alias.
+9. `tests/cli.rs`: integration tests with `env!("CARGO_BIN_EXE_redacted")` and `Command` with piped stdin.
+10. `tests/golden.rs`: a `move` closure that owns mutable PRNG state.

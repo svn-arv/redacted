@@ -6,7 +6,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 
 use crate::config;
-use crate::scrub::{ScrubResult, Scrubber};
+use redacted_core::scrub::{ScrubResult, Scrubber};
 
 /// Printed in place of a line, or a PEM block, the scrubber panicked on.
 const WITHHELD: &str = "[redacted] line withheld";

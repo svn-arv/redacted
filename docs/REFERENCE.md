@@ -64,15 +64,16 @@ What `init` does, in order:
    - One file is used directly. Several open a picker.
    - None found: it installs the hook only.
 3. Reads `KEY=value` lines. Handles `export` and quotes. Commented-out assignments are offered too, since they leak like live ones; prose comments are skipped. Skips empty values.
-4. Shows a multi-select, `Secrets to learn:`. Each row shows the key, the last 4 characters (values of 12+ characters only) and the shape, or `exact only`. Never the value.
+4. Shows a multi-select, `Secrets to learn:`. Each row shows the key, the last 4 characters (values of 12+ characters only) and whether the value is already learned.
    - Pre-ticked: values with at least 2 of {lowercase, uppercase, digit, other}. So `development` and `3000` start unticked.
    - On a re-run, rows already in the global config start ticked: `learned` (same key and value), `learned as <name>` (same value under another key) or `new value, kept as <name>_2` (same key, new value). Unticking one never removes the stored entry.
    - Not learnable, shown with the reason: under 8 characters (`too short`) or containing whitespace (`cannot match (contains spaces)`).
-5. Prints the merged `~/.config/redacted/config.yaml` and asks `Write it?` (default No).
+5. Offers `Also catch rotated keys for:` for new values with eligible prefixes. Each row shows the prefix it would store in plain text. Leave the rows unchecked for exact-hash matching.
+6. Prints the merged `~/.config/redacted/config.yaml` and asks `Write it?` (default No).
    - No: exits 1 with `init: nothing written`. The hook is not installed.
    - Yes: writes the file with mode 0600, sets `version: 2`, merges `learned` entries by name and keeps every other key.
-6. Registers `<absolute path of this binary> scrub` as a PostToolUse hook and as a PreToolUse hook with matcher `Monitor` ([Background commands](#background-commands-monitor)). An existing `redacted scrub` entry is replaced. Other hooks and settings are kept.
-7. Prints a notice when only vendor signatures are active (no learned entries, heuristic off).
+7. Registers `<absolute path of this binary> scrub` as a PostToolUse hook and as a PreToolUse hook with matcher `Monitor` ([Background commands](#background-commands-monitor)). An existing `redacted scrub` entry is replaced. Other hooks and settings are kept.
+8. Prints a notice when only vendor signatures are active (no learned entries, heuristic off).
 
 Safe to run again.
 
@@ -82,7 +83,7 @@ Three tiers run in this order on the same text. Each tier sees the markers the p
 
 | Tier | Source | Default | Marker |
 | --- | --- | --- | --- |
-| 1. Vendor signatures | built-in `src/engine.yml`, then your `engine.yml` `patterns` | on | `[REDACTED:<name> ...abcd]`; keyed patterns write `KEY= [REDACTED ...abcd]` |
+| 1. Vendor signatures | built-in rules from `redacted-core`, then your `engine.yml` `patterns` | on | `[REDACTED:<name> ...abcd]`; keyed patterns write `KEY= [REDACTED ...abcd]` |
 | 2. Learned secrets | `learned` in `~/.config/redacted/config.yaml` | on once `init` writes entries | `[REDACTED:<name> ...abcd]`, no hint for values under 12 characters |
 | 3. Entropy heuristic | `heuristic` in `~/.config/redacted/config.yaml` | off | `KEY= [REDACTED ...abcd]` |
 
@@ -147,12 +148,12 @@ Built-in `allow_values` leave these alone: Anthropic transcript ids (`toolu_`, `
 
 ### Learned secrets
 
-- `init` stores, per value: `name` (the env key, lowercased), `sha256` of the value, `len` in bytes and an optional `shape`. Never the value.
+- `init` stores, per value: `name` (the env key, lowercased), `sha256` of the value, `len` in bytes and an optional `shape` when you opt in to rotated-key matching.
 - A URL value with a password, such as `DATABASE_URL=postgres://admin:pw@host/db`, adds a second row, `database_url_password`. It holds the password alone, percent-decoded, so a log that prints only the password is caught too.
 - Two values under one name are both kept. The newcomer gets the first free numeric suffix (`db_password_2`, `db_password_3`), and the redaction label shows which one matched. A value already learned is never added twice, whatever its key. `init` never removes an entry.
 - A `shape` is derived when the value has a literal prefix of 3+ characters ending in `_` or `-` within its first 12 characters, and the rest holds only letters, digits, `_` and `-`.
 - The shape is the prefix, the rest's character set and a length band of plus or minus 4, for example `\bsk_live_[a-zA-Z0-9]{20,28}\b`. It also catches a rotated key with the same prefix.
-- Matching runs shapes first, then exact hashes.
+- Matching runs shapes first, then exact hashes. Existing shapes still apply. `redacted verify` lists entries containing a shape. Remove its `shape:` line to keep exact-hash matching only.
 - Exact candidates: whole tokens, the part after each `=` or `:`, with trailing punctuation and one pair of quotes removed. A candidate is hashed only when its byte length equals some learned `len`.
 - Learned entries are read from the global config only. `learned` in a project `.redacted.yaml` is ignored, and `verify` warns about it.
 
@@ -178,26 +179,21 @@ Off by default. With `heuristic.enabled: true` in the global config, a `KEY=valu
 
 ### PII (opt-in)
 
-Off by default. Catches customer contact data in tool output: it reduces exposure, never prevents it. Turn each type on in the global config:
+Each PII toggle is off by default and is read from the global config:
 
 ```yaml
 pii:
-  email: true # marker [REDACTED:email ...y.id]
-  phone: true # marker [REDACTED:phone ...0123]
+  email: true
+  phone: true
 ```
 
-- `email` catches `local@domain.tld` anywhere in the text.
-- `phone` catches E.164 (`+6281234567890`), `+` country code with spaced or dashed groups (`+44 20 7946 0958`), North American `(415) 555-0123` and `415-555-0123`, and Indonesian local `0812-3456-7890` or `0812 3456 7890`.
-- Not caught:
-  - documentation and bot addresses: `example.com`, `example.net`, `example.org`, the `.example`, `.test`, `.invalid` and `.localhost` TLDs, `noreply@` and `no-reply@` senders, `*.noreply.github.com`;
-  - the `user@host` part of a URL login (`scheme://user:pass@host`), which the URL patterns own;
-  - ssh-style logins: `user@host:` (scp, git remotes, shell prompts) and `user@host` after `ssh`, `scp`, `sftp`, `rsync` or `ssh-copy-id`. A bare `user@host` with neither is still redacted;
-  - a `+` number at the start of a line in text holding a diff hunk header (`@@ `). Phones on added lines were never caught anyway: their own `+` follows the diff's `+`;
-  - bare digit runs, and numbers glued to a word, version, IP or timestamp. A spaced `+` number in code, such as `x = y +12345678`, is still redacted;
-  - dotted `415.555.0123`, which the version allow-list claims first, and `1-415-555-0123` without a `+`;
-  - names and postal addresses.
-- Read from the global config only. `whitelist: [email]` or `whitelist: [phone]` turns one off again.
-- To keep your own address visible, add it to `allow_values` in `engine.yml`, for example `'^jane@acme\.dev$'`.
+The shared engine supports `email`, `phone`, `credit_card`, `iban`,
+`us_ssn`, `passport`, `nik` (including labeled family card numbers),
+`npwp`, `bpjs`, `bank_account`, `address`, and `person_name`.
+`whitelist` disables patterns by name. To keep a specific email address
+visible, add it to `allow_values` in `engine.yml`, for example
+`'^jane@acme\.dev$'`. See the shared engine's PII reference for formats
+and matching rules. [PII reference](https://github.com/rmaw22/redacted-core/blob/main/docs/REFERENCE.md#pii-opt-in)
 
 ## Configuration
 
@@ -239,6 +235,7 @@ ignore_internal_tools: false
 | `version` | `2` once `init` has run. A global file without it is a 0.7 config (see Upgrading from 0.7). |
 | `learned` | List of `{name, sha256, len, shape}`. Global file only. |
 | `heuristic` | `enabled` plus the four thresholds above. Global file only. |
+| `pii` | Toggles for the opt-in personal-data patterns above. Global file only. |
 | `whitelist` | Vendor or `engine.yml` pattern names to turn off. No effect on learned names or the heuristic (`secret_value`). |
 | `allow` | Skips a vendor or heuristic match whose text contains one of these names (case-insensitive). Only keyed matches contain the key, so value-only patterns and learned secrets ignore this list. |
 | `ignore_internal_tools` | Scrub Bash output only; every other tool passes through. |
@@ -278,6 +275,7 @@ Prints one line per check and exits 1 when any check fails.
 | `test scrub` | FAIL when the built-in patterns miss a sample database URL. |
 | `learned secrets` | Config version, number of learned entries, heuristic on or off. |
 | `protection` | WARN when only vendor signatures are active. |
+| `learned shapes` | WARN for entries with a shape, which stores a prefix in plain text. |
 | `project learned` | WARN when `.redacted.yaml` holds `learned` entries, which are ignored. |
 
 ## Stats
@@ -401,7 +399,7 @@ The command is passed to `bash -c` as one quoted word, so nothing in it can clos
 ## Known limitations
 
 - Learned secrets match as whole tokens. One embedded mid-token, such as in a URL path, passes unless a vendor pattern catches it.
-- A learned shape also matches a non-secret with the same prefix and similar length. Check the shape `init` shows before confirming.
+- A learned shape also matches a non-secret with the same prefix and similar length. Check the prefix `init` shows before opting in.
 - With the heuristic on, a high-entropy identifier that mixes case and digits (some tool or request ids) may be redacted. The 4-character hint makes these easy to spot.
 - Every pattern scans the full output in turn, after a substring prefilter. Multi-megabyte output adds noticeable latency per call.
 - Commands typed at the Claude Code prompt with `!` are not tool calls. Their output reaches the model unscrubbed.

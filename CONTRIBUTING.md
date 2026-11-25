@@ -14,8 +14,9 @@ CI runs these on Linux and macOS. All must pass:
 | Command | Checks |
 | --- | --- |
 | `cargo fmt --check` | formatting |
-| `cargo clippy --all-targets -- -D warnings` | lints, warnings are errors |
-| `cargo test` | unit, CLI, golden and corpus tests |
+| `cargo clippy --locked --all-targets -- -D warnings` | lints, warnings are errors |
+| `cargo test --locked` | unit, CLI, and golden tests |
+| `cargo package --locked --list` | files included in the CLI package |
 | `sh scripts/migration-check.sh` | fresh install, v1 upgrade, v2 config |
 
 The OpenCode plugin has a smoke test outside CI. It needs [Bun](https://bun.sh), which OpenCode runs on:
@@ -25,29 +26,16 @@ cargo build && bun plugins/opencode/smoke.mjs
 ```
 
 - A behavior change starts with a test that fails for the right reason. Then change the code until it passes.
-- Never commit a real or real-looking secret. Build test secrets at runtime with `src/fake_secrets.rs`, or with a `{{kind:n}}` placeholder in a golden fixture.
+- Never commit a real or real-looking secret. Build test secrets at runtime with `redacted_core::fake_secrets`, or with a `{{kind:n}}` placeholder in a golden fixture.
 
 How the code fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Adding or changing a detection rule
 
-Built-in patterns live in `src/engine.yml`, not in Rust.
-
-1. Add or edit the row in `src/engine.yml`:
-   - `name`, `regex` (Go RE2 syntax, translated by `src/scrub/go_regex.rs`);
-   - `prefilters` or `prefilters_ignore_case`: literals that must appear before the regex runs;
-   - `includes_key: true` when the match includes the key, so the output keeps `KEY=`.
-   - Order matters: specific patterns before catch-alls.
-2. Add a generator to `src/fake_secrets.rs` when the secret needs one (`fake_secrets` is test-only).
-3. Add a case to `builtin_pattern_cases` in `src/scrub/tests.rs`. `every_builtin_pattern_has_a_test_case` fails until you do. The case gives the input, the exact expected output and the secret that must not survive.
-4. Run `cargo test`:
-   - recall: the new secret is caught when planted in every `corpus/clean/*.txt` file;
-   - precision: no clean corpus file gets a redaction.
-5. A false positive from real output becomes a new `corpus/clean/*.txt` file.
-6. Golden fixtures (`tests/fixtures/*.txt` with `.golden` and `.stderr.golden`) pin raw-mode output recorded from the Go 0.7 binary.
-   - There is no script to regenerate them.
-   - A change that alters existing golden output breaks 0.7 parity on purpose or by mistake. Say which in the PR, and edit the golden by hand.
-7. Regenerate the benchmark page: `REDACTED_BENCHMARK_REPORT=docs/BENCHMARK.md cargo test detection_benchmark`.
+Send detection changes to the shared engine repository, which owns the
+rules, synthetic fixtures, clean corpus, and precision and recall tests.
+The CLI's golden tests pin both raw output and stderr to the Go 0.7
+fixtures. [Engine contributing guide](https://github.com/rmaw22/redacted-core/blob/main/CONTRIBUTING.md)
 
 ## Pull requests
 
@@ -59,7 +47,14 @@ Built-in patterns live in `src/engine.yml`, not in Rust.
 
 ## Releasing
 
-Bump `version` in `Cargo.toml` to match the tag (it is what `--version` prints), then tag and push. The workflow fails if they differ. GoReleaser builds binaries for all platforms, creates the GitHub release and updates the Homebrew tap, then `cargo publish` pushes the crate to crates.io (needs the `CARGO_REGISTRY_TOKEN` secret).
+Before releasing the split CLI, verify that the required
+`redacted-core` version is available on crates.io. The development dependency
+uses Git for source builds and its exact `version` for packaging. Once the
+core version is published, switch both dependency entries to the registry
+version, refresh `Cargo.lock`, and run `cargo package --locked` so all release
+artifacts use the registry source.
+
+Bump `version` in `Cargo.toml` to match the tag (it is what `--version` prints), then tag and push. The workflow checks the version and verifies the Cargo package before distribution. GoReleaser builds binaries for all platforms, creates the GitHub release and updates the Homebrew tap, then `cargo publish` pushes the crate to crates.io (needs the `CARGO_REGISTRY_TOKEN` secret).
 
 ```bash
 git tag vX.Y.Z

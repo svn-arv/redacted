@@ -1,6 +1,7 @@
 //! `redacted init`: learn secrets from a .env file into the global config, then
 //! install the hook.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -14,8 +15,8 @@ use serde_json::Value;
 
 use crate::cli::Format;
 use crate::config::{self, LearnedSecret};
-use crate::scrub::{learned_value_hint, percent_decode, sha256_hex};
 use crate::{opencode, settings};
+use redacted_core::scrub::{derive_shape, learn, learned_value_hint, percent_decode, shape_prefix};
 
 /// Prompting happens only here and in the steps below; every function they call
 /// is tested without a TTY.
@@ -68,6 +69,7 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     }
     let known = config::load(Some(home), None)?.learned;
     let chosen = pick_secrets_to_learn(&pairs, &known)?;
+    let chosen = pick_rotated_keys(chosen, &known)?;
     let config_path = config::global_config_path(home);
     let existing = match fs::read_to_string(&config_path) {
         Ok(s) => s,
@@ -93,12 +95,14 @@ fn learn_from_env(path: &Path, home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The secrets the user ticks among `pairs`, with likely and `known` secrets
-/// ticked up front.
-fn pick_secrets_to_learn(
-    pairs: &[(String, String)],
+/// A ticked `(key, value)` pair and its hash-only entry.
+type Chosen<'a> = (&'a (String, String), LearnedSecret);
+
+/// Select entries to learn, with likely and previously learned values checked by default.
+fn pick_secrets_to_learn<'a>(
+    pairs: &'a [(String, String)],
     known: &[LearnedSecret],
-) -> Result<Vec<LearnedSecret>, String> {
+) -> Result<Vec<Chosen<'a>>, String> {
     let learn_results: Vec<_> = pairs.iter().map(|(key, value)| learn(key, value)).collect();
     let rows: Vec<String> = pairs
         .iter()
@@ -117,11 +121,51 @@ fn pick_secrets_to_learn(
         .raw_prompt()
         .map_err(|e| e.to_string())?;
     // Ticked rows that cannot be learned are skipped, not written.
-    let chosen: Vec<LearnedSecret> = picked
+    let chosen = picked
         .iter()
-        .filter_map(|picked_row| learn_results[picked_row.index].clone().ok())
+        .filter_map(|row| {
+            let entry = learn_results[row.index].clone().ok()?;
+            Some((&pairs[row.index], entry))
+        })
         .collect();
     Ok(chosen)
+}
+
+/// The chosen entries, with a shape on those the user ticks in a second step.
+/// Nothing is ticked up front: a shape stores the value's prefix in plain text,
+/// so each row shows that prefix.
+fn pick_rotated_keys(
+    mut chosen: Vec<Chosen<'_>>,
+    known: &[LearnedSecret],
+) -> Result<Vec<LearnedSecret>, String> {
+    let mut hashes: HashSet<&str> = known.iter().map(|entry| entry.sha256.as_str()).collect();
+    let (indices, rows): (Vec<_>, Vec<_>) = chosen
+        .iter()
+        .enumerate()
+        .filter_map(|(index, ((key, value), entry))| {
+            // The merge keeps the first entry for each hash. Offer that row only.
+            if !hashes.insert(&entry.sha256) {
+                return None;
+            }
+            Some((index, rotated_key_row(key, value)?))
+        })
+        .unzip();
+    if !rows.is_empty() {
+        let picked = MultiSelect::new("Also catch rotated keys for:", rows)
+            .with_help_message("optional, skip with enter")
+            .raw_prompt()
+            .map_err(|e| e.to_string())?;
+        for row in picked {
+            let ((_, value), entry) = &mut chosen[indices[row.index]];
+            entry.shape = derive_shape(value);
+        }
+    }
+    Ok(chosen.into_iter().map(|(_, entry)| entry).collect())
+}
+
+fn rotated_key_row(key: &str, value: &str) -> Option<String> {
+    let prefix = shape_prefix(value)?;
+    Some(format!("{key}  stores {prefix:?} in plain text"))
 }
 
 /// Registers the hook globally or for this project, then warns when only the
@@ -220,45 +264,6 @@ fn parse_dotenv(text: &str) -> Vec<(String, String)> {
     out
 }
 
-/// A literal prefix ending in the last `_`/`-` of the first 12 chars, 3+ chars long,
-/// plus the remainder's charset and a length band of ±4. None means exact hash only.
-fn derive_shape(sample: &str) -> Option<String> {
-    // Byte index of the 13th char, so the slice never splits a multi-byte char.
-    let head_end = sample
-        .char_indices()
-        .nth(12)
-        .map_or(sample.len(), |(i, _)| i);
-    let prefix_end = sample[..head_end].rfind(['_', '-'])? + 1;
-    let (prefix, rest) = sample.split_at(prefix_end);
-    if prefix.chars().count() < 3 || rest.is_empty() {
-        return None;
-    }
-    if !rest
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return None;
-    }
-    let charset: String = [
-        (rest.chars().any(|c| c.is_ascii_lowercase()), "a-z"),
-        (rest.chars().any(|c| c.is_ascii_uppercase()), "A-Z"),
-        (rest.chars().any(|c| c.is_ascii_digit()), "0-9"),
-        (rest.contains('_'), "_"),
-        (rest.contains('-'), "-"),
-    ]
-    .iter()
-    .filter(|(present, _)| *present)
-    .map(|(_, class)| *class)
-    .collect();
-    let rest_len = rest.chars().count();
-    Some(format!(
-        r"\b{}[{charset}]{{{},{}}}\b",
-        regex::escape(prefix),
-        rest_len.saturating_sub(4).max(1),
-        rest_len + 4
-    ))
-}
-
 /// The password in `scheme://user:password@host`, percent-decoded.
 fn url_password(value: &str) -> Option<String> {
     let (_, after_scheme) = value.split_once("://")?;
@@ -286,22 +291,6 @@ fn with_url_passwords(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
         }
     }
     out
-}
-
-/// Err is the reason the value cannot be learned, shown in the picker.
-pub fn learn(key: &str, value: &str) -> Result<LearnedSecret, &'static str> {
-    if value.contains(char::is_whitespace) {
-        return Err("cannot match (contains spaces)");
-    }
-    if value.chars().count() < 8 {
-        return Err("too short");
-    }
-    Ok(LearnedSecret {
-        name: key.to_lowercase(),
-        sha256: sha256_hex(value),
-        byte_len: value.len(),
-        shape: derive_shape(value),
-    })
 }
 
 /// Ticked by default when the config already holds the key or the value, else
@@ -345,10 +334,7 @@ fn picker_row(
         Some(hint) => format!("...{hint}"),
         None => "(short)".to_string(),
     };
-    format!(
-        "{key}  {hint}  {}",
-        entry.shape.as_deref().unwrap_or("exact only")
-    )
+    format!("{key}  {hint}")
 }
 
 /// Merges `entries` into the config text, keeping every other field. A value

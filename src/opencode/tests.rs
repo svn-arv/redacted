@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::config::ConfigError;
-use crate::fake_secrets;
+use redacted_core::fake_secrets;
 
 /// Runs `payload` through `respond` with default config and returns stdout as JSON.
 fn respond_with(config: Config, payload: &str) -> (Value, BTreeMap<String, usize>) {

@@ -7,13 +7,13 @@
 version: 2
 
 # Written by `redacted init`. Read from the global file only.
-# Each entry: the value's sha256, its byte length and, for values with a literal
-# prefix, a shape regex that also catches rotated keys. Never the value.
+# Each entry stores the value's sha256 and byte length. An optional shape regex
+# stores a literal prefix and is written by init only if you opt in.
 learned:
   - name: acme_api_key
     sha256: 0000000000000000000000000000000000000000000000000000000000000000
     len: 29
-    shape: '\bacme_[a-zA-Z0-9]{20,28}\b'
+    # shape: '\bacme_[a-zA-Z0-9]{20,28}\b'
 
 # Opt-in entropy tier for KEY=value pairs. Read from the global file only.
 # An absent threshold takes the default shown; an explicit value, 0 included,
@@ -25,7 +25,7 @@ heuristic:
   min_char_classes: 3 # of lowercase, uppercase, digit
   min_entropy: 3.5 # Shannon entropy, bits per character
 
-# Opt-in PII tier: email addresses and phone numbers. Read from the global file only.
+# Opt-in PII tier. Read from the global file only. See docs/REFERENCE.md for the toggles.
 # An absent toggle is off. Keep your own address visible with allow_values in engine.yml.
 pii:
   email: false

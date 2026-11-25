@@ -13,8 +13,8 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{self, Config, ConfigError, EngineConfig};
-use crate::scrub::Scrubber;
 use crate::{hook, init, opencode, pre_hook, stats, stream, verify};
+use redacted_core::scrub::Scrubber;
 
 #[derive(Parser)]
 #[command(

@@ -3,13 +3,10 @@
 
 mod cli;
 mod config;
-#[cfg(test)]
-mod fake_secrets;
 mod hook;
 mod init;
 mod opencode;
 mod pre_hook;
-mod scrub;
 mod settings;
 mod stats;
 mod stream;

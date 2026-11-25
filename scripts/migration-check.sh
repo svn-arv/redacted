@@ -4,7 +4,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-cargo build --quiet --manifest-path "$root/Cargo.toml"
+cargo build --quiet --locked --manifest-path "$root/Cargo.toml"
 bin="$root/target/debug/redacted"
 
 tmp=$(mktemp -d)
