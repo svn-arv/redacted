@@ -2,6 +2,8 @@
 
 Removes secrets from tool output before your AI coding assistant reads it.
 
+> **Project direction:** Core development now continues in [`rmaw22/redacted-core`](https://github.com/rmaw22/redacted-core), the shared redaction engine for CLI and WebAssembly implementations. This repository (`svn-arv/redacted`) is the original CLI implementation and will focus on CLI behavior, integrations, and packaging. New detection rules, engine fixes, and shared redaction logic should be developed in `redacted-core`.
+
 ## What you see
 
 ![Claude Code after a cat of .env: the hook reports three scrubbed secrets](docs/images/claude-code.png)
